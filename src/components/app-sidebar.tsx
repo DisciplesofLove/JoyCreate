@@ -16,7 +16,6 @@ import {
   Rocket,
   Database,
   Package,
-  Coins,
   Globe,
   Layers,
   Zap,
@@ -196,15 +195,8 @@ const menuCategories = [
         activeBg: "bg-cyan-500/15",
         activeText: "text-cyan-600 dark:text-cyan-400",
       },
-      {
-        title: "Collab Activity",
-        to: "/collaboration/activity",
-        icon: Activity,
-        gradient: "from-teal-500 to-emerald-500",
-        hoverBg: "hover:bg-teal-500/10",
-        activeBg: "bg-teal-500/15",
-        activeText: "text-teal-600 dark:text-teal-400",
-      },
+      // Phase 1 consolidation: /collaboration/activity reachable via tab
+      // inside the Collaboration Hub. See briefs/nav-consolidation-audit.md.
       {
         title: "Autonomous Agent",
         to: "/autonomous-agent",
@@ -635,69 +627,14 @@ const menuCategories = [
         activeBg: "bg-indigo-500/15",
         activeText: "text-indigo-600 dark:text-indigo-400",
       },
-      {
-        title: "Create Asset",
-        to: "/create-asset",
-        icon: Zap,
-        gradient: "from-amber-500 to-orange-500",
-        hoverBg: "hover:bg-amber-500/10",
-        activeBg: "bg-amber-500/15",
-        activeText: "text-amber-600 dark:text-amber-400",
-      },
-      {
-        title: "My Creations",
-        to: "/creator",
-        icon: Sparkles,
-        gradient: "from-amber-500 to-orange-500",
-        hoverBg: "hover:bg-amber-500/10",
-        activeBg: "bg-amber-500/15",
-        activeText: "text-amber-600 dark:text-amber-400",
-      },
-      {
-        title: "My Assets",
-        to: "/my-marketplace-assets",
-        icon: Package,
-        gradient: "from-violet-500 to-pink-500",
-        hoverBg: "hover:bg-violet-500/10",
-        activeBg: "bg-violet-500/15",
-        activeText: "text-violet-600 dark:text-violet-400",
-      },
-      {
-        title: "Marketplace",
-        to: "/nft-marketplace",
-        icon: Coins,
-        gradient: "from-purple-500 to-indigo-500",
-        hoverBg: "hover:bg-purple-500/10",
-        activeBg: "bg-purple-500/15",
-        activeText: "text-purple-600 dark:text-purple-400",
-      },
-      {
-        title: "Explore Marketplace",
-        to: "/marketplace",
-        icon: ShoppingCart,
-        gradient: "from-blue-500 to-cyan-500",
-        hoverBg: "hover:bg-blue-500/10",
-        activeBg: "bg-blue-500/15",
-        activeText: "text-blue-600 dark:text-blue-400",
-      },
-      {
-        title: "On-Chain Market",
-        to: "/on-chain-marketplace",
-        icon: Coins,
-        gradient: "from-amber-500 to-yellow-500",
-        hoverBg: "hover:bg-amber-500/10",
-        activeBg: "bg-amber-500/15",
-        activeText: "text-amber-600 dark:text-amber-400",
-      },
-      {
-        title: "Plugin Market",
-        to: "/plugin-marketplace",
-        icon: Puzzle,
-        gradient: "from-green-500 to-teal-500",
-        hoverBg: "hover:bg-green-500/10",
-        activeBg: "bg-green-500/15",
-        activeText: "text-green-600 dark:text-green-400",
-      },
+      // Phase 1 consolidation: removed sidebar entries for the duplicate
+      // marketplace/creator surfaces. Routes still resolve and render the
+      // existing JoyDeprecationBanner so bookmarks keep working — but the
+      // canonical entries live under "Joy Marketplace" above.
+      // Removed: /create-asset, /creator, /my-marketplace-assets,
+      //          /nft-marketplace, /marketplace, /on-chain-marketplace,
+      //          /plugin-marketplace.
+      // See briefs/nav-consolidation-audit.md (Phase 1).
     ],
   },
   {

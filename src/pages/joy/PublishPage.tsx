@@ -90,10 +90,19 @@ export default function JoyPublishPage() {
       try {
         const ipc = IpcClient.getInstance();
         const res = (await ipc.invoke("joybridge:list-my-stores")) as Result<
-          Store[]
+          Store[] | { stores?: Store[]; data?: Store[] }
         >;
         if (res?.ok) {
-          const list = res.data ?? [];
+          // Edge function may return either a raw array or { stores: [...] }.
+          // Coerce defensively so `.map` never crashes the page.
+          const raw = res.data as unknown;
+          const list: Store[] = Array.isArray(raw)
+            ? (raw as Store[])
+            : Array.isArray((raw as { stores?: unknown })?.stores)
+              ? ((raw as { stores: Store[] }).stores)
+              : Array.isArray((raw as { data?: unknown })?.data)
+                ? ((raw as { data: Store[] }).data)
+                : [];
           setStores(list);
           if (list.length > 0 && !storeId) setStoreId(list[0].id);
         }

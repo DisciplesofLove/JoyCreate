@@ -147,6 +147,12 @@ export function registerTrustlessInferenceHandlers(): void {
         config?: {
           temperature?: number;
           maxTokens?: number;
+          topP?: number;
+          topK?: number;
+          seed?: number;
+          repeatPenalty?: number;
+          numCtx?: number;
+          stop?: string[];
         };
       }
     ): Promise<{ streamId: string }> => {
@@ -168,11 +174,13 @@ export function registerTrustlessInferenceHandlers(): void {
 
           for await (const chunk of stream) {
             if (chunk.type === "token") {
-              event.sender.send(`trustless:stream-token:${streamId}`, {
+              event.sender.send("trustless:stream-token", {
+                streamId,
                 content: chunk.content,
               });
             } else if (chunk.type === "done") {
-              event.sender.send(`trustless:stream-done:${streamId}`, {
+              event.sender.send("trustless:stream-done", {
+                streamId,
                 recordId: chunk.record?.id,
                 cid: chunk.record?.cid,
               });
@@ -180,8 +188,9 @@ export function registerTrustlessInferenceHandlers(): void {
           }
         } catch (error) {
           logger.error("Stream error:", error);
-          event.sender.send(`trustless:stream-error:${streamId}`, {
-            error: String(error),
+          event.sender.send("trustless:stream-error", {
+            streamId,
+            error: error instanceof Error ? error.message : String(error),
           });
         }
       })();

@@ -185,12 +185,28 @@ export class JoyBridgeClient {
       "Content-Type": "application/json",
       ...extra,
     };
+    // Supabase Edge Functions parse `Authorization: Bearer <token>` as a JWT
+    // and reject anything else with `UNAUTHORIZED_INVALID_JWT_FORMAT`. A
+    // `joy_xxx` publisher key is NOT a JWT, so we must:
+    //   - send the joy key only via `x-joy-api-key`
+    //   - put a real JWT or the Supabase publishable/anon key in `Authorization`
+    // If neither a JWT nor a publishable key is present, omit Authorization
+    // and let the function reject with a clearer "no token" error.
+    const looksLikeJwt = (s?: string): boolean =>
+      Boolean(s) && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s ?? "");
+
     if (this.cfg.apiKey) {
-      h["Authorization"] = `Bearer ${this.cfg.apiKey}`;
       h["x-joy-api-key"] = this.cfg.apiKey;
+      if (looksLikeJwt(this.cfg.apiKey)) {
+        h["Authorization"] = `Bearer ${this.cfg.apiKey}`;
+      }
     }
     if (this.cfg.supabasePublishableKey) {
       h["apikey"] = this.cfg.supabasePublishableKey;
+      // Use the publishable key as Bearer when no real JWT is configured.
+      if (!h["Authorization"]) {
+        h["Authorization"] = `Bearer ${this.cfg.supabasePublishableKey}`;
+      }
     }
     return h;
   }
@@ -320,12 +336,19 @@ export class JoyBridgeClient {
       }
       form.append("file", blob, input.filename ?? "asset.bin");
       const headers: Record<string, string> = {};
+      const looksLikeJwt = (s?: string): boolean =>
+        Boolean(s) && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s ?? "");
       if (this.cfg.apiKey) {
-        headers["Authorization"] = `Bearer ${this.cfg.apiKey}`;
         headers["x-joy-api-key"] = this.cfg.apiKey;
+        if (looksLikeJwt(this.cfg.apiKey)) {
+          headers["Authorization"] = `Bearer ${this.cfg.apiKey}`;
+        }
       }
       if (this.cfg.supabasePublishableKey) {
         headers["apikey"] = this.cfg.supabasePublishableKey;
+        if (!headers["Authorization"]) {
+          headers["Authorization"] = `Bearer ${this.cfg.supabasePublishableKey}`;
+        }
       }
       const res = await fetchImpl(url, {
         method: "POST",

@@ -2345,6 +2345,11 @@ const validReceiveChannels = [
   "force-close-detected",
   // Auto-Deploy progress events
   "auto-deploy:progress",
+  // Trustless inference streaming — single stable channels, payload carries
+  // a `streamId` so the renderer can route chunks to the correct caller.
+  "trustless:stream-token",
+  "trustless:stream-done",
+  "trustless:stream-error",
   // Help bot
   "help:chat:response:chunk",
   "help:chat:response:end",

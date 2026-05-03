@@ -44,10 +44,21 @@ export default function JoyMyStoresPage() {
     try {
       const ipc = IpcClient.getInstance();
       const res = (await ipc.invoke("joybridge:list-my-stores")) as Result<
-        Store[]
+        Store[] | { stores?: Store[]; data?: Store[] }
       >;
-      if (res?.ok) setStores(res.data ?? []);
-      else setError(res?.error ?? "Failed to load stores");
+      if (res?.ok) {
+        // Edge function may return either a raw array or { stores: [...] } / { data: [...] }.
+        // Coerce defensively so `.map` never crashes the page.
+        const raw = res.data as unknown;
+        const list: Store[] = Array.isArray(raw)
+          ? (raw as Store[])
+          : Array.isArray((raw as { stores?: unknown })?.stores)
+            ? ((raw as { stores: Store[] }).stores)
+            : Array.isArray((raw as { data?: unknown })?.data)
+              ? ((raw as { data: Store[] }).data)
+              : [];
+        setStores(list);
+      } else setError(res?.error ?? "Failed to load stores");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

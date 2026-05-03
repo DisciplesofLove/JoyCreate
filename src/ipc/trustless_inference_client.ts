@@ -104,9 +104,11 @@ export class TrustlessInferenceClient {
   }
 
   /**
-   * Stream inference - Note: This uses polling since dynamic IPC channels
-   * are not supported in the current architecture. For true streaming,
-   * we'd need to implement WebSocket or SSE support.
+   * Stream inference tokens progressively (ChatGPT-style).
+   *
+   * Subscribes to the stable `trustless:stream-token|done|error` channels and
+   * filters by `streamId` so multiple concurrent streams don't collide.
+   * Returns an async cancel handle that removes its listeners.
    */
   async streamInference(
     params: {
@@ -117,6 +119,11 @@ export class TrustlessInferenceClient {
       config?: {
         temperature?: number;
         maxTokens?: number;
+        topP?: number;
+        topK?: number;
+        seed?: number;
+        repeatPenalty?: number;
+        numCtx?: number;
       };
     },
     callbacks: {
@@ -124,29 +131,44 @@ export class TrustlessInferenceClient {
       onDone?: (data: { recordId?: string; cid?: string }) => void;
       onError?: (error: string) => void;
     }
-  ): Promise<void> {
-    // For now, use non-streaming inference and simulate streaming
-    try {
-      const result = await this.runInference({
-        ...params,
-        prompt: params.messages[params.messages.length - 1]?.content || "",
-      });
+  ): Promise<{ streamId: string; cancel: () => void }> {
+    const { streamId } = (await this.ipcRenderer.invoke(
+      "trustless:start-stream",
+      params
+    )) as { streamId: string };
 
-      // Simulate streaming by sending output in chunks
-      const words = result.output.split(" ");
-      for (const word of words) {
-        callbacks.onToken(word + " ");
-        // Small delay to simulate streaming
-        await new Promise((resolve) => setTimeout(resolve, 10));
+    const onToken = (_evt: unknown, payload: unknown) => {
+      const p = payload as { streamId?: string; content?: string };
+      if (p?.streamId === streamId && typeof p.content === "string") {
+        callbacks.onToken(p.content);
       }
+    };
+    const onDone = (_evt: unknown, payload: unknown) => {
+      const p = payload as { streamId?: string; recordId?: string; cid?: string };
+      if (p?.streamId === streamId) {
+        cleanup();
+        callbacks.onDone?.({ recordId: p.recordId, cid: p.cid });
+      }
+    };
+    const onError = (_evt: unknown, payload: unknown) => {
+      const p = payload as { streamId?: string; error?: string };
+      if (p?.streamId === streamId) {
+        cleanup();
+        callbacks.onError?.(p.error ?? "Stream failed");
+      }
+    };
 
-      callbacks.onDone?.({
-        recordId: result.recordId,
-        cid: result.cid,
-      });
-    } catch (error) {
-      callbacks.onError?.(String(error));
-    }
+    this.ipcRenderer.on("trustless:stream-token", onToken);
+    this.ipcRenderer.on("trustless:stream-done", onDone);
+    this.ipcRenderer.on("trustless:stream-error", onError);
+
+    const cleanup = () => {
+      this.ipcRenderer.removeListener("trustless:stream-token", onToken);
+      this.ipcRenderer.removeListener("trustless:stream-done", onDone);
+      this.ipcRenderer.removeListener("trustless:stream-error", onError);
+    };
+
+    return { streamId, cancel: cleanup };
   }
 
   // ============================================================================

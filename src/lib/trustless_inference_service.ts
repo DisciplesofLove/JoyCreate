@@ -286,7 +286,14 @@ class TrustlessInferenceService {
       baseUrl: provider === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234",
       options: {
         temperature: (streamOpts?.temperature as number) ?? 0.7,
-        numPredict: (streamOpts?.numPredict as number) ?? (streamOpts?.maxTokens as number) ?? 2048,
+        numPredict:
+          (streamOpts?.numPredict as number) ?? (streamOpts?.maxTokens as number) ?? 2048,
+        topP: streamOpts?.topP as number | undefined,
+        topK: streamOpts?.topK as number | undefined,
+        seed: streamOpts?.seed as number | undefined,
+        repeatPenalty: streamOpts?.repeatPenalty as number | undefined,
+        numCtx: streamOpts?.numCtx as number | undefined,
+        stop: streamOpts?.stop as string[] | undefined,
       },
     };
 

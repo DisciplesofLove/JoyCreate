@@ -35,6 +35,10 @@ import {
   type CreateStoreInput,
   type PublishAssetInput,
   type BrowseQuery,
+  type Asset as BridgeAsset,
+  type Store as BridgeStore,
+  type Result,
+  type BrowseResult,
 } from "@/lib/joybridge_client";
 import {
   publishAndForget,
@@ -43,6 +47,157 @@ import {
 } from "@/lib/joymarketplace/publish_orchestrator";
 
 const logger = log.scope("joybridge_handlers");
+
+// ── Subgraph fallback helpers ───────────────────────────────────────────────
+//
+// The Supabase edge functions for `list-my-assets` / `list-my-stores` /
+// `marketplace-listing` are currently broken (e.g. they SELECT `digital_assets.name`
+// which doesn't exist) and require a Supabase JWT we don't have. Whenever
+// the edge function fails or the user has no joy_xxx key configured, we
+// fall back to reading the same data straight from Goldsky's subgraph using
+// the connected chain wallet.
+
+/** Read the active secp256k1 wallet address from JcnKeyManager. */
+async function getActiveChainWallet(): Promise<string | null> {
+  try {
+    const { jcnKeyManager } = await import("@/lib/jcn_key_manager");
+    await jcnKeyManager.initialize();
+    const keys = await jcnKeyManager.listKeys("chain");
+    const active = keys.find((k) => k.active && k.algorithm === "secp256k1");
+    return active?.walletAddress ?? active?.publicKey ?? null;
+  } catch (err) {
+    logger.warn("getActiveChainWallet failed:", (err as Error).message);
+    return null;
+  }
+}
+
+/** True if the Supabase Result is a hard failure (network/4xx/5xx or empty payload). */
+function isEdgeFailure(res: Result<unknown>): boolean {
+  if (!res?.ok) return true;
+  // Some edge functions return 200 with `{ ok: false, error: "..." }` payloads.
+  const data = res.data as { ok?: boolean; error?: string } | undefined;
+  if (data && data.ok === false && typeof data.error === "string") return true;
+  return false;
+}
+
+function edgeErrorMessage(res: Result<unknown>): string {
+  if (!res) return "no response";
+  if (!res.ok) return res.error ?? "unknown error";
+  const data = res.data as { error?: string } | undefined;
+  return data?.error ?? "unknown error";
+}
+
+async function fallbackListMyStores(): Promise<Result<BridgeStore[]>> {
+  const wallet = await getActiveChainWallet();
+  if (!wallet) {
+    return { ok: false, error: "no chain wallet — connect a secp256k1 wallet in Settings" };
+  }
+  try {
+    const { getUserStores } = await import("@/lib/subgraph_client");
+    const subStores = await getUserStores(wallet);
+    const mapped: BridgeStore[] = subStores.map((s) => ({
+      id: s.id,
+      slug: s.domain ?? s.id,
+      name: s.name ?? s.domain ?? "Unnamed store",
+      description: s.description ?? undefined,
+      ownerWallet: s.owner,
+      bannerUrl: undefined,
+      logoUrl: s.logo ?? undefined,
+      status: s.isActive ? "active" : "disabled",
+      createdAt: s.createdAt ?? undefined,
+    }));
+    return { ok: true, data: mapped };
+  } catch (err) {
+    return { ok: false, error: `subgraph: ${(err as Error).message}` };
+  }
+}
+
+async function fallbackListMyAssets(): Promise<Result<BridgeAsset[]>> {
+  const wallet = await getActiveChainWallet();
+  if (!wallet) {
+    return { ok: false, error: "no chain wallet — connect a secp256k1 wallet in Settings" };
+  }
+  try {
+    const { getUserBalances, getUserPurchases } = await import("@/lib/subgraph_client");
+    const [balances, purchases] = await Promise.all([
+      getUserBalances(wallet).catch(() => []),
+      getUserPurchases(wallet).catch(() => []),
+    ]);
+
+    // Tokens currently held by the wallet (claimed > 0).
+    const owned: BridgeAsset[] = balances
+      .filter((b) => Number(b.totalClaimed ?? "0") > 0)
+      .map((b) => {
+        const t = b.token;
+        const baseURI = t?.baseURI ?? "";
+        const cidLike = baseURI.replace(/^ipfs:\/\//, "");
+        return {
+          id: b.id,
+          tokenId: String(t?.tokenId ?? b.tokenId),
+          storeId: "",
+          assetType: "token",
+          name: cidLike ? `Token #${t?.tokenId ?? b.tokenId}` : `Token #${b.tokenId}`,
+          description: baseURI || undefined,
+          contentUrl: baseURI ? baseURI.replace(/^ipfs:\/\//, "https://ipfs.io/ipfs/") : undefined,
+          priceUsdc: t?.pricePerToken ? Number(t.pricePerToken) : undefined,
+          status: "active",
+          createdAt: t?.lazyMintedAt
+            ? new Date(Number(t.lazyMintedAt) * 1000).toISOString()
+            : undefined,
+        } satisfies BridgeAsset;
+      });
+
+    // Also include any tokens the user *purchased* (already covered by balances,
+    // but kept for parity with the legacy `digital_assets` shape).
+    const seen = new Set(owned.map((a) => a.tokenId));
+    for (const p of purchases) {
+      if (seen.has(String(p.tokenId))) continue;
+      seen.add(String(p.tokenId));
+      owned.push({
+        id: p.id,
+        tokenId: String(p.tokenId),
+        storeId: "",
+        assetType: "token",
+        name: `Token #${p.tokenId}`,
+        priceUsdc: undefined,
+        status: "active",
+        createdAt: p.timestamp
+          ? new Date(Number(p.timestamp) * 1000).toISOString()
+          : undefined,
+      });
+    }
+
+    return { ok: true, data: owned };
+  } catch (err) {
+    return { ok: false, error: `subgraph: ${(err as Error).message}` };
+  }
+}
+
+async function fallbackBrowseMarketplace(query: BrowseQuery): Promise<Result<BrowseResult>> {
+  try {
+    const { getTokens } = await import("@/lib/subgraph_client");
+    const tokens = await getTokens({ first: query.limit ?? 100 });
+    const items: BridgeAsset[] = tokens.map((t) => ({
+      id: t.id,
+      tokenId: String(t.tokenId),
+      storeId: "",
+      assetType: "token",
+      name: `Token #${t.tokenId}`,
+      description: t.baseURI || undefined,
+      contentUrl: t.baseURI?.startsWith("ipfs://")
+        ? t.baseURI.replace(/^ipfs:\/\//, "https://ipfs.io/ipfs/")
+        : t.baseURI ?? undefined,
+      priceUsdc: t.pricePerToken ? Number(t.pricePerToken) : undefined,
+      status: "active",
+      createdAt: t.lazyMintedAt
+        ? new Date(Number(t.lazyMintedAt) * 1000).toISOString()
+        : undefined,
+    }));
+    return { ok: true, data: { items, total: items.length } };
+  } catch (err) {
+    return { ok: false, error: `subgraph: ${(err as Error).message}` };
+  }
+}
 
 // -- Persisted config --------------------------------------------------------
 
@@ -196,7 +351,12 @@ export function registerJoyBridgeHandlers(): void {
 
   ipcMain.handle("joybridge:list-my-stores", async () => {
     await loadConfig();
-    return ensureClient().listMyStores();
+    const edge = await ensureClient().listMyStores();
+    if (!isEdgeFailure(edge)) return edge;
+    logger.warn(
+      `joybridge:list-my-stores edge function failed (${edgeErrorMessage(edge)}); falling back to subgraph`,
+    );
+    return fallbackListMyStores();
   });
 
   ipcMain.handle(
@@ -238,7 +398,38 @@ export function registerJoyBridgeHandlers(): void {
           dryRun: input.dryRun,
           license: input.license,
         };
-        return publishAndForget(orchInput);
+        const outcome = await publishAndForget(orchInput);
+        // Map PublishOutcome → Result<Asset> shape so renderer's res.ok/res.error
+        // rendering surfaces real failure reasons (no-signer, no-gate, etc.)
+        // instead of an empty error string.
+        if (outcome.ok) {
+          const asset: BridgeAsset = {
+            id: outcome.tokenId ?? String(outcome.bundleId ?? ""),
+            tokenId: outcome.tokenId,
+            storeId: "",
+            assetType: input.assetType ?? "document",
+            name: input.name,
+            description: input.description,
+            contentUrl: outcome.metadataUri,
+            priceUsdc: typeof input.priceUsdc === "number" ? input.priceUsdc : undefined,
+            royaltyBps: input.royaltyBps,
+            status: "active",
+            createdAt: new Date().toISOString(),
+          };
+          return { ok: true, data: asset, outcome } as Result<BridgeAsset> & {
+            outcome: typeof outcome;
+          };
+        }
+        const errMsg =
+          (outcome.errors && outcome.errors.length
+            ? outcome.errors.join("; ")
+            : undefined) ??
+          (outcome.blockedAt ? `blocked at ${outcome.blockedAt}` : "publish failed");
+        return {
+          ok: false,
+          error: errMsg,
+          outcome,
+        } as Result<BridgeAsset> & { outcome: typeof outcome };
       }
       return ensureClient().publishAsset(input);
     },
@@ -251,14 +442,24 @@ export function registerJoyBridgeHandlers(): void {
 
   ipcMain.handle("joybridge:list-my-assets", async () => {
     await loadConfig();
-    return ensureClient().listMyAssets();
+    const edge = await ensureClient().listMyAssets();
+    if (!isEdgeFailure(edge)) return edge;
+    logger.warn(
+      `joybridge:list-my-assets edge function failed (${edgeErrorMessage(edge)}); falling back to subgraph`,
+    );
+    return fallbackListMyAssets();
   });
 
   ipcMain.handle(
     "joybridge:browse-marketplace",
     async (_e, query: BrowseQuery) => {
       await loadConfig();
-      return ensureClient().browseMarketplace(query ?? {});
+      const edge = await ensureClient().browseMarketplace(query ?? {});
+      if (!isEdgeFailure(edge)) return edge;
+      logger.warn(
+        `joybridge:browse-marketplace edge function failed (${edgeErrorMessage(edge)}); falling back to subgraph`,
+      );
+      return fallbackBrowseMarketplace(query ?? {});
     },
   );
 

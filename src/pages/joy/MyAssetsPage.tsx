@@ -25,10 +25,20 @@ export default function JoyMyAssetsPage() {
     try {
       const ipc = IpcClient.getInstance();
       const res = (await ipc.invoke("joybridge:list-my-assets")) as Result<
-        Asset[]
+        Asset[] | { assets?: Asset[]; data?: Asset[] }
       >;
-      if (res?.ok) setAssets(res.data ?? []);
-      else setError(res?.error ?? "Failed to load assets");
+      if (res?.ok) {
+        // Edge function may return either a raw array or { assets: [...] } / { data: [...] }.
+        const raw = res.data as unknown;
+        const list: Asset[] = Array.isArray(raw)
+          ? (raw as Asset[])
+          : Array.isArray((raw as { assets?: unknown })?.assets)
+            ? ((raw as { assets: Asset[] }).assets)
+            : Array.isArray((raw as { data?: unknown })?.data)
+              ? ((raw as { data: Asset[] }).data)
+              : [];
+        setAssets(list);
+      } else setError(res?.error ?? "Failed to load assets");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

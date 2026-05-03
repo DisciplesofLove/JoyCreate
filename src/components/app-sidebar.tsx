@@ -464,6 +464,15 @@ const menuCategories = [
     label: "Network",
     items: [
       {
+        title: "Smart Browser",
+        to: "/smart-browser",
+        icon: Globe,
+        gradient: "from-sky-500 to-blue-500",
+        hoverBg: "hover:bg-sky-500/10",
+        activeBg: "bg-sky-500/15",
+        activeText: "text-sky-600 dark:text-sky-400",
+      },
+      {
         title: "MCP Hub",
         to: "/mcp-hub",
         icon: Plug,

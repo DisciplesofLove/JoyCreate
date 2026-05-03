@@ -558,6 +558,7 @@ const createWindow = () => {
       preload: path.join(__dirname, "preload.js"),
       sandbox: false,
       webSecurity: true,
+      webviewTag: true, // required for SmartBrowserPage <webview> embeds
       // transparent: true,
     },
     // backgroundColor: "#00000001",

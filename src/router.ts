@@ -69,6 +69,7 @@ import { unifiedIdentityRoute } from "./routes/unified-identity";
 import { appBuilderRoute } from "./routes/app-builder";
 import { marketplaceExplorerRoute } from "./routes/marketplace-explorer";
 import { scrapingRoute } from "./routes/scraping";
+import { smartBrowserRoute } from "./routes/smart-browser";
 import { notificationsRoute } from "./routes/notifications";
 import { profileRoute } from "./routes/profile";
 import { adminRoute } from "./routes/admin";
@@ -162,6 +163,7 @@ const routeTree = rootRoute.addChildren([
   appBuilderRoute,
   marketplaceExplorerRoute,
   scrapingRoute,
+  smartBrowserRoute,
   notificationsRoute,
   profileRoute,
   adminRoute,

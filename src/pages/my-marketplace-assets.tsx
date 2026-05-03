@@ -92,7 +92,10 @@ function copyToClipboard(text: string) {
 
 function priceLabel(item: MarketplaceBrowseItem): string {
   if (item.pricingModel === "free" || (item.price ?? 0) === 0) return "Free";
-  return `$${((item.price ?? 0) / 100).toFixed(2)}`;
+  // `price` is a display value (whole units) emitted by the on-chain read
+  // layer (`weiToDisplay` in marketplace_browse_handlers). Render alongside
+  // the chain-native `currency` rather than re-scaling.
+  return `${(item.price ?? 0).toFixed(4)} ${item.currency}`;
 }
 
 // ── Stat Card ──────────────────────────────────────────────────────────────
@@ -428,7 +431,7 @@ export default function MyMarketplaceAssetsPage() {
 
   // DropERC1155 creator-scoped drops (replaces the retired
   // `useMarketplaceListings` / `useMarketplaceAssets` reads).
-  const { data: myDrops, isLoading: myDropsLoading } = useMyDrops(
+  const { data: myDrops, isLoading: myDropsLoading, isError: myDropsIsError, error: myDropsError } = useMyDrops(
     walletAddress || null,
   );
 
@@ -573,6 +576,12 @@ export default function MyMarketplaceAssetsPage() {
           icon={Globe}
           description=".joy domain names"
         />
+        <StatCard
+          title="Your Drops"
+          value={myDrops?.items?.length ?? 0}
+          icon={Package}
+          description="DropERC1155 drops authored"
+        />
       </div>
 
       {/* Network Stats */}
@@ -648,6 +657,9 @@ export default function MyMarketplaceAssetsPage() {
             </TabsTrigger>
             <TabsTrigger value="domains" className="gap-1">
               <Globe className="h-4 w-4" /> Domains
+            </TabsTrigger>
+            <TabsTrigger value="my-drops" className="gap-1">
+              <Package className="h-4 w-4" /> My Drops
             </TabsTrigger>
           </TabsList>
 
@@ -866,6 +878,73 @@ export default function MyMarketplaceAssetsPage() {
                     domain.owner.toLowerCase() === walletAddress.toLowerCase();
                   return <DomainCard key={domain.id} domain={domain} isOwned={!!isOwned} />;
                 })}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* My Drops — DropERC1155 drops authored by this wallet */}
+          <TabsContent value="my-drops" className="mt-0">
+            {!walletAddress ? (
+              <EmptyState
+                icon={Wallet}
+                title="Connect your wallet"
+                description="Enter your wallet address above to see drops you've authored."
+              />
+            ) : myDropsLoading ? (
+              <ListSkeleton rows={3} />
+            ) : myDropsIsError ? (
+              <EmptyState
+                icon={AlertCircle}
+                title="Failed to load your drops"
+                description={
+                  myDropsError instanceof Error
+                    ? myDropsError.message
+                    : "The DropERC1155 read layer returned an error. Try refreshing."
+                }
+              />
+            ) : !myDrops || myDrops.items.length === 0 ? (
+              <EmptyState
+                icon={Package}
+                title="No drops authored"
+                description="You haven't published any DropERC1155 drops yet."
+              />
+            ) : (
+              <div className="space-y-3">
+                {myDrops.items.map((drop) => (
+                  <Card key={drop.id} className="hover:shadow-md transition-shadow">
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center overflow-hidden">
+                            {drop.thumbnailUrl ? (
+                              <img src={drop.thumbnailUrl} alt={drop.name} className="h-full w-full object-cover" />
+                            ) : (
+                              <Package className="h-5 w-5 text-muted-foreground" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="font-medium">{drop.name || `Drop #${drop.id}`}</div>
+                            <div className="text-xs text-muted-foreground flex items-center gap-2">
+                              <Badge variant="outline" className="text-xs">{drop.assetType}</Badge>
+                              <span>Token #{drop.id}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-semibold">{priceLabel(drop)}</div>
+                          <div className="text-xs text-muted-foreground mt-1">
+                            {drop.downloads.toLocaleString()} claim{drop.downloads === 1 ? "" : "s"}
+                          </div>
+                        </div>
+                      </div>
+                      {drop.shortDescription && (
+                        <div className="mt-2 text-xs text-muted-foreground line-clamp-2">
+                          {drop.shortDescription}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
               </div>
             )}
           </TabsContent>

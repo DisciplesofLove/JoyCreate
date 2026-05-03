@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FederationClient } from "@/ipc/federation_client";
+import { useMyDrops } from "@/hooks/use_marketplace_browse";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,12 +28,12 @@ import {
   Package,
   Puzzle,
   RefreshCw,
+  Coins,
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { NFTListing } from "@/types/nft_types";
 import type { P2PPricing, P2PLicense, ModelChunkListing } from "@/types/federation_types";
-import { useMyDrops } from "@/hooks/use_marketplace_browse";
 import type { MarketplaceBrowseItem } from "@/types/publish_types";
 
 /**
@@ -47,21 +48,30 @@ import type { MarketplaceBrowseItem } from "@/types/publish_types";
  */
 function priceLabel(item: MarketplaceBrowseItem): string {
   if (item.pricingModel === "free" || (item.price ?? 0) === 0) return "Free";
-  return `$${((item.price ?? 0) / 100).toFixed(2)}`;
+  // `price` is a display value (whole units) emitted by the on-chain read
+  // layer (`weiToDisplay` in marketplace_browse_handlers). Render alongside
+  // the chain-native `currency` rather than re-scaling or hardcoding USDC.
+  return `${(item.price ?? 0).toFixed(4)} ${item.currency}`;
 }
 
 export default function PublishTab() {
   const queryClient = useQueryClient();
 
-  // Wallet for `useMyDrops` lookup. Mirrors the same key used elsewhere in
-  // the app (`my-marketplace-assets.tsx`).
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  // Wallet for DropERC1155 "my published drops" lookup. Stored under the
+  // canonical key used elsewhere in the app (see my-marketplace-assets.tsx).
+  const [walletAddress, setWalletAddress] = useState<string>("");
   useEffect(() => {
     const stored = localStorage.getItem("joycreate:chat:wallet-address");
     if (stored) setWalletAddress(stored);
   }, []);
-  const { data: myDrops, isLoading: myDropsLoading } = useMyDrops(walletAddress);
-  const myDropsItems = myDrops?.items ?? [];
+  // DropERC1155 drops authored by this wallet — surfaces on-chain published
+  // agents/workflows from the locked-in publish path (PR #20). Replaces the
+  // old `agents.dry_run_at` / cloud-listing display.
+  const { data: myDrops, isLoading: myDropsLoading } = useMyDrops(
+    walletAddress || null,
+    { pageSize: 50 },
+  );
+  const myDropsItems: MarketplaceBrowseItem[] = myDrops?.items ?? [];
 
   // Asset listing form
   const [assetForm, setAssetForm] = useState({
@@ -111,6 +121,7 @@ export default function PublishTab() {
   // My listings = listings where seller DID matches my identity
   const myListings = listings.filter((l) => l.seller.did === identity?.did);
   const myChunkListings = chunkListings.filter((l) => l.seller.did === identity?.did);
+  const myOnchainDrops = myDrops?.items ?? [];
 
   const createAssetListingMutation = useMutation({
     mutationFn: () => {

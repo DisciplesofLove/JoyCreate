@@ -16,7 +16,8 @@ import { describe, it, expect } from "vitest";
 import { __test__ } from "@/ipc/handlers/marketplace_browse_handlers";
 import type { DropToken } from "@/lib/joymarketplace/drop_subgraph";
 
-const { ipfsToHttp, weiToDisplay, toBrowseItem, toAssetDetail, isMyDrop } = __test__;
+const { ipfsToHttp, tokenMetadataUri, weiToDisplay, toBrowseItem, toAssetDetail, isMyDrop } =
+  __test__;
 
 const baseToken: DropToken = {
   id: "11",
@@ -34,6 +35,47 @@ const baseToken: DropToken = {
   conditionUpdatedAt: "1700000100",
   totalPurchases: "5",
 };
+
+// ── tokenMetadataUri ───────────────────────────────────────────────────────
+//
+// ERC-1155 baseURI → per-token metadata URL. baseURI may or may not have a
+// trailing slash; we must produce `<baseURI>/<tokenId>` either way. This is
+// the regression that broke every marketplace page (no metadata loaded →
+// every card showed "Drop #N" with no name/image/description).
+
+describe("tokenMetadataUri", () => {
+  it("appends tokenId to a baseURI that already ends with a slash", () => {
+    expect(tokenMetadataUri("ipfs://QmAbc/", "11")).toBe("ipfs://QmAbc/11");
+  });
+
+  it("appends tokenId to a baseURI that does NOT end with a slash", () => {
+    expect(tokenMetadataUri("ipfs://QmAbc", "11")).toBe("ipfs://QmAbc/11");
+  });
+
+  it("works with https baseURIs (with and without trailing slash)", () => {
+    expect(tokenMetadataUri("https://example.com/meta", "7")).toBe(
+      "https://example.com/meta/7",
+    );
+    expect(tokenMetadataUri("https://example.com/meta/", "7")).toBe(
+      "https://example.com/meta/7",
+    );
+  });
+
+  it("returns empty string for empty baseURI", () => {
+    expect(tokenMetadataUri("", "11")).toBe("");
+  });
+
+  it("handles large numeric tokenIds as strings", () => {
+    expect(tokenMetadataUri("ipfs://QmAbc/", "123456789")).toBe(
+      "ipfs://QmAbc/123456789",
+    );
+  });
+
+  it("does not double-append when baseURI already ends with the tokenId", () => {
+    expect(tokenMetadataUri("ipfs://QmAbc/11", "11")).toBe("ipfs://QmAbc/11");
+    expect(tokenMetadataUri("ipfs://QmAbc/11/", "11")).toBe("ipfs://QmAbc/11");
+  });
+});
 
 // ── ipfsToHttp ─────────────────────────────────────────────────────────────
 

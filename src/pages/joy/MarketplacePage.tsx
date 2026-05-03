@@ -5,6 +5,16 @@
  * route through `joybridge:browse-marketplace`. It now reads directly from
  * the DropERC1155 Goldsky subgraph via `useMarketplaceBrowse`, the same hook
  * powering `/marketplace-explorer` and `/nft-marketplace`. One read path.
+ * Replaces (functionally, not literally — D9 keep-old-pages):
+ *   - /marketplace-explorer
+ *   - /nft-marketplace (browse half)
+ *
+ * Backed by the on-chain DropERC1155 read layer via `marketplace:browse`
+ * (see `src/lib/joymarketplace/drop_subgraph.ts` +
+ * `src/ipc/handlers/marketplace_browse_handlers.ts`). The previous version
+ * routed through `joybridge:browse-marketplace`, which depended on a cloud
+ * endpoint that returns 404 — every published drop appeared as "no results"
+ * in the UI even though the on-chain subgraph indexed them correctly.
  */
 
 import { useState } from "react";
@@ -20,13 +30,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ShoppingCart, Search, Sparkles, Filter } from "lucide-react";
 import { useMarketplaceBrowse } from "@/hooks/use_marketplace_browse";
 import type {
   MarketplaceBrowseParams,
   MarketplaceBrowseItem,
   PublishableAssetType,
 } from "@/types/publish_types";
+import { ShoppingCart, Search, Sparkles, Filter } from "lucide-react";
 
 // Asset types this page exposes as filters. The hook accepts any
 // PublishableAssetType plus the literal "all" (mapped to `undefined`).
@@ -63,8 +73,10 @@ export default function JoyMarketplacePage() {
 
   function priceLabel(item: MarketplaceBrowseItem): string {
     if (item.pricingModel === "free" || (item.price ?? 0) === 0) return "Free";
-    // `price` is in cents per `MarketplaceBrowseItem`.
-    return `$${((item.price ?? 0) / 100).toFixed(2)}`;
+    // `price` is the display value (whole units) from the on-chain read
+    // layer (`weiToDisplay` in marketplace_browse_handlers). Render it
+    // alongside the chain-native `currency` rather than re-scaling.
+    return `${(item.price ?? 0).toFixed(4)} ${item.currency}`;
   }
 
   return (
@@ -76,7 +88,7 @@ export default function JoyMarketplacePage() {
             Joy Marketplace
           </h1>
           <p className="text-muted-foreground">
-            Browse assets published from JoyCreate stores.
+            Browse on-chain DropERC1155 assets published from JoyCreate stores.
           </p>
         </div>
         <Link to="/joy/publish">
@@ -92,7 +104,7 @@ export default function JoyMarketplacePage() {
           <div className="flex-1 flex items-center gap-2">
             <Search className="h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search by name, store, tag…"
+              placeholder="Search by name, tag…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
@@ -148,7 +160,10 @@ export default function JoyMarketplacePage() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {items.map((a) => (
-            <Card key={a.id} className="overflow-hidden hover:shadow-md transition-shadow">
+            <Card
+              key={a.id}
+              className="overflow-hidden hover:shadow-md transition-shadow"
+            >
               {a.thumbnailUrl ? (
                 <div className="h-40 bg-muted">
                   <img

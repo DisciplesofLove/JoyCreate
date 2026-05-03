@@ -312,9 +312,10 @@ const NETWORK_OPTIONS: { value: BlockchainNetwork; label: string; icon?: string 
   { value: "solana", label: "Solana" },
 ];
 
+// DropERC1155 has no native auction concept; pricing models match the
+// claim-condition surface (fixed price, free, recurring license, metered).
 const PRICING_TYPES = [
   { value: "fixed", label: "Fixed Price", description: "One-time purchase" },
-  { value: "auction", label: "Auction", description: "Bid-based pricing" },
   { value: "pay-per-use", label: "Pay Per Use", description: "Usage-based billing" },
   { value: "subscription", label: "Subscription", description: "Recurring payments" },
   { value: "free", label: "Free", description: "Open source / free tier" },
@@ -880,9 +881,6 @@ export default function JoyCreatorStudioPage() {
   };
 
   const formatPrice = (pricing: NFTPricing) => {
-    if (pricing.type === "auction") {
-      return `Starting at ${pricing.currency} ${pricing.price || 0}`;
-    }
     if (pricing.type === "pay-per-use") {
       return `${pricing.currency} ${pricing.price_per_use || pricing.price || 0}/use`;
     }

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FederationClient } from "@/ipc/federation_client";
+import { useMyDrops } from "@/hooks/use_marketplace_browse";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,6 +28,7 @@ import {
   Package,
   Puzzle,
   RefreshCw,
+  Coins,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { NFTListing } from "@/types/nft_types";
@@ -34,6 +36,18 @@ import type { P2PPricing, P2PLicense, ModelChunkListing } from "@/types/federati
 
 export default function PublishTab() {
   const queryClient = useQueryClient();
+
+  // Wallet for DropERC1155 "my published drops" lookup. Stored under the
+  // canonical key used elsewhere in the app (see my-marketplace-assets.tsx).
+  const [walletAddress, setWalletAddress] = useState<string>("");
+  useEffect(() => {
+    const stored = localStorage.getItem("joycreate:chat:wallet-address");
+    if (stored) setWalletAddress(stored);
+  }, []);
+  // DropERC1155 drops authored by this wallet — surfaces on-chain published
+  // agents/workflows from the locked-in publish path (PR #20). Replaces the
+  // old `agents.dry_run_at` / cloud-listing display.
+  const { data: myDrops } = useMyDrops(walletAddress || null, { pageSize: 50 });
 
   // Asset listing form
   const [assetForm, setAssetForm] = useState({
@@ -83,6 +97,7 @@ export default function PublishTab() {
   // My listings = listings where seller DID matches my identity
   const myListings = listings.filter((l) => l.seller.did === identity?.did);
   const myChunkListings = chunkListings.filter((l) => l.seller.did === identity?.did);
+  const myOnchainDrops = myDrops?.items ?? [];
 
   const createAssetListingMutation = useMutation({
     mutationFn: () => {
@@ -236,11 +251,52 @@ export default function PublishTab() {
   return (
     <ScrollArea className="h-full">
       <div className="p-6 space-y-6">
-        {/* My Listings Summary */}
+        {/* My On-Chain Drops (DropERC1155, sourced from Goldsky) */}
+        {walletAddress && myOnchainDrops.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Coins className="w-5 h-5 text-purple-500" />
+                My On-Chain Drops
+              </CardTitle>
+              <CardDescription>
+                {myOnchainDrops.length} DropERC1155 drop
+                {myOnchainDrops.length !== 1 ? "s" : ""} authored by {walletAddress.slice(0, 6)}
+                …{walletAddress.slice(-4)}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {myOnchainDrops.map((drop) => (
+                  <div
+                    key={drop.id}
+                    className="flex items-center justify-between p-3 rounded-lg border"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Coins className="w-4 h-4 text-muted-foreground" />
+                      <div>
+                        <p className="text-sm font-medium">{drop.name || `Drop #${drop.id}`}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Token #{drop.id} •{" "}
+                          {drop.pricingModel === "free"
+                            ? "Free"
+                            : `${((drop.price ?? 0) / 1_000_000).toFixed(2)} USDC`}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant="default">{drop.assetType}</Badge>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* My Federation Listings Summary */}
         {(myListings.length > 0 || myChunkListings.length > 0) && (
           <Card>
             <CardHeader>
-              <CardTitle>My Published Listings</CardTitle>
+              <CardTitle>My Federation Listings</CardTitle>
               <CardDescription>
                 {myListings.length} asset listing{myListings.length !== 1 ? "s" : ""} and{" "}
                 {myChunkListings.length} model chunk listing{myChunkListings.length !== 1 ? "s" : ""}

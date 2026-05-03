@@ -317,6 +317,15 @@ export class OllamaProvider {
     if (!response.ok) {
       let errMsg = response.statusText;
       try { const b = await response.json(); if (b?.error) errMsg = b.error; } catch {}
+      // Make the most common Ollama failure (missing blobs from an
+      // interrupted pull) actionable instead of confusing.
+      if (/model .* not found|pull model manifest/i.test(errMsg)) {
+        throw new Error(
+          `Ollama chat failed: model '${request.modelConfig.modelId}' is not usable. ` +
+            `This usually means the download was interrupted. Re-pull it with: ` +
+            `\`ollama pull ${request.modelConfig.modelId}\` — or pick a different model.`,
+        );
+      }
       throw new Error(`Ollama chat failed: ${errMsg}`);
     }
 

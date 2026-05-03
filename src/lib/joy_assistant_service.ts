@@ -279,11 +279,17 @@ async function probeOllama(preferredModel?: string): Promise<LocalProbeResult | 
       // Explicit user pick — use it regardless of size
       modelName = preferred.name;
     } else {
-      // Auto mode: prefer small, fast chat models. Skip anything ≥14B so the
+      // Auto mode: prefer Llama 3.x 8B as the project default workhorse, then
+      // fall back to other small/medium chat models. Skip anything ≥14B so the
       // side panel stays responsive; caller will fall back to cloud if nothing fits.
       const preferOrder = [
-        /^deepseek-r1:8b/i, /^deepseek-r1:7b/i,
+        // ── Project default: Llama 3.x 8B family ──
+        /^llama3(?:\.\d+)?:8b\b/i,
+        /^llama-?3(?:\.\d+)?-?8b\b/i,
+        // ── Other Llama 3.x small variants ──
         /^llama3\.2[:\b]/i, /^llama3\.1[:\b]/i, /^llama3[:\b]/i,
+        // ── Other small reasoning / chat models ──
+        /^deepseek-r1:8b/i, /^deepseek-r1:7b/i,
         /^qwen2\.5[:\b]/i, /^qwen2[:\b]/i,
         /^mistral[:\b]/i,
         /^phi3[:\b]/i, /^gemma2?[:\b]/i,
@@ -453,16 +459,31 @@ export async function chat(
           ? await probeOllama(effectiveSelected.name)
           : await probeLMStudio();
       if (!localResult) {
-        throw new Error(
-          `Local model "${effectiveSelected.name}" is not available on ${effectiveSelected.provider}. ` +
-            `Make sure the local server is running and the model is pulled.`,
+        // The user's pinned local model is gone (e.g. uninstalled, or it was
+        // a ghost manifest entry). Fall back to auto-detect so the panel
+        // keeps working instead of throwing a hard error in the UI.
+        logger.warn(
+          `Pinned local model "${effectiveSelected.provider}:${effectiveSelected.name}" not available — auto-detecting another local model.`,
         );
+        const fallback = await tryGetLocalModelClient();
+        if (!fallback) {
+          throw new Error(
+            `Local model "${effectiveSelected.name}" is not available on ${effectiveSelected.provider} and no other local model was found. ` +
+              `Run \`ollama list\` to see installed models, or pull one with \`ollama pull llama3.1:8b\`.`,
+          );
+        }
+        modelClient = fallback.modelClient;
+        providerId = fallback.providerId;
+        modelId = fallback.modelId;
+        isLocal = true;
+        logger.info("Joy assistant fell back to AUTO LOCAL model", { providerId, modelId });
+      } else {
+        modelClient = localResult.modelClient;
+        providerId = localResult.providerId;
+        modelId = localResult.modelId;
+        isLocal = true;
+        logger.info("Joy assistant using EXPLICIT LOCAL model", { providerId, modelId });
       }
-      modelClient = localResult.modelClient;
-      providerId = localResult.providerId;
-      modelId = localResult.modelId;
-      isLocal = true;
-      logger.info("Joy assistant using EXPLICIT LOCAL model", { providerId, modelId });
     } else if (effectiveSelected.provider === "auto" || effectiveSelected.name === "auto") {
       // No explicit choice — local-first auto-detect, then cloud fallback
       const localResult = await tryGetLocalModelClient();

@@ -1,15 +1,13 @@
 /**
  * /joy/marketplace — Public Joy Marketplace browse.
  *
- * Replaces (functionally, not literally — D9 keep-old-pages):
- *   - /marketplace-explorer
- *   - /nft-marketplace (browse half)
- *
- * Backed by `joybridge:browse-marketplace`. No direct subgraph access here;
- * the JoyBridge API layer is responsible for picking subgraph-vs-cache.
+ * Section C of `briefs/droperc1155-read-layer-surgery.md`: this page used to
+ * route through `joybridge:browse-marketplace`. It now reads directly from
+ * the DropERC1155 Goldsky subgraph via `useMarketplaceBrowse`, the same hook
+ * powering `/marketplace-explorer` and `/nft-marketplace`. One read path.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,63 +20,51 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { IpcClient } from "@/ipc/ipc_client";
 import { ShoppingCart, Search, Sparkles, Filter } from "lucide-react";
+import { useMarketplaceBrowse } from "@/hooks/use_marketplace_browse";
 import type {
-  Asset,
-  BrowseQuery,
-  BrowseResult,
-  Result,
-} from "@/lib/joybridge_client";
+  MarketplaceBrowseParams,
+  MarketplaceBrowseItem,
+  PublishableAssetType,
+} from "@/types/publish_types";
 
-const ASSET_TYPES = [
+// Asset types this page exposes as filters. The hook accepts any
+// PublishableAssetType plus the literal "all" (mapped to `undefined`).
+const ASSET_TYPE_OPTIONS: ReadonlyArray<"all" | PublishableAssetType> = [
   "all",
-  "image",
-  "video",
   "agent",
+  "workflow",
+  "app",
   "model",
-  "document",
+  "dataset",
+  "template",
 ] as const;
 
 export default function JoyMarketplacePage() {
-  const [items, setItems] = useState<Asset[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [assetType, setAssetType] = useState<string>("all");
+  const [assetType, setAssetType] = useState<"all" | PublishableAssetType>("all");
+  const [appliedSearch, setAppliedSearch] = useState("");
+  const [appliedAssetType, setAppliedAssetType] =
+    useState<"all" | PublishableAssetType>("all");
 
-  async function load(query: BrowseQuery): Promise<void> {
-    setLoading(true);
-    setError(null);
-    try {
-      const ipc = IpcClient.getInstance();
-      const res = (await ipc.invoke(
-        "joybridge:browse-marketplace",
-        query,
-      )) as Result<BrowseResult>;
-      if (res?.ok) {
-        setItems(res.data?.items ?? []);
-      } else {
-        setError(res?.error ?? "Failed to load marketplace");
-        setItems([]);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
+  const params: MarketplaceBrowseParams = {
+    query: appliedSearch || undefined,
+    assetType: appliedAssetType === "all" ? undefined : appliedAssetType,
+    pageSize: 24,
+  };
 
-  useEffect(() => {
-    void load({ limit: 24 });
-  }, []);
+  const { data, isLoading, error } = useMarketplaceBrowse(params);
+  const items: MarketplaceBrowseItem[] = data?.items ?? [];
 
   function applyFilters(): void {
-    void load({
-      limit: 24,
-      search: search.trim() || undefined,
-      assetType: assetType === "all" ? undefined : assetType,
-    });
+    setAppliedSearch(search.trim());
+    setAppliedAssetType(assetType);
+  }
+
+  function priceLabel(item: MarketplaceBrowseItem): string {
+    if (item.pricingModel === "free" || (item.price ?? 0) === 0) return "Free";
+    // `price` is in cents per `MarketplaceBrowseItem`.
+    return `$${((item.price ?? 0) / 100).toFixed(2)}`;
   }
 
   return (
@@ -116,12 +102,15 @@ export default function JoyMarketplacePage() {
           </div>
           <div className="flex items-center gap-2">
             <Filter className="h-4 w-4 text-muted-foreground" />
-            <Select value={assetType} onValueChange={setAssetType}>
+            <Select
+              value={assetType}
+              onValueChange={(v) => setAssetType(v as "all" | PublishableAssetType)}
+            >
               <SelectTrigger className="w-44">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {ASSET_TYPES.map((t) => (
+                {ASSET_TYPE_OPTIONS.map((t) => (
                   <SelectItem key={t} value={t}>
                     {t === "all" ? "All types" : t}
                   </SelectItem>
@@ -138,10 +127,10 @@ export default function JoyMarketplacePage() {
       {error ? (
         <Card>
           <CardContent className="p-6 text-center text-red-600 dark:text-red-400">
-            {error}
+            {error instanceof Error ? error.message : "Failed to load marketplace"}
           </CardContent>
         </Card>
-      ) : loading ? (
+      ) : isLoading ? (
         <div className="text-muted-foreground">Loading marketplace…</div>
       ) : items.length === 0 ? (
         <Card>
@@ -162,7 +151,6 @@ export default function JoyMarketplacePage() {
             <Card key={a.id} className="overflow-hidden hover:shadow-md transition-shadow">
               {a.thumbnailUrl ? (
                 <div className="h-40 bg-muted">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={a.thumbnailUrl}
                     alt={a.name}
@@ -181,18 +169,12 @@ export default function JoyMarketplacePage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground space-y-1">
-                {a.description && (
-                  <p className="line-clamp-2">{a.description}</p>
+                {a.shortDescription && (
+                  <p className="line-clamp-2">{a.shortDescription}</p>
                 )}
                 <div className="flex items-center justify-between pt-2">
-                  <span>
-                    {a.priceUsdc != null
-                      ? a.priceUsdc === 0
-                        ? "Free"
-                        : `$${(a.priceUsdc / 1_000_000).toFixed(2)} USDC`
-                      : "—"}
-                  </span>
-                  {a.status && <Badge variant="outline">{a.status}</Badge>}
+                  <span>{priceLabel(a)}</span>
+                  <Badge variant="outline">published</Badge>
                 </div>
               </CardContent>
             </Card>

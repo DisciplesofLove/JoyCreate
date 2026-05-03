@@ -115,6 +115,11 @@ async function scanOllamaManifests(): Promise<string[]> {
 
       for (const tag of tags) {
         if (tag.isFile()) {
+          // Skip obvious non-model entries that occasionally end up under
+          // the library dir (e.g. stray "blobs" dirs, cloud-only stubs that
+          // can't be run locally, or files with no valid tag name).
+          if (entry.name === "blobs" || entry.name.startsWith(".")) continue;
+          if (tag.name === "cloud") continue;
           modelNames.push(`${entry.name}:${tag.name}`);
         }
       }
@@ -134,6 +139,68 @@ async function scanOllamaManifests(): Promise<string[]> {
 }
 
 /**
+ * Verify a model's blobs are actually present on disk. Ollama keeps the
+ * manifest even when the underlying GGUF download was interrupted (a
+ * `<digest>-partial` file is left behind), so `/api/tags` and `/api/show`
+ * both happily report the model as installed — but `/api/chat` then fails
+ * with `model 'X' not found` the moment it tries to mmap the weights.
+ *
+ * This walks the manifest JSON, collects every layer digest, and confirms
+ * the blob file exists. Missing blobs => return false so the caller can
+ * filter the model out of the picker.
+ */
+async function modelBlobsArePresent(modelName: string): Promise<boolean> {
+  try {
+    const modelsDir = getOllamaModelsDir();
+    const [name, tag = "latest"] = modelName.split(":");
+    // Models pulled from the public registry live under registry.ollama.ai/library/.
+    // Custom-pushed/private models can live under other namespaces, so we glob.
+    const manifestRoots = [
+      path.join(modelsDir, "manifests", "registry.ollama.ai", "library", name, tag),
+      path.join(modelsDir, "manifests", "registry.ollama.ai", name, tag),
+    ];
+    let manifestPath: string | null = null;
+    for (const candidate of manifestRoots) {
+      if (fs.existsSync(candidate)) {
+        manifestPath = candidate;
+        break;
+      }
+    }
+    if (!manifestPath) {
+      // Unknown layout — assume present so we don't false-positive.
+      return true;
+    }
+    const manifestRaw = await fs.promises.readFile(manifestPath, "utf-8");
+    const manifest = JSON.parse(manifestRaw) as {
+      layers?: { digest?: string }[];
+      config?: { digest?: string };
+    };
+    const digests = [
+      manifest.config?.digest,
+      ...(manifest.layers ?? []).map((l) => l.digest),
+    ].filter((d): d is string => typeof d === "string");
+    const blobsDir = path.join(modelsDir, "blobs");
+    for (const digest of digests) {
+      // Manifest digests look like "sha256:abc..."; on-disk filenames use a dash.
+      const filename = digest.replace(":", "-");
+      const blobPath = path.join(blobsDir, filename);
+      if (!fs.existsSync(blobPath)) {
+        logger.warn(
+          `Ollama model "${modelName}" is missing blob ${filename} — hiding from picker.`,
+        );
+        return false;
+      }
+    }
+    return true;
+  } catch (err) {
+    logger.debug(`Could not verify blobs for "${modelName}":`, err);
+    // On any verification failure, default to "present" so we don't hide
+    // working models because of an unexpected manifest layout.
+    return true;
+  }
+}
+
+/**
  * Fetch models from the Ollama HTTP API (/api/tags).
  */
 async function fetchOllamaModelsFromApi(): Promise<LocalModel[]> {
@@ -148,7 +215,22 @@ async function fetchOllamaModelsFromApi(): Promise<LocalModel[]> {
     const data = await response.json();
     const ollamaModels: OllamaModel[] = data.models || [];
 
-    return ollamaModels.map((model: OllamaModel) => ({
+    // Filter out models whose blobs are missing (interrupted pulls leave
+    // ghost manifests behind that cause "model not found" at inference time).
+    const verified = await Promise.all(
+      ollamaModels.map(async (model) =>
+        (await modelBlobsArePresent(model.name)) ? model : null,
+      ),
+    );
+    const usable = verified.filter((m): m is OllamaModel => m !== null);
+    const skipped = ollamaModels.length - usable.length;
+    if (skipped > 0) {
+      logger.info(
+        `Hid ${skipped} Ollama model(s) with missing blobs (likely interrupted pulls).`,
+      );
+    }
+
+    return usable.map((model: OllamaModel) => ({
       modelName: model.name,
       displayName: formatDisplayName(model.name),
       provider: "ollama" as const,
@@ -320,22 +402,43 @@ export async function fetchOllamaModels(): Promise<LocalModelListResponse> {
 
   if (diskOnlyNames.length > 0) {
     logger.info(
-      `Found ${diskOnlyNames.length} disk-only models not in API, registering with server...`,
+      `Found ${diskOnlyNames.length} disk-only model manifest(s) not in API; verifying...`,
     );
 
-    // Register disk-only models in the background so they become usable
-    // for inference. We don't await all of them to avoid blocking the
-    // model list from returning, but we do add them to the returned list
-    // immediately so the UI shows them.
-    for (const name of diskOnlyNames) {
+    // Verify each disk-only manifest against /api/show before exposing it
+    // to the UI. Otherwise we surface ghost names (e.g. cloud stubs, broken
+    // q8 manifests) that Ollama can't actually run, and the assistant fails
+    // with "pull model manifest: file does not exist" the moment the user
+    // selects one.
+    const apiUrl = getOllamaApiUrl();
+    const verified = await Promise.all(
+      diskOnlyNames.map(async (name) => {
+        try {
+          const res = await fetch(`${apiUrl}/api/show`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+            signal: AbortSignal.timeout(3_000),
+          });
+          return res.ok ? name : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    const usable = verified.filter((n): n is string => !!n);
+    const skipped = diskOnlyNames.length - usable.length;
+    if (skipped > 0) {
+      logger.info(
+        `Skipped ${skipped} disk-only Ollama manifest(s) that /api/show rejected (broken/cloud-only).`,
+      );
+    }
+    for (const name of usable) {
       models.push({
         modelName: name,
         displayName: formatDisplayName(name),
         provider: "ollama",
       });
-      // Fire-and-forget registration — next time the list is fetched
-      // they'll be in the API directly
-      ensureModelRegistered(name).catch(() => {});
     }
   }
 

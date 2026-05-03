@@ -351,6 +351,13 @@
       "when": 1777770796150,
       "tag": "0049_onchain_publish",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1777839331269,
+      "tag": "0050_collab_hub",
+      "breakpoints": true
     }
   ]
 }

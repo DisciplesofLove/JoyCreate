@@ -24,6 +24,7 @@ import {
   Loader2,
   MessageSquarePlus,
   MessagesSquare,
+  MoreHorizontal,
   Pencil,
   Play,
   RefreshCw,
@@ -65,6 +66,7 @@ import {
 import { useLocalModels } from "@/hooks/useLocalModels";
 import { useLocalLMSModels } from "@/hooks/useLMStudioModels";
 import { useLanguageModelsByProviders } from "@/hooks/useLanguageModelsByProviders";
+import { useLanguageModelProviders } from "@/hooks/useLanguageModelProviders";
 import { useAssistantContext } from "./AssistantContextProvider";
 import {
   DropdownMenu,
@@ -219,9 +221,17 @@ export function JoyAssistantPanel() {
 
   const handleDeleteSession = useCallback(
     (id: string) => {
+      // eslint-disable-next-line no-console
+      console.log("[JoyAssistant] deleting session", id);
       deleteSession.mutate(id, {
         onSuccess: () => {
+          // eslint-disable-next-line no-console
+          console.log("[JoyAssistant] deleted session", id);
           if (id === sessionId) setActiveSessionId(crypto.randomUUID());
+        },
+        onError: (err) => {
+          // eslint-disable-next-line no-console
+          console.error("[JoyAssistant] delete failed", err);
         },
       });
     },
@@ -275,35 +285,17 @@ export function JoyAssistantPanel() {
       )}
     >
       {/* ── Header ──────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 border-b px-3 py-2">
+      <div className="flex items-center gap-1 border-b px-2 py-2">
         {!minimized && (
           <>
-            <Bot className="h-4 w-4 text-primary" />
-            <span className="text-sm font-semibold flex-1">Joy Assistant</span>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={cycleMode}
-                  >
-                    <ModeIcon className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>{MODE_CONFIG[mode].desc}</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            <Badge variant="secondary" className="text-[10px] px-1.5">
-              {MODE_CONFIG[mode].label}
-            </Badge>
-            <AssistantModelPicker />
+            <Bot className="h-4 w-4 text-primary shrink-0" />
+            <span className="text-sm font-semibold shrink-0">Joy</span>
+            <div className="min-w-0 flex-1">
+              <AssistantModelPicker />
+            </div>
           </>
         )}
-        <div className="flex items-center gap-0.5 ml-auto">
+        <div className="flex items-center gap-0.5 ml-auto shrink-0">
           {!minimized && (
             <>
               <Button
@@ -315,104 +307,117 @@ export function JoyAssistantPanel() {
               >
                 <MessageSquarePlus className="h-3.5 w-3.5" />
               </Button>
+              {/* Overflow menu — collapses mode, sessions, TTS, regenerate, clear
+                  into a single button so the close button stays visible. */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
-                    title="Conversations"
+                    title="More"
                   >
-                    <MessagesSquare className="h-3.5 w-3.5" />
+                    <MoreHorizontal className="h-3.5 w-3.5" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-72">
-                  <DropdownMenuLabel>Conversations</DropdownMenuLabel>
+                  <DropdownMenuLabel className="flex items-center gap-2">
+                    <ModeIcon className="h-3.5 w-3.5" />
+                    <span className="flex-1">Mode: {MODE_CONFIG[mode].label}</span>
+                    <Badge variant="secondary" className="text-[10px] px-1.5">
+                      {MODE_CONFIG[mode].label}
+                    </Badge>
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem onSelect={(e) => { e.preventDefault(); cycleMode(); }}>
+                    <Wand2 className="h-3.5 w-3.5 mr-2" />
+                    Switch mode ({MODE_CONFIG[mode].desc})
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={(e) => { e.preventDefault(); toggleAutoTTS(); }}>
+                    {autoTTSEnabled ? (
+                      <Volume2 className="h-3.5 w-3.5 mr-2 text-primary" />
+                    ) : (
+                      <VolumeX className="h-3.5 w-3.5 mr-2" />
+                    )}
+                    {autoTTSEnabled ? "Disable auto-speak" : "Enable auto-speak"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={(e) => { e.preventDefault(); handleRegenerate(); }}
+                    disabled={streaming || messages.length === 0}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 mr-2" />
+                    Regenerate last response
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={(e) => { e.preventDefault(); clearHistory(); }}>
+                    <Eraser className="h-3.5 w-3.5 mr-2" />
+                    Clear this conversation
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Conversations</DropdownMenuLabel>
                   {(sessionsQuery.data ?? []).length === 0 ? (
                     <div className="px-2 py-3 text-xs text-muted-foreground text-center">
                       No saved conversations yet
                     </div>
                   ) : (
                     (sessionsQuery.data ?? []).slice(0, 30).map((s) => (
-                      <DropdownMenuItem
+                      // Use a plain row instead of DropdownMenuItem so the
+                      // nested rename/delete buttons don't bubble into Radix's
+                      // onSelect (which would switch sessions instead of
+                      // deleting them).
+                      <div
                         key={s.id}
-                        onSelect={(e) => {
-                          e.preventDefault();
-                          switchToSession(s.id);
-                        }}
                         className={cn(
-                          "flex items-center gap-2 group",
+                          "flex items-center gap-2 px-2 py-1.5 mx-1 rounded text-sm cursor-default outline-none",
+                          "hover:bg-accent focus:bg-accent",
                           s.id === sessionId && "bg-accent",
                         )}
                       >
-                        <MessagesSquare className="h-3 w-3 shrink-0 text-muted-foreground" />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium truncate">
-                            {s.title}
-                          </div>
-                          <div className="text-[10px] text-muted-foreground">
-                            {s.messageCount} msg ·{" "}
-                            {new Date(s.lastActiveAt).toLocaleDateString()}
-                          </div>
-                        </div>
                         <button
-                          className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-muted rounded"
+                          type="button"
+                          className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                          onClick={() => switchToSession(s.id)}
+                          title="Open conversation"
+                        >
+                          <MessagesSquare className="h-3 w-3 shrink-0 text-muted-foreground" />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-medium truncate">
+                              {s.title}
+                            </div>
+                            <div className="text-[10px] text-muted-foreground">
+                              {s.messageCount} msg ·{" "}
+                              {new Date(s.lastActiveAt).toLocaleDateString()}
+                            </div>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          className="p-1 hover:bg-muted rounded shrink-0"
                           onClick={(e) => {
+                            e.preventDefault();
                             e.stopPropagation();
                             handleRenameSession(s.id, s.title);
                           }}
                           title="Rename"
                         >
-                          <Pencil className="h-3 w-3" />
+                          <Pencil className="h-3.5 w-3.5" />
                         </button>
                         <button
-                          className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-destructive/10 rounded text-destructive"
+                          type="button"
+                          className="p-1 hover:bg-destructive/10 rounded text-destructive shrink-0"
                           onClick={(e) => {
+                            e.preventDefault();
                             e.stopPropagation();
                             handleDeleteSession(s.id);
                           }}
                           title="Delete"
                         >
-                          <Trash2 className="h-3 w-3" />
+                          <Trash2 className="h-3.5 w-3.5" />
                         </button>
-                      </DropdownMenuItem>
+                      </div>
                     ))
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn("h-7 w-7", autoTTSEnabled && "text-primary")}
-                onClick={toggleAutoTTS}
-                title={autoTTSEnabled ? "Disable auto-speak" : "Enable auto-speak"}
-              >
-                {autoTTSEnabled ? (
-                  <Volume2 className="h-3.5 w-3.5" />
-                ) : (
-                  <VolumeX className="h-3.5 w-3.5" />
-                )}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={handleRegenerate}
-                disabled={streaming || messages.length === 0}
-                title="Regenerate last response"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={clearHistory}
-                title="Clear this conversation"
-              >
-                <Eraser className="h-3.5 w-3.5" />
-              </Button>
             </>
           )}
           <Button
@@ -697,6 +702,7 @@ function AssistantModelPicker() {
   const { models: ollamaModels, loadModels: loadOllama } = useLocalModels();
   const { models: lmsModels, loadModels: loadLMS } = useLocalLMSModels();
   const { data: cloudByProvider } = useLanguageModelsByProviders();
+  const { isProviderSetup } = useLanguageModelProviders();
 
   useEffect(() => {
     if (open) {
@@ -744,7 +750,7 @@ function AssistantModelPicker() {
           <div className="flex-1">
             <div className="text-xs font-medium">Auto (local-first)</div>
             <div className="text-[10px] text-muted-foreground">
-              Small local model if available, else cloud — always fast
+              Prefers local Llama 3.x 8B, falls back to a connected cloud provider
             </div>
           </div>
         </DropdownMenuItem>
@@ -813,7 +819,15 @@ function AssistantModelPicker() {
 
         {cloudByProvider &&
           Object.entries(cloudByProvider)
-            .filter(([pid, models]) => pid !== "auto" && models.length > 0)
+            .filter(
+              ([pid, models]) =>
+                pid !== "auto" &&
+                models.length > 0 &&
+                // Only show cloud providers the user has actually wired up
+                // (API key set in Settings or env var present). This is what
+                // the user means by "models that have APIs connected".
+                isProviderSetup(pid),
+            )
             .map(([providerId, models]) => (
               <div key={`provider-${providerId}`}>
                 <DropdownMenuSeparator />

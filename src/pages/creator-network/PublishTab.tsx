@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FederationClient } from "@/ipc/federation_client";
 import { Button } from "@/components/ui/button";
@@ -27,13 +27,41 @@ import {
   Package,
   Puzzle,
   RefreshCw,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { NFTListing } from "@/types/nft_types";
 import type { P2PPricing, P2PLicense, ModelChunkListing } from "@/types/federation_types";
+import { useMyDrops } from "@/hooks/use_marketplace_browse";
+import type { MarketplaceBrowseItem } from "@/types/publish_types";
+
+/**
+ * Section C of `briefs/droperc1155-read-layer-surgery.md`: the "My Published
+ * Listings" panel below renders the creator's on-chain DropERC1155 drops via
+ * `useMyDrops` (sourced from the Goldsky `joy-drop-amoy` subgraph). It is
+ * NOT sourced from `agents.dry_run_at` or any cloud listing mirror — the
+ * brief explicitly forbids those reads.
+ *
+ * The federation listings UI below the panel is a separate P2P system that
+ * predates the marketplace lock-in; left as-is per the brief's scope.
+ */
+function priceLabel(item: MarketplaceBrowseItem): string {
+  if (item.pricingModel === "free" || (item.price ?? 0) === 0) return "Free";
+  return `$${((item.price ?? 0) / 100).toFixed(2)}`;
+}
 
 export default function PublishTab() {
   const queryClient = useQueryClient();
+
+  // Wallet for `useMyDrops` lookup. Mirrors the same key used elsewhere in
+  // the app (`my-marketplace-assets.tsx`).
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  useEffect(() => {
+    const stored = localStorage.getItem("joycreate:chat:wallet-address");
+    if (stored) setWalletAddress(stored);
+  }, []);
+  const { data: myDrops, isLoading: myDropsLoading } = useMyDrops(walletAddress);
+  const myDropsItems = myDrops?.items ?? [];
 
   // Asset listing form
   const [assetForm, setAssetForm] = useState({
@@ -236,14 +264,73 @@ export default function PublishTab() {
   return (
     <ScrollArea className="h-full">
       <div className="p-6 space-y-6">
-        {/* My Listings Summary */}
+        {/* My On-Chain Drops — DropERC1155, sourced from the Goldsky
+            joy-drop-amoy subgraph via `useMyDrops`. Replaces the previous
+            placeholder summary that read from `agents.dry_run_at`. */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-violet-500" />
+              My On-Chain Drops
+            </CardTitle>
+            <CardDescription>
+              {walletAddress
+                ? `${myDropsItems.length} DropERC1155 drop${myDropsItems.length === 1 ? "" : "s"} published from ${walletAddress.slice(0, 6)}…${walletAddress.slice(-4)}`
+                : "Connect a wallet (set 'joycreate:chat:wallet-address' in app settings) to see your on-chain drops."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!walletAddress ? (
+              <div className="text-sm text-muted-foreground py-2">
+                No wallet linked yet. Drops will appear here automatically once
+                you publish via <code>/publish_agent</code> or the on-chain
+                publish wizard.
+              </div>
+            ) : myDropsLoading ? (
+              <div className="text-sm text-muted-foreground py-2">
+                Loading drops from subgraph…
+              </div>
+            ) : myDropsItems.length === 0 ? (
+              <div className="text-sm text-muted-foreground py-2">
+                No on-chain drops yet. Publish one to see it here.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {myDropsItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between p-3 rounded-lg border"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Sparkles className="w-4 h-4 text-violet-500" />
+                      <div>
+                        <p className="text-sm font-medium">{item.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Token #{item.id} • {item.assetType}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">
+                        {priceLabel(item)}
+                      </span>
+                      <Badge variant="outline">published</Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Federation P2P listings (separate system from DropERC1155) */}
         {(myListings.length > 0 || myChunkListings.length > 0) && (
           <Card>
             <CardHeader>
-              <CardTitle>My Published Listings</CardTitle>
+              <CardTitle>My Federation Listings</CardTitle>
               <CardDescription>
                 {myListings.length} asset listing{myListings.length !== 1 ? "s" : ""} and{" "}
-                {myChunkListings.length} model chunk listing{myChunkListings.length !== 1 ? "s" : ""}
+                {myChunkListings.length} model chunk listing{myChunkListings.length !== 1 ? "s" : ""} on the P2P creator network
               </CardDescription>
             </CardHeader>
             <CardContent>

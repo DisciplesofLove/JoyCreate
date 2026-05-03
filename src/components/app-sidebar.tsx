@@ -54,14 +54,12 @@ import {
   Server,
   FileSearch,
   BellRing,
-  UserCircle,
   LayoutDashboard as AdminIcon,
   ScrollText,
   Archive,
   BarChart3,
   Image as ImageIcon,
   Video,
-  Stamp,
   UserCheck,
   Fingerprint,
   MessagesSquare,
@@ -637,9 +635,25 @@ const menuCategories = [
       // See briefs/nav-consolidation-audit.md (Phase 1).
     ],
   },
+  // Phase 2 consolidation (briefs/nav-consolidation-audit.md, Cluster 5
+  // + section dissolution): "Sovereign" and "Productivity" are merged
+  // into a single "Me" section. "Universal Identity", "SSI Credentials",
+  // "Creator Profile", and "Profile" (formerly under Admin) all collapse
+  // into the unified /identity page (tabs: identity | public | ssi |
+  // account | activity). Old routes still resolve and render a deprecation
+  // banner — see briefs/nav-consolidation-audit.md.
   {
-    label: "Sovereign",
+    label: "Me",
     items: [
+      {
+        title: "Identity",
+        to: "/identity",
+        icon: Fingerprint,
+        gradient: "from-violet-500 to-blue-600",
+        hoverBg: "hover:bg-violet-500/10",
+        activeBg: "bg-violet-500/15",
+        activeText: "text-violet-600 dark:text-violet-400",
+      },
       {
         title: "Token Economics",
         to: "/tokenomics",
@@ -658,6 +672,8 @@ const menuCategories = [
         activeBg: "bg-purple-500/15",
         activeText: "text-purple-600 dark:text-purple-400",
       },
+      // Data Sovereignty kept here for now; Phase 3 (Cluster 8) folds it
+      // into Local Vault as a tab.
       {
         title: "Data Sovereignty",
         to: "/data-sovereignty",
@@ -667,38 +683,6 @@ const menuCategories = [
         activeBg: "bg-red-500/15",
         activeText: "text-red-600 dark:text-red-400",
       },
-      {
-        title: "Universal Identity",
-        to: "/identity",
-        icon: Fingerprint,
-        gradient: "from-violet-500 to-blue-600",
-        hoverBg: "hover:bg-violet-500/10",
-        activeBg: "bg-violet-500/15",
-        activeText: "text-violet-600 dark:text-violet-400",
-      },
-      {
-        title: "SSI Credentials",
-        to: "/ssi-credentials",
-        icon: Stamp,
-        gradient: "from-green-500 to-emerald-500",
-        hoverBg: "hover:bg-green-500/10",
-        activeBg: "bg-green-500/15",
-        activeText: "text-green-600 dark:text-green-400",
-      },
-      {
-        title: "Creator Profile",
-        to: "/creator-profile",
-        icon: UserCircle,
-        gradient: "from-violet-500 to-pink-500",
-        hoverBg: "hover:bg-violet-500/10",
-        activeBg: "bg-violet-500/15",
-        activeText: "text-violet-600 dark:text-violet-400",
-      },
-    ],
-  },
-  {
-    label: "Productivity",
-    items: [
       {
         title: "Email Hub",
         to: "/email-hub",
@@ -749,15 +733,8 @@ const menuCategories = [
         activeBg: "bg-emerald-500/15",
         activeText: "text-emerald-600 dark:text-emerald-400",
       },
-      {
-        title: "Profile",
-        to: "/profile",
-        icon: UserCircle,
-        gradient: "from-violet-500 to-purple-500",
-        hoverBg: "hover:bg-violet-500/10",
-        activeBg: "bg-violet-500/15",
-        activeText: "text-violet-600 dark:text-violet-400",
-      },
+      // Profile (UserProfilePage) moved into /identity?tab=account — see
+      // Phase 2 nav consolidation, Cluster 5.
       {
         title: "Team",
         to: "/team",

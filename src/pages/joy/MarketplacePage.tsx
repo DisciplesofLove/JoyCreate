@@ -8,6 +8,14 @@
  * Replaces (functionally, not literally — D9 keep-old-pages):
  *   - /marketplace-explorer
  *   - /nft-marketplace (browse half)
+ *   - /plugin-marketplace (Phase 2 nav consolidation, Cluster 1: now exposed
+ *     via the `?type=plugin` filter and the "plugin" entry in the type
+ *     dropdown — see briefs/nav-consolidation-audit.md)
+ *
+ * URL search params:
+ *   ?type=plugin|agent|workflow|app|model|dataset|template — pre-selects the
+ *   asset-type filter on mount. Useful for deep links from the deprecated
+ *   /plugin-marketplace banner.
  *
  * Backed by the on-chain DropERC1155 read layer via `marketplace:browse`
  * (see `src/lib/joymarketplace/drop_subgraph.ts` +
@@ -17,8 +25,8 @@
  * in the UI even though the on-chain subgraph indexed them correctly.
  */
 
-import { useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +48,9 @@ import { ShoppingCart, Search, Sparkles, Filter } from "lucide-react";
 
 // Asset types this page exposes as filters. The hook accepts any
 // PublishableAssetType plus the literal "all" (mapped to `undefined`).
+// Phase 2 nav consolidation: `plugin` is intentionally surfaced here so
+// the deprecated /plugin-marketplace route can deep-link in via
+// `/joy/marketplace?type=plugin`.
 const ASSET_TYPE_OPTIONS: ReadonlyArray<"all" | PublishableAssetType> = [
   "all",
   "agent",
@@ -48,14 +59,38 @@ const ASSET_TYPE_OPTIONS: ReadonlyArray<"all" | PublishableAssetType> = [
   "model",
   "dataset",
   "template",
+  "plugin",
 ] as const;
 
+const VALID_TYPES = new Set<string>(ASSET_TYPE_OPTIONS);
+
 export default function JoyMarketplacePage() {
-  const [search, setSearch] = useState("");
-  const [assetType, setAssetType] = useState<"all" | PublishableAssetType>("all");
+  const search = useSearch({ from: "/joy/marketplace" });
+  const navigate = useNavigate();
+  const initialType: "all" | PublishableAssetType =
+    search?.type && VALID_TYPES.has(search.type)
+      ? (search.type as "all" | PublishableAssetType)
+      : "all";
+
+  const [searchText, setSearchText] = useState("");
+  const [assetType, setAssetType] = useState<"all" | PublishableAssetType>(
+    initialType,
+  );
   const [appliedSearch, setAppliedSearch] = useState("");
   const [appliedAssetType, setAppliedAssetType] =
-    useState<"all" | PublishableAssetType>("all");
+    useState<"all" | PublishableAssetType>(initialType);
+
+  // Sync incoming `?type=` URL changes into the applied filter so deep links
+  // from the /plugin-marketplace deprecation banner pre-filter on mount AND
+  // after navigation while the page is already mounted.
+  useEffect(() => {
+    const incoming: "all" | PublishableAssetType =
+      search?.type && VALID_TYPES.has(search.type)
+        ? (search.type as "all" | PublishableAssetType)
+        : "all";
+    setAssetType(incoming);
+    setAppliedAssetType(incoming);
+  }, [search?.type]);
 
   const params: MarketplaceBrowseParams = {
     query: appliedSearch || undefined,
@@ -67,8 +102,18 @@ export default function JoyMarketplacePage() {
   const items: MarketplaceBrowseItem[] = data?.items ?? [];
 
   function applyFilters(): void {
-    setAppliedSearch(search.trim());
+    setAppliedSearch(searchText.trim());
     setAppliedAssetType(assetType);
+    // Reflect the current type filter in the URL so it's shareable /
+    // back-button friendly. Drop the param when "all".
+    void navigate({
+      to: "/joy/marketplace",
+      search:
+        assetType === "all"
+          ? {}
+          : { type: assetType as PublishableAssetType },
+      replace: true,
+    });
   }
 
   function priceLabel(item: MarketplaceBrowseItem): string {
@@ -105,8 +150,8 @@ export default function JoyMarketplacePage() {
             <Search className="h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search by name, tag…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") applyFilters();
               }}
@@ -116,7 +161,9 @@ export default function JoyMarketplacePage() {
             <Filter className="h-4 w-4 text-muted-foreground" />
             <Select
               value={assetType}
-              onValueChange={(v) => setAssetType(v as "all" | PublishableAssetType)}
+              onValueChange={(v) =>
+                setAssetType(v as "all" | PublishableAssetType)
+              }
             >
               <SelectTrigger className="w-44">
                 <SelectValue />
@@ -147,7 +194,11 @@ export default function JoyMarketplacePage() {
       ) : items.length === 0 ? (
         <Card>
           <CardContent className="p-12 text-center text-muted-foreground space-y-2">
-            <p>No published assets yet.</p>
+            <p>
+              {appliedAssetType === "plugin"
+                ? "No plugins published yet."
+                : "No published assets yet."}
+            </p>
             <p className="text-sm">
               When you (or anyone) publishes via{" "}
               <Link to="/joy/publish" className="underline">

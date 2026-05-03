@@ -5,11 +5,15 @@
  *   - /marketplace-explorer
  *   - /nft-marketplace (browse half)
  *
- * Backed by `joybridge:browse-marketplace`. No direct subgraph access here;
- * the JoyBridge API layer is responsible for picking subgraph-vs-cache.
+ * Backed by the on-chain DropERC1155 read layer via `marketplace:browse`
+ * (see `src/lib/joymarketplace/drop_subgraph.ts` +
+ * `src/ipc/handlers/marketplace_browse_handlers.ts`). The previous version
+ * routed through `joybridge:browse-marketplace`, which depended on a cloud
+ * endpoint that returns 404 — every published drop appeared as "no results"
+ * in the UI even though the on-chain subgraph indexed them correctly.
  */
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,63 +26,49 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { IpcClient } from "@/ipc/ipc_client";
-import { ShoppingCart, Search, Sparkles, Filter } from "lucide-react";
+import { useMarketplaceBrowse } from "@/hooks/use_marketplace_browse";
 import type {
-  Asset,
-  BrowseQuery,
-  BrowseResult,
-  Result,
-} from "@/lib/joybridge_client";
+  MarketplaceBrowseParams,
+  PublishableAssetType,
+} from "@/types/publish_types";
+import { ShoppingCart, Search, Sparkles, Filter } from "lucide-react";
 
-const ASSET_TYPES = [
+// Browse-page filter values. "all" is a UI-only sentinel mapped to undefined
+// before passing to the IPC handler.
+const ASSET_TYPES: Array<"all" | PublishableAssetType> = [
   "all",
+  "agent",
+  "workflow",
+  "model",
+  "dataset",
   "image",
   "video",
-  "agent",
-  "model",
   "document",
-] as const;
+];
 
 export default function JoyMarketplacePage() {
-  const [items, setItems] = useState<Asset[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [assetType, setAssetType] = useState<string>("all");
+  const [searchInput, setSearchInput] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
+  const [assetType, setAssetType] = useState<"all" | PublishableAssetType>(
+    "all",
+  );
 
-  async function load(query: BrowseQuery): Promise<void> {
-    setLoading(true);
-    setError(null);
-    try {
-      const ipc = IpcClient.getInstance();
-      const res = (await ipc.invoke(
-        "joybridge:browse-marketplace",
-        query,
-      )) as Result<BrowseResult>;
-      if (res?.ok) {
-        setItems(res.data?.items ?? []);
-      } else {
-        setError(res?.error ?? "Failed to load marketplace");
-        setItems([]);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
+  const params: MarketplaceBrowseParams = useMemo(
+    () => ({
+      page: 1,
+      pageSize: 24,
+      sortBy: "recent",
+      query: appliedSearch.trim() || undefined,
+      assetType: assetType === "all" ? undefined : assetType,
+    }),
+    [appliedSearch, assetType],
+  );
 
-  useEffect(() => {
-    void load({ limit: 24 });
-  }, []);
+  const { data, isLoading, error } = useMarketplaceBrowse(params);
+  const items = data?.items ?? [];
 
   function applyFilters(): void {
-    void load({
-      limit: 24,
-      search: search.trim() || undefined,
-      assetType: assetType === "all" ? undefined : assetType,
-    });
+    setAppliedSearch(searchInput);
   }
 
   return (
@@ -90,7 +80,7 @@ export default function JoyMarketplacePage() {
             Joy Marketplace
           </h1>
           <p className="text-muted-foreground">
-            Browse assets published from JoyCreate stores.
+            Browse on-chain DropERC1155 assets published from JoyCreate stores.
           </p>
         </div>
         <Link to="/joy/publish">
@@ -107,8 +97,8 @@ export default function JoyMarketplacePage() {
             <Search className="h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search by name, store, tag…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") applyFilters();
               }}
@@ -116,7 +106,12 @@ export default function JoyMarketplacePage() {
           </div>
           <div className="flex items-center gap-2">
             <Filter className="h-4 w-4 text-muted-foreground" />
-            <Select value={assetType} onValueChange={setAssetType}>
+            <Select
+              value={assetType}
+              onValueChange={(v) =>
+                setAssetType(v as "all" | PublishableAssetType)
+              }
+            >
               <SelectTrigger className="w-44">
                 <SelectValue />
               </SelectTrigger>
@@ -138,10 +133,10 @@ export default function JoyMarketplacePage() {
       {error ? (
         <Card>
           <CardContent className="p-6 text-center text-red-600 dark:text-red-400">
-            {error}
+            {error instanceof Error ? error.message : String(error)}
           </CardContent>
         </Card>
-      ) : loading ? (
+      ) : isLoading ? (
         <div className="text-muted-foreground">Loading marketplace…</div>
       ) : items.length === 0 ? (
         <Card>
@@ -159,7 +154,10 @@ export default function JoyMarketplacePage() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {items.map((a) => (
-            <Card key={a.id} className="overflow-hidden hover:shadow-md transition-shadow">
+            <Card
+              key={a.id}
+              className="overflow-hidden hover:shadow-md transition-shadow"
+            >
               {a.thumbnailUrl ? (
                 <div className="h-40 bg-muted">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -181,18 +179,18 @@ export default function JoyMarketplacePage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground space-y-1">
-                {a.description && (
-                  <p className="line-clamp-2">{a.description}</p>
+                {a.shortDescription && (
+                  <p className="line-clamp-2">{a.shortDescription}</p>
                 )}
                 <div className="flex items-center justify-between pt-2">
                   <span>
-                    {a.priceUsdc != null
-                      ? a.priceUsdc === 0
-                        ? "Free"
-                        : `$${(a.priceUsdc / 1_000_000).toFixed(2)} USDC`
-                      : "—"}
+                    {a.pricingModel === "free"
+                      ? "Free"
+                      : a.price != null
+                        ? `${a.price.toFixed(4)} ${a.currency}`
+                        : "—"}
                   </span>
-                  {a.status && <Badge variant="outline">{a.status}</Badge>}
+                  <Badge variant="outline">{a.category}</Badge>
                 </div>
               </CardContent>
             </Card>

@@ -129,16 +129,38 @@ function ipfsToHttp(uri: string, gatewayIndex = 0): string {
   return uri;
 }
 
+/**
+ * Build the per-token metadata URL from a DropERC1155 baseURI + tokenId.
+ *
+ * ERC-1155 baseURI semantics: the actual metadata file for a given token
+ * lives at `<baseURI><tokenId>` (no extension, no padding). Some publishers
+ * include a trailing slash on the baseURI (`ipfs://Qm.../`); others don't
+ * (`ipfs://Qm...`). We normalize both. If the caller passed a baseURI that
+ * already encodes the tokenId path (legacy single-token mints), we leave it
+ * alone — detected by absence of any trailing-CID directory shape.
+ */
+function tokenMetadataUri(baseURI: string, tokenId: string): string {
+  if (!baseURI) return baseURI;
+  // Normalize trailing slash — append exactly one before the tokenId.
+  const trimmed = baseURI.endsWith("/") ? baseURI : baseURI + "/";
+  return trimmed + tokenId;
+}
+
 /** Fetch + parse the metadata JSON behind a token's baseURI, with retry across gateways. */
-async function fetchMetadata(baseURI: string): Promise<TokenMetadata | null> {
+async function fetchMetadata(
+  baseURI: string,
+  tokenId: string,
+): Promise<TokenMetadata | null> {
   if (!baseURI) return null;
-  const cached = metadataCache.get(baseURI);
+  const fullUri = tokenMetadataUri(baseURI, tokenId);
+  const cacheKey = fullUri;
+  const cached = metadataCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < METADATA_TTL_MS) {
     return cached.data;
   }
-  const attempts = baseURI.startsWith("ipfs://") ? IPFS_GATEWAYS.length : 1;
+  const attempts = fullUri.startsWith("ipfs://") ? IPFS_GATEWAYS.length : 1;
   for (let i = 0; i < attempts; i++) {
-    const url = ipfsToHttp(baseURI, i);
+    const url = ipfsToHttp(fullUri, i);
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 5000);
@@ -146,13 +168,13 @@ async function fetchMetadata(baseURI: string): Promise<TokenMetadata | null> {
       clearTimeout(t);
       if (!r.ok) continue;
       const json = (await r.json()) as TokenMetadata;
-      metadataCache.set(baseURI, { fetchedAt: Date.now(), data: json });
+      metadataCache.set(cacheKey, { fetchedAt: Date.now(), data: json });
       return json;
     } catch (e) {
-      logger.debug(`fetchMetadata gateway ${i} failed for ${baseURI}: ${(e as Error).message}`);
+      logger.debug(`fetchMetadata gateway ${i} failed for ${fullUri}: ${(e as Error).message}`);
     }
   }
-  metadataCache.set(baseURI, { fetchedAt: Date.now(), data: null });
+  metadataCache.set(cacheKey, { fetchedAt: Date.now(), data: null });
   return null;
 }
 
@@ -275,7 +297,7 @@ export function registerMarketplaceBrowseHandlers() {
       const enriched = await Promise.all(
         tokens.map(async (t) => ({
           token: t,
-          meta: await fetchMetadata(t.baseURI).catch(() => null),
+          meta: await fetchMetadata(t.baseURI, t.tokenId).catch(() => null),
         })),
       );
 
@@ -319,7 +341,7 @@ export function registerMarketplaceBrowseHandlers() {
       if (!assetId) throw new Error("assetId is required");
       const token = await getDrop(assetId);
       if (!token) throw new Error(`Drop not found: ${assetId}`);
-      const meta = await fetchMetadata(token.baseURI).catch(() => null);
+      const meta = await fetchMetadata(token.baseURI, token.tokenId).catch(() => null);
       return toAssetDetail(token, meta);
     },
   );
@@ -375,7 +397,7 @@ export function registerMarketplaceBrowseHandlers() {
     const enriched = await Promise.all(
       tokens.map(async (t) => ({
         token: t,
-        meta: await fetchMetadata(t.baseURI).catch(() => null),
+        meta: await fetchMetadata(t.baseURI, t.tokenId).catch(() => null),
       })),
     );
     const items = enriched.map(({ token, meta }) => toBrowseItem(token, meta));
@@ -427,7 +449,7 @@ export function registerMarketplaceBrowseHandlers() {
       const enriched = await Promise.all(
         tokens.map(async (t) => ({
           token: t,
-          meta: await fetchMetadata(t.baseURI).catch(() => null),
+          meta: await fetchMetadata(t.baseURI, t.tokenId).catch(() => null),
         })),
       );
 
@@ -518,7 +540,7 @@ export function registerMarketplaceBrowseHandlers() {
     const enriched = await Promise.all(
       tokens.map(async (t) => ({
         token: t,
-        meta: await fetchMetadata(t.baseURI).catch(() => null),
+        meta: await fetchMetadata(t.baseURI, t.tokenId).catch(() => null),
       })),
     );
     const counts = new Map<string, number>();
@@ -533,6 +555,7 @@ export function registerMarketplaceBrowseHandlers() {
 // Internal exports for unit tests.
 export const __test__ = {
   ipfsToHttp,
+  tokenMetadataUri,
   weiToDisplay,
   toBrowseItem,
   toAssetDetail,

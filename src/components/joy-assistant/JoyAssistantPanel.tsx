@@ -711,6 +711,27 @@ function AssistantModelPicker() {
     }
   }, [open, loadOllama, loadLMS]);
 
+  // Auto-recover from a stale cloud model selection.
+  //
+  // The picker now hides cloud providers without API keys, but the user's
+  // previous selection lives in a Jotai atom and survives across launches.
+  // If that selection points at a cloud provider the user no longer has set
+  // up, every chat call would fail with "API key missing" deep inside the
+  // provider SDK (often as a silent reject) — making the assistant appear to
+  // do nothing. Reset to Auto so the next message uses local-first routing.
+  useEffect(() => {
+    if (!model) return;
+    if (model.provider === "ollama" || model.provider === "lmstudio") return;
+    if (model.provider === "auto") return;
+    if (!isProviderSetup(model.provider)) {
+      console.warn(
+        `[JoyAssistant] Selected cloud model "${model.provider}/${model.name}" ` +
+          `has no API key configured — falling back to Auto.`,
+      );
+      setModel(null);
+    }
+  }, [model, isProviderSetup, setModel]);
+
   const label = !model
     ? "Auto"
     : model.provider === "ollama" || model.provider === "lmstudio"

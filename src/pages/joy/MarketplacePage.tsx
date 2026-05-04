@@ -44,7 +44,7 @@ import type {
   MarketplaceBrowseItem,
   PublishableAssetType,
 } from "@/types/publish_types";
-import { MARKETPLACE_TYPES, type MarketplaceType } from "@/routes/joy/marketplace";
+import { MARKETPLACE_TYPES, type MarketplaceType } from "@/routes/joy/marketplace_types";
 import { ShoppingCart, Search, Sparkles, Filter } from "lucide-react";
 
 // Asset types this page exposes as filters. The hook accepts any

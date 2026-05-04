@@ -27,16 +27,16 @@ export default function CreatorProfilePage() {
               Identity page.
             </span>
           </div>
-          <Link
-            to="/identity"
-            search={{ tab: "public" as const }}
-            className="inline-flex items-center gap-1 shrink-0"
-          >
-            <Button size="sm" variant="outline">
+          <Button size="sm" variant="outline" asChild>
+            <Link
+              to="/identity"
+              search={{ tab: "public" as const }}
+              className="inline-flex items-center gap-1 shrink-0"
+            >
               Open Identity → Public Profile{" "}
               <ArrowRight className="h-3 w-3 ml-1" />
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         </div>
       </div>
     </div>

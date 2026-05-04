@@ -86,10 +86,20 @@ export function PublicProfilePanel() {
               <span className="text-[11px] text-muted-foreground/60 flex items-center gap-1">
                 <MapPin className="w-3 h-3" /> East Coast, USA
               </span>
-              <a className="text-[11px] text-blue-400 flex items-center gap-1 hover:underline">
+              <a
+                href="https://github.com/DisciplesofLove"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] text-blue-400 flex items-center gap-1 hover:underline"
+              >
                 <Github className="w-3 h-3" /> DisciplesofLove
               </a>
-              <a className="text-[11px] text-blue-400 flex items-center gap-1 hover:underline">
+              <a
+                href="https://joymarketplace.io"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] text-blue-400 flex items-center gap-1 hover:underline"
+              >
                 <Globe className="w-3 h-3" /> joymarketplace.io
               </a>
             </div>

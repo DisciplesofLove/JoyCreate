@@ -32,26 +32,26 @@ import { PublicProfilePanel } from "@/components/identity/me/PublicProfilePanel"
 import { SSICredentialsPanel } from "@/components/identity/me/SSICredentialsPanel";
 import { AccountBillingPanel } from "@/components/identity/me/AccountBillingPanel";
 import { ActivityPanel } from "@/components/identity/me/ActivityPanel";
+import { IDENTITY_TABS, type IdentityTab } from "@/routes/unified-identity";
 
-export const IDENTITY_TABS = [
-  "identity",
-  "public",
-  "ssi",
-  "account",
-  "activity",
-] as const;
-export type IdentityTab = (typeof IDENTITY_TABS)[number];
+// Re-export for any consumers that previously imported these from this page.
+// The single source of truth lives in `src/routes/unified-identity.ts` so the
+// route's `validateSearch` enum and the page's tab union cannot drift.
+export { IDENTITY_TABS, type IdentityTab };
 
 export default function UnifiedIdentityPage() {
   const search = useSearch({ from: "/identity" });
   const navigate = useNavigate();
-  const activeTab: IdentityTab = (search?.tab as IdentityTab) ?? "identity";
+  const rawTab = search?.tab as IdentityTab | undefined;
+  const activeTab: IdentityTab = rawTab ?? "identity";
 
   const handleTabChange = (value: string) => {
+    // Push a real history entry so the browser back button steps through tab
+    // changes (Cluster 5 brief: "back-button works"). We only use
+    // `replace: true` when normalizing a missing/invalid tab param below.
     void navigate({
       to: "/identity",
       search: { tab: value as IdentityTab },
-      replace: true,
     });
   };
 

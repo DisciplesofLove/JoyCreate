@@ -26,15 +26,15 @@ export default function SSICredentialsPage() {
               SSI Credentials now live inside your unified Identity page.
             </span>
           </div>
-          <Link
-            to="/identity"
-            search={{ tab: "ssi" as const }}
-            className="inline-flex items-center gap-1 shrink-0"
-          >
-            <Button size="sm" variant="outline">
+          <Button size="sm" variant="outline" asChild>
+            <Link
+              to="/identity"
+              search={{ tab: "ssi" as const }}
+              className="inline-flex items-center gap-1 shrink-0"
+            >
               Open Identity → SSI <ArrowRight className="h-3 w-3 ml-1" />
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         </div>
       </div>
     </div>

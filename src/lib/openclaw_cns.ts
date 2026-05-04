@@ -649,9 +649,13 @@ export class OpenClawCNS extends EventEmitter {
       messages.unshift({ role: "system" as const, content: request.options.systemPrompt });
     }
     
+    // `preferLocal: true` keeps background/auto-routed CNS work on Ollama
+    // when it's healthy, so periodic system inference never silently bills a
+    // cloud provider. Explicit user requests that need cloud (vision,
+    // function-calling, etc.) still escalate via the gateway's smart router.
     const result = await gateway.chat({
       messages,
-      preferLocal: false,
+      preferLocal: true,
     });
     
     return {

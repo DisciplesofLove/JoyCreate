@@ -1728,6 +1728,11 @@ Think through this step by step and provide a structured response with your reas
         case "deepseek":
         case "google":
         case "openai-compat":
+          // IMPORTANT: do NOT issue an HTTP request to the cloud provider here.
+          // Heartbeat health checks run on a 30s interval and would otherwise
+          // bill the user's API key just to confirm "yes the credential
+          // exists". Treat the presence of a non-empty API key as healthy and
+          // let the actual chat request surface real auth/network errors.
           healthy = !!provider.apiKey;
           break;
         default:

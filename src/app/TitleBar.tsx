@@ -11,7 +11,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { IpcClient } from "@/ipc/ipc_client";
 import { useSidebar } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
-import { PanelLeft, PanelLeftClose, PanelRightOpen, PanelRightClose, Search } from "lucide-react";
+import { PanelLeft, PanelLeftClose, PanelRightOpen, PanelRightClose, Search, Sun, Moon, Monitor } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -34,6 +34,15 @@ export const TitleBar = () => {
   const navigate = useNavigate();
   const [, setSelectedAppId] = useAtom(selectedAppIdAtom);
   const setSelectedChatId = useSetAtom(selectedChatIdAtom);
+  const { theme, setTheme } = useTheme();
+
+  // Resolve the *effective* theme so the icon shows what's actually applied,
+  // not the literal "system" preference.
+  const effectiveDark =
+    theme === "dark" ||
+    (theme === "system" &&
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches);
 
   const allApps = useMemo(
     () =>
@@ -145,6 +154,38 @@ export const TitleBar = () => {
             </TooltipContent>
           </Tooltip>
         )}
+
+        {/* Theme toggle — flips light ↔ dark instantly */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setTheme(effectiveDark ? "light" : "dark")}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setTheme("system");
+              }}
+              className="h-7 w-7 rounded-md hover:bg-primary/10 hover:text-primary transition-all no-app-region-drag border border-transparent hover:border-primary/20"
+              aria-label={`Switch to ${effectiveDark ? "light" : "dark"} mode`}
+            >
+              {theme === "system" ? (
+                <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
+              ) : effectiveDark ? (
+                <Moon className="h-3.5 w-3.5 text-muted-foreground" />
+              ) : (
+                <Sun className="h-3.5 w-3.5 text-muted-foreground" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {theme === "system"
+              ? "Theme: System (right-click to keep)"
+              : effectiveDark
+                ? "Switch to light mode (right-click for system)"
+                : "Switch to dark mode (right-click for system)"}
+          </TooltipContent>
+        </Tooltip>
 
         {showWindowControls && <WindowsControls />}
       </div>

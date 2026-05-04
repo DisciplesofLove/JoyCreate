@@ -704,6 +704,14 @@ function AssistantModelPicker() {
   const { data: cloudByProvider } = useLanguageModelsByProviders();
   const { isProviderSetup } = useLanguageModelProviders();
 
+  // Eagerly load local model lists on mount so the picker is populated the
+  // first time the user opens it (no empty-flash) and so the auto-recovery
+  // effect below has data to work with.
+  useEffect(() => {
+    loadOllama();
+    loadLMS();
+  }, [loadOllama, loadLMS]);
+
   useEffect(() => {
     if (open) {
       loadOllama();

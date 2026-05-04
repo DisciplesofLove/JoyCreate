@@ -414,12 +414,20 @@ export async function chat(
   touchSession(sessionId);
 
   // 4. Build system prompt with knowledge context + system capabilities
+  // The full SYSTEM_TOOLS_PROMPT (with <actions> tag instructions and tool
+  // catalog) only makes sense for cloud models that actually have tools wired
+  // up. Local models have tools disabled (see `assistantTools = isLocal ?
+  // undefined : ...` below) and Llama-class models tend to literally regurgitate
+  // the `<actions>{...}</actions>` instructions back into their answer, which
+  // looks broken in the chat UI. We therefore swap in a slim markdown-only
+  // prompt for local models. (Built lazily after model resolution below.)
   const knowledgePrompt = buildSystemPrompt(pageContext, mode);
-  const systemPrompt = `${knowledgePrompt}\n\n${SYSTEM_TOOLS_PROMPT}`;
 
-  // 5. Build conversation messages for the AI
+  // 5. Build conversation messages for the AI (system prompt is filled in
+  // after model resolution so we know whether to use the local-friendly slim
+  // prompt or the full tool-aware prompt).
   const aiMessages: { role: "user" | "assistant" | "system"; content: string }[] = [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: knowledgePrompt },
   ];
 
   // Include last 20 messages for context
@@ -445,12 +453,16 @@ export async function chat(
 
     // Effective selected model:
     //   1. Explicit override from the panel UI (user clicked a model)
-    //   2. settings.selectedModel (global app default)
-    //   3. "auto" sentinel — triggers local-first auto-detect
+    //   2. "auto" sentinel — triggers local-first auto-detect
+    //
+    // We deliberately do NOT fall back to `settings.selectedModel` (the global
+    // app default), because that default is typically a cloud chat model and
+    // would silently make the assistant cloud-first even when the picker shows
+    // "Auto". Auto means local-first for the Joy Assistant, period.
     const effectiveSelected =
       selectedModelOverride && selectedModelOverride.provider !== "auto"
         ? selectedModelOverride
-        : (settings.selectedModel ?? { provider: "auto", name: "auto" });
+        : { provider: "auto", name: "auto" };
 
     if (effectiveSelected.provider === "ollama" || effectiveSelected.provider === "lmstudio") {
       // Explicit local model — honor exactly what the user picked
@@ -494,10 +506,21 @@ export async function chat(
         isLocal = true;
         logger.info("Joy assistant using AUTO LOCAL model", { providerId, modelId });
       } else {
-        const resolved = await getModelClient(effectiveSelected, settings);
+        // Local providers unreachable — fall back to the app-wide configured
+        // model (settings.selectedModel) only as a last resort.
+        const cloudFallback = settings.selectedModel;
+        if (!cloudFallback || cloudFallback.provider === "auto") {
+          throw new Error(
+            "Joy Assistant could not reach any local model (Ollama/LM Studio) " +
+              "and no cloud model is configured. Start Ollama (`ollama serve`) " +
+              "and pull a model (`ollama pull llama3.1:8b`), or set a default " +
+              "model in Settings.",
+          );
+        }
+        const resolved = await getModelClient(cloudFallback, settings);
         modelClient = resolved.modelClient;
-        providerId = modelClient.builtinProviderId ?? effectiveSelected.provider;
-        modelId = effectiveSelected.name ?? "unknown";
+        providerId = modelClient.builtinProviderId ?? cloudFallback.provider;
+        modelId = cloudFallback.name ?? "unknown";
         isLocal = false;
         logger.info("Joy assistant AUTO fell back to CLOUD model", { providerId, modelId });
       }
@@ -575,6 +598,13 @@ export async function chat(
       }
     }
 
+    // Finalize the system prompt now that we know whether we're running on
+    // a local or cloud model. Local models get a slim markdown-only prompt
+    // because they don't have tools and tend to echo the tool instructions.
+    aiMessages[0].content = isLocal
+      ? `${knowledgePrompt}\n\n${LOCAL_MARKDOWN_PROMPT}`
+      : `${knowledgePrompt}\n\n${SYSTEM_TOOLS_PROMPT}`;
+
     // Stream the response
     const stream = streamText({
       model: modelClient.model,
@@ -627,6 +657,55 @@ export async function chat(
     }, 5_000);
 
     try {
+      // Streaming sanitizer: buffer incoming deltas and strip out any
+      // `<actions>...</actions>` blocks (and any HTML tag soup like `<ul>`,
+      // `<li>`, `</li>` etc.) before forwarding to the renderer. We hold back
+      // any text from the last `<` that hasn't been closed yet so we don't
+      // emit a partial tag that the user briefly sees as raw markup.
+      let pendingDisplay = "";
+      let inActionsBlock = false;
+      const flushSafe = (final: boolean) => {
+        // Strip closed `<actions>...</actions>` blocks first.
+        pendingDisplay = pendingDisplay.replace(/<actions>[\s\S]*?<\/actions>/g, "");
+        // Handle an open-but-not-yet-closed actions block: drop everything
+        // from `<actions>` onward and remember we're inside one.
+        if (!inActionsBlock) {
+          const openIdx = pendingDisplay.indexOf("<actions>");
+          if (openIdx !== -1) {
+            inActionsBlock = true;
+            pendingDisplay = pendingDisplay.slice(0, openIdx);
+          }
+        } else {
+          const closeIdx = pendingDisplay.indexOf("</actions>");
+          if (closeIdx !== -1) {
+            pendingDisplay = pendingDisplay.slice(closeIdx + "</actions>".length);
+            inActionsBlock = false;
+          } else {
+            // Still inside — drop everything buffered.
+            pendingDisplay = "";
+          }
+        }
+        // Strip stray HTML list / div tags the model sometimes spits out.
+        pendingDisplay = pendingDisplay.replace(/<\/?(?:ul|ol|li|div|span|p|br)\b[^>]*>/gi, "");
+        if (final) {
+          if (pendingDisplay) {
+            callbacks.onDelta(pendingDisplay);
+            pendingDisplay = "";
+          }
+          return;
+        }
+        // Hold back from the last unmatched `<` so we don't emit a partial tag.
+        const lastLt = pendingDisplay.lastIndexOf("<");
+        const safeUpTo =
+          lastLt === -1 || pendingDisplay.indexOf(">", lastLt) !== -1
+            ? pendingDisplay.length
+            : lastLt;
+        if (safeUpTo > 0) {
+          callbacks.onDelta(pendingDisplay.slice(0, safeUpTo));
+          pendingDisplay = pendingDisplay.slice(safeUpTo);
+        }
+      };
+
       for await (const part of stream.fullStream as AsyncIterable<TextStreamPart<ToolSet>>) {
         if (abortSignal?.aborted) break;
         lastChunkAt = Date.now();
@@ -636,7 +715,8 @@ export async function chat(
         }
         if (part.type === "text-delta") {
           assistantContent += part.text;
-          callbacks.onDelta(part.text);
+          pendingDisplay += part.text;
+          flushSafe(false);
         } else if (part.type === "tool-result") {
           const toolAction = toolResultToAction(part.toolName, part.input as Record<string, unknown>, part.output);
           if (toolAction) {
@@ -644,6 +724,8 @@ export async function chat(
           }
         }
       }
+      // Final flush of any held-back text.
+      flushSafe(true);
     } finally {
       clearInterval(stallTimer);
       if (loadingHintTimer) clearTimeout(loadingHintTimer);
@@ -973,6 +1055,24 @@ function formatToolResult(toolName: string, result: unknown): string {
 // ============================================================================
 // AI SDK Tool Definitions
 // ============================================================================
+
+/**
+ * Slim system prompt used for local models (Ollama / LM Studio). Local models
+ * don't have tools wired up and Llama-class models are prone to literally
+ * echoing back instruction syntax like `<actions>{...}</actions>`. This prompt
+ * tells them to answer in clean prose / markdown only.
+ */
+const LOCAL_MARKDOWN_PROMPT = `
+## Response Style
+
+- Answer in clean, well-formatted Markdown.
+- Use short headings, bullet lists, and bold for key terms when it helps readability.
+- Do NOT emit any of: \`<actions>\`, \`</actions>\`, JSON tool-call objects, XML tags,
+  HTML tags (\`<ul>\`, \`<li>\`, \`<div>\`, etc.), or instructions about navigating
+  to routes. Just write normal helpful answers.
+- If the user asks what JoyCreate can do, answer conversationally with a tidy
+  Markdown list of the relevant features. No tool calls, no JSON.
+`;
 
 const SYSTEM_TOOLS_PROMPT = `
 ## Important Response Guidelines

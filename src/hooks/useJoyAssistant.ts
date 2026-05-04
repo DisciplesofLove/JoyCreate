@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { atom, useAtom } from "jotai";
+import { atomWithStorage } from "jotai/utils";
 import { JoyAssistantClient } from "@/ipc/joy_assistant_client";
 import type {
   AssistantAction,
@@ -20,11 +21,14 @@ export const assistantModeAtom = atom<AssistantMode>("auto");
 /** Currently selected session ID. `null` means a freshly-generated UUID is used. */
 export const assistantActiveSessionAtom = atom<string | null>(null);
 /**
- * Per-panel model override. `null` means "use whatever the global app default is"
- * (which itself does local-first auto-detection in the service). Persisted via
- * Jotai so the user's last pick is remembered across panel re-opens.
+ * Per-panel model override. `null` means "Auto" — the service will do strict
+ * local-first detection (Ollama Llama 3.x 8B preferred) and only fall back to a
+ * cloud provider if no local model is reachable. Persisted in localStorage so
+ * the user's pick survives restarts.
  */
-export const assistantSelectedModelAtom = atom<{ provider: string; name: string } | null>(null);
+export const assistantSelectedModelAtom = atomWithStorage<
+  { provider: string; name: string } | null
+>("joycreate.assistant.selectedModel", null);
 
 export function useAssistantSelectedModel() {
   const [model, setModel] = useAtom(assistantSelectedModelAtom);

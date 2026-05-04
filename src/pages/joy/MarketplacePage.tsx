@@ -44,22 +44,19 @@ import type {
   MarketplaceBrowseItem,
   PublishableAssetType,
 } from "@/types/publish_types";
+import { MARKETPLACE_TYPES, type MarketplaceType } from "@/routes/joy/marketplace_types";
 import { ShoppingCart, Search, Sparkles, Filter } from "lucide-react";
 
 // Asset types this page exposes as filters. The hook accepts any
-// PublishableAssetType plus the literal "all" (mapped to `undefined`).
-// Phase 2 nav consolidation: `plugin` is intentionally surfaced here so
-// the deprecated /plugin-marketplace route can deep-link in via
-// `/joy/marketplace?type=plugin`.
-const ASSET_TYPE_OPTIONS: ReadonlyArray<"all" | PublishableAssetType> = [
+// MarketplaceType plus the literal "all" (mapped to `undefined`).
+// Single source of truth for the type values lives in
+// `src/routes/joy/marketplace.ts` so the URL `validateSearch` enum and the
+// dropdown options cannot drift. Phase 2 nav consolidation: `plugin` is
+// intentionally surfaced here so the deprecated /plugin-marketplace route
+// can deep-link in via `/joy/marketplace?type=plugin`.
+const ASSET_TYPE_OPTIONS: ReadonlyArray<"all" | MarketplaceType> = [
   "all",
-  "agent",
-  "workflow",
-  "app",
-  "model",
-  "dataset",
-  "template",
-  "plugin",
+  ...MARKETPLACE_TYPES,
 ] as const;
 
 const VALID_TYPES = new Set<string>(ASSET_TYPE_OPTIONS);
@@ -67,26 +64,26 @@ const VALID_TYPES = new Set<string>(ASSET_TYPE_OPTIONS);
 export default function JoyMarketplacePage() {
   const search = useSearch({ from: "/joy/marketplace" });
   const navigate = useNavigate();
-  const initialType: "all" | PublishableAssetType =
+  const initialType: "all" | MarketplaceType =
     search?.type && VALID_TYPES.has(search.type)
-      ? (search.type as "all" | PublishableAssetType)
+      ? (search.type as "all" | MarketplaceType)
       : "all";
 
   const [searchText, setSearchText] = useState("");
-  const [assetType, setAssetType] = useState<"all" | PublishableAssetType>(
+  const [assetType, setAssetType] = useState<"all" | MarketplaceType>(
     initialType,
   );
   const [appliedSearch, setAppliedSearch] = useState("");
   const [appliedAssetType, setAppliedAssetType] =
-    useState<"all" | PublishableAssetType>(initialType);
+    useState<"all" | MarketplaceType>(initialType);
 
   // Sync incoming `?type=` URL changes into the applied filter so deep links
   // from the /plugin-marketplace deprecation banner pre-filter on mount AND
   // after navigation while the page is already mounted.
   useEffect(() => {
-    const incoming: "all" | PublishableAssetType =
+    const incoming: "all" | MarketplaceType =
       search?.type && VALID_TYPES.has(search.type)
-        ? (search.type as "all" | PublishableAssetType)
+        ? (search.type as "all" | MarketplaceType)
         : "all";
     setAssetType(incoming);
     setAppliedAssetType(incoming);
@@ -94,7 +91,10 @@ export default function JoyMarketplacePage() {
 
   const params: MarketplaceBrowseParams = {
     query: appliedSearch || undefined,
-    assetType: appliedAssetType === "all" ? undefined : appliedAssetType,
+    assetType:
+      appliedAssetType === "all"
+        ? undefined
+        : (appliedAssetType as PublishableAssetType),
     pageSize: 24,
   };
 
@@ -104,15 +104,16 @@ export default function JoyMarketplacePage() {
   function applyFilters(): void {
     setAppliedSearch(searchText.trim());
     setAppliedAssetType(assetType);
-    // Reflect the current type filter in the URL so it's shareable /
-    // back-button friendly. Drop the param when "all".
+    // Reflect the current type filter in the URL so it's shareable. Push a
+    // real history entry so the browser back button steps back through
+    // filter changes (matches the Cluster 5 "back-button friendly" intent;
+    // `replace: true` was incorrect because it would have collapsed history).
     void navigate({
       to: "/joy/marketplace",
       search:
         assetType === "all"
           ? {}
-          : { type: assetType as PublishableAssetType },
-      replace: true,
+          : { type: assetType as MarketplaceType },
     });
   }
 

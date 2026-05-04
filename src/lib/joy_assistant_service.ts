@@ -1008,12 +1008,18 @@ You have access to the user's operating system through these tools. Use them ONL
 `;
 
 function buildAssistantTools(intent: AssistantIntent) {
-  const tools: Record<string, ReturnType<typeof tool>> = {};
+  // Use a loose record type so each `tool({...})` call keeps its own
+  // generic parameters intact. Typing this as `Record<string, Tool<never, never>>`
+  // (the default of `ReturnType<typeof tool>`) collapses every tool's input
+  // schema to `never`, which silently drops `execute` from the inferred type
+  // and breaks all tool-call invocations at runtime.
+  // biome-ignore lint/suspicious/noExplicitAny: AI SDK Tool generics are heterogeneous per entry
+  const tools: Record<string, any> = {};
 
   // Always provide navigation tools
   tools.navigate = tool({
     description: "Navigate to a page within JoyCreate",
-    parameters: z.object({
+    inputSchema: z.object({
       route: z.string().describe("The route path, e.g. /marketplace, /settings, /agents"),
       label: z.string().describe("Brief description of the navigation"),
     }),
@@ -1024,7 +1030,7 @@ function buildAssistantTools(intent: AssistantIntent) {
 
   tools.search_marketplace = tool({
     description: "Search the JoyCreate marketplace for agents, workflows, models, or assets",
-    parameters: z.object({
+    inputSchema: z.object({
       query: z.string().describe("Search query"),
       category: z.enum(["agents", "workflows", "models", "assets", "all"]).optional(),
     }),
@@ -1035,7 +1041,7 @@ function buildAssistantTools(intent: AssistantIntent) {
 
   tools.create_document = tool({
     description: "Create a new document, spreadsheet, or presentation",
-    parameters: z.object({
+    inputSchema: z.object({
       documentType: z.enum(["document", "spreadsheet", "presentation"]),
       name: z.string().describe("Name for the new document"),
     }),
@@ -1048,7 +1054,7 @@ function buildAssistantTools(intent: AssistantIntent) {
   tools.web_fetch = tool({
     description:
       "Fetch a web page and return its readable text content. Use for retrieving article text, docs, JSON APIs, etc.",
-    parameters: z.object({
+    inputSchema: z.object({
       url: z.string().describe("Absolute http(s) URL to fetch"),
       maxChars: z
         .number()
@@ -1112,7 +1118,7 @@ function buildAssistantTools(intent: AssistantIntent) {
   tools.web_search = tool({
     description:
       "Search the public web (DuckDuckGo) and return the top results with title, URL, and snippet. Use for general research or finding documentation.",
-    parameters: z.object({
+    inputSchema: z.object({
       query: z.string().describe("Search query"),
       maxResults: z.number().int().min(1).max(15).optional(),
     }),
@@ -1178,7 +1184,7 @@ function buildAssistantTools(intent: AssistantIntent) {
   tools.search_workspace = tool({
     description:
       "Search files in a directory for a regex/text pattern. Returns matching file paths with line numbers and snippets. Use for finding code or text inside the user's workspace.",
-    parameters: z.object({
+    inputSchema: z.object({
       rootDir: z.string().describe("Absolute root directory to search under"),
       pattern: z.string().describe("Plain text or regex pattern to match"),
       isRegex: z.boolean().optional().describe("Treat pattern as a regex (default false)"),
@@ -1262,7 +1268,7 @@ function buildAssistantTools(intent: AssistantIntent) {
   tools.run_command = tool({
     description:
       "Execute a shell command on the user's system. Uses PowerShell on Windows, bash on Linux/macOS. Use carefully — destructive commands are blocked.",
-    parameters: z.object({
+    inputSchema: z.object({
       command: z.string().describe("The shell command to execute"),
       cwd: z.string().optional().describe("Working directory (defaults to user home)"),
     }),
@@ -1278,7 +1284,7 @@ function buildAssistantTools(intent: AssistantIntent) {
 
   tools.read_file = tool({
     description: "Read the contents of a file on the user's system",
-    parameters: z.object({
+    inputSchema: z.object({
       filePath: z.string().describe("Absolute path to the file to read"),
     }),
     execute: async ({ filePath }) => {
@@ -1289,7 +1295,7 @@ function buildAssistantTools(intent: AssistantIntent) {
 
   tools.write_file = tool({
     description: "Write content to a file on the user's system. Creates parent directories as needed.",
-    parameters: z.object({
+    inputSchema: z.object({
       filePath: z.string().describe("Absolute path for the file"),
       content: z.string().describe("Content to write to the file"),
     }),
@@ -1301,7 +1307,7 @@ function buildAssistantTools(intent: AssistantIntent) {
 
   tools.list_directory = tool({
     description: "List files and directories in a directory",
-    parameters: z.object({
+    inputSchema: z.object({
       dirPath: z.string().describe("Absolute path to the directory"),
     }),
     execute: async ({ dirPath }) => {
@@ -1312,7 +1318,7 @@ function buildAssistantTools(intent: AssistantIntent) {
 
   tools.open_app = tool({
     description: "Open an application on the user's system (e.g. notepad, calculator, vscode, file explorer)",
-    parameters: z.object({
+    inputSchema: z.object({
       appName: z.string().describe("Application name or path"),
       args: z.array(z.string()).optional().describe("Arguments to pass to the app"),
     }),
@@ -1324,7 +1330,7 @@ function buildAssistantTools(intent: AssistantIntent) {
 
   tools.open_url = tool({
     description: "Open a URL in the user's default browser",
-    parameters: z.object({
+    inputSchema: z.object({
       url: z.string().describe("The URL to open"),
     }),
     execute: async ({ url }) => {
@@ -1335,7 +1341,7 @@ function buildAssistantTools(intent: AssistantIntent) {
 
   tools.system_info = tool({
     description: "Get system information: os, hardware, processes, disk, memory, or network",
-    parameters: z.object({
+    inputSchema: z.object({
       infoType: z
         .enum(["os", "hardware", "processes", "disk", "memory", "network"])
         .describe("Type of system information to retrieve"),
@@ -1412,7 +1418,12 @@ function toolResultToAction(
     case "search_marketplace":
       return {
         type: "search",
-        target: (args.category as string) || "marketplace",
+        target: (((args.category as string) || "marketplace") as unknown) as
+          | "library"
+          | "agents"
+          | "workflows"
+          | "marketplace"
+          | "knowledge-base",
         query: args.query as string,
       };
     case "create_document":

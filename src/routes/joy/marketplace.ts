@@ -2,22 +2,20 @@ import { createRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import { rootRoute } from "../root";
 import JoyMarketplacePage from "@/pages/joy/MarketplacePage";
+import { MARKETPLACE_TYPES, type MarketplaceType } from "./marketplace_types";
 
-// Phase 2 nav consolidation (briefs/nav-consolidation-audit.md, Cluster 1):
-// the deprecated /plugin-marketplace route now redirects users here with
-// `?type=plugin`. We accept any of the PublishableAssetType strings we expose
-// in the dropdown.
-const marketplaceTypeSchema = z
-  .enum([
-    "agent",
-    "workflow",
-    "app",
-    "model",
-    "dataset",
-    "template",
-    "plugin",
-  ])
-  .optional();
+/**
+ * Re-exported from `marketplace_types.ts` so existing call-sites that import
+ * from `@/routes/joy/marketplace` keep working. The constants live in a
+ * separate module to avoid a circular import between this route file and
+ * the page component, which previously triggered
+ *   "Cannot access 'MARKETPLACE_TYPES' before initialization"
+ * at renderer boot (whole-app white screen).
+ */
+export { MARKETPLACE_TYPES };
+export type { MarketplaceType };
+
+const marketplaceTypeSchema = z.enum(MARKETPLACE_TYPES).optional();
 
 export const joyMarketplaceRoute = createRoute({
   getParentRoute: () => rootRoute,

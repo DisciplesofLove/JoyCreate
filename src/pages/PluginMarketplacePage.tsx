@@ -32,16 +32,16 @@ export default function PluginMarketplacePage() {
             agents, workflows, apps, and other publishable assets.
           </span>
         </div>
-        <Link
-          to="/joy/marketplace"
-          search={{ type: "plugin" as const }}
-          className="inline-flex items-center gap-1 shrink-0"
-        >
-          <Button size="sm" variant="outline">
+        <Button size="sm" variant="outline" asChild>
+          <Link
+            to="/joy/marketplace"
+            search={{ type: "plugin" as const }}
+            className="inline-flex items-center gap-1 shrink-0"
+          >
             Open Joy Marketplace → Plugins{" "}
             <ArrowRight className="h-3 w-3 ml-1" />
-          </Button>
-        </Link>
+          </Link>
+        </Button>
       </div>
 
       <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">

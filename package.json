@@ -98,7 +98,7 @@
     "happy-dom": "^17.4.4",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
-    "n8n": "^2.1.4",
+    "n8n": "^2.19.2",
     "oxlint": "^1.8.0",
     "prettier": "3.5.3",
     "rimraf": "^6.0.1",
@@ -245,7 +245,7 @@
     "node-ical": "^0.25.6",
     "nodemailer": "^8.0.3",
     "openai": "^4.91.1",
-    "openclaw": "^2026.2.1",
+    "openclaw": "^2026.5.4",
     "perfect-freehand": "^1.2.2",
     "playwright-core": "^1.58.2",
     "posthog-js": "^1.236.3",
@@ -287,11 +287,18 @@
     "@vercel/sdk": {
       "@modelcontextprotocol/sdk": "$@modelcontextprotocol/sdk"
     },
-    "better-sqlite3": "$better-sqlite3"
+    "better-sqlite3": "^12.4.1"
   },
   "pnpm": {
     "overrides": {
-      "@tanstack/router-core": "1.144.0"
+      "@tanstack/router-core": "1.144.0",
+      "axios@<1.15.2": ">=1.15.2",
+      "undici@<7.24.0": ">=7.24.0",
+      "form-data@<4.0.5": ">=4.0.5",
+      "fast-xml-parser@<5.2.5": ">=5.2.5",
+      "handlebars@<4.7.9": ">=4.7.9",
+      "protobufjs@<7.5.5": ">=7.5.5",
+      "happy-dom@<20.0.0": ">=20.0.0"
     },
     "onlyBuiltDependencies": [
       "electron",

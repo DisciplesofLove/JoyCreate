@@ -982,9 +982,11 @@ interface StoryBarProps {
   myStory: ChatStory | null;
   onViewStory: (story: ChatStory) => void;
   onCreateStory: () => void;
+  /** Current user's wallet address — used to mark stories as "viewed". */
+  myWalletAddress?: string;
 }
 
-export function StoryBar({ stories, myStory, onViewStory, onCreateStory }: StoryBarProps) {
+export function StoryBar({ stories, myStory, onViewStory, onCreateStory, myWalletAddress }: StoryBarProps) {
   if (stories.length === 0 && !myStory) return null;
 
   return (
@@ -1016,7 +1018,8 @@ export function StoryBar({ stories, myStory, onViewStory, onCreateStory }: Story
             >
               <Avatar className={cn(
                 "h-14 w-14 ring-2",
-                story.viewers.some((v) => v.walletAddress === "TODO") // Check if viewed
+                myWalletAddress &&
+                  story.viewers.some((v) => v.walletAddress === myWalletAddress)
                   ? "ring-muted-foreground/30"
                   : "ring-primary"
               )}>

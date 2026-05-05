@@ -13,7 +13,7 @@ import {
   getStoredAddress,
   getStoredInfo,
   type JoyWalletInfo,
-} from "../joy_wallet";
+} from "../../joy_wallet";
 import type { WalletAdapter } from "./joy_wallet_connector";
 
 const DEFAULT_CHAIN_ID = 80002; // Polygon Amoy

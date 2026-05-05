@@ -6,6 +6,8 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { IpcClient } from "@/ipc/ipc_client";
+import { signSignal, verifySignal } from "@/lib/webrtc_signing";
+import { webRTCClient } from "@/ipc/webrtc_client";
 import type {
   Meeting,
   MeetingParticipant,
@@ -34,7 +36,14 @@ interface InternalSignal {
   to: string;
 }
 
-// Helper to create full signaling messages
+// Helper to create full signaling messages.
+//
+// Returns an unsigned message; callers MUST pass the result through
+// `signSignal()` (from `@/lib/webrtc_signing`) before transmitting,
+// and the receive path MUST run `verifySignal()` before acting on
+// the contents. We keep these as separate steps so callers that
+// don't need authentication (e.g. local-only echo) aren't forced
+// into an async signature flow.
 function createSignalingMessage(signal: InternalSignal): WebRTCSignal {
   return {
     id: crypto.randomUUID(),
@@ -49,10 +58,33 @@ function createSignalingMessage(signal: InternalSignal): WebRTCSignal {
       sdpMid: signal.candidate.sdpMid || null,
       sdpMLineIndex: signal.candidate.sdpMLineIndex ?? null,
     } : undefined,
-    signature: "", // TODO: Sign the message
+    signature: "", // populated by signSignal()
     timestamp: new Date().toISOString(),
     nonce: crypto.randomUUID(),
   };
+}
+
+/**
+ * Build, sign, and emit a signaling message in one call. Logs and
+ * swallows signing errors so a missing wallet can never crash the
+ * meeting service — but the receive side will reject the unsigned
+ * message, so the user sees the failure as "peer can't connect"
+ * rather than a thrown promise.
+ */
+async function emitSignedSignal(
+  internal: InternalSignal,
+  emit: ((s: WebRTCSignal) => void) | undefined,
+): Promise<void> {
+  if (!emit) return;
+  const base = createSignalingMessage(internal);
+  try {
+    const signed = await signSignal(base);
+    emit(signed);
+  } catch (err) {
+    console.error("[meeting] failed to sign signaling message", err);
+    // Do NOT emit the unsigned base — that would let an attacker
+    // observe the failure mode and inject a forged signature.
+  }
 }
 
 // ============================================================================
@@ -341,17 +373,26 @@ export function useMeetingService({
     // broadcastHandState(!currentHandState);
   }, [identity]);
 
-  // Create peer connection for a participant
+  // Create peer connection for a participant.
+  //
+  // ICE servers come from the decentralized pool managed by
+  // `webrtc_handlers.ts` / `decentralized_ice.ts` (Cloudflare /
+  // Nextcloud / community STUN + any peer-operated TURN nodes).
+  // Falls back to a single Cloudflare entry if the IPC call fails
+  // so the call can still establish on a public IP.
   const createPeerConnection = useCallback(async (
     participantWallet: string,
     isInitiator: boolean
   ) => {
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-      ],
-    });
+    let iceServers: RTCIceServer[];
+    try {
+      iceServers = await webRTCClient.getDecentralizedIceServers();
+      if (!iceServers.length) throw new Error("empty pool");
+    } catch (err) {
+      console.warn("[meeting] decentralized ICE unavailable, using cloudflare fallback", err);
+      iceServers = [{ urls: "stun:stun.cloudflare.com:3478" }];
+    }
+    const pc = new RTCPeerConnection({ iceServers });
 
     peerConnections.current.set(participantWallet, pc);
 
@@ -371,13 +412,12 @@ export function useMeetingService({
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        // Send ICE candidate to peer via signaling
-        onSignal?.(createSignalingMessage({
+        void emitSignedSignal({
           type: "ice-candidate",
           candidate: event.candidate.toJSON(),
           from: identity?.walletAddress || "",
           to: participantWallet,
-        }));
+        }, onSignal);
       }
     };
 
@@ -406,19 +446,31 @@ export function useMeetingService({
     if (isInitiator) {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      onSignal?.(createSignalingMessage({
+      await emitSignedSignal({
         type: "offer",
         sdp: offer.sdp,
         from: identity?.walletAddress || "",
         to: participantWallet,
-      }));
+      }, onSignal);
     }
 
     return pc;
   }, [localStream, identity, onSignal]);
 
-  // Handle incoming WebRTC signals
+  // Handle incoming WebRTC signals.
+  //
+  // Every inbound signal MUST pass `verifySignal()` before it touches
+  // RTCPeerConnection — otherwise an attacker on the chat transport
+  // can spoof offers / candidates and either MITM the call or DoS by
+  // pumping bogus candidates.
   const handleSignal = useCallback(async (signal: WebRTCSignal) => {
+    const v = verifySignal(signal);
+    if (!v.ok) {
+      console.warn(
+        `[meeting] dropping unverified signal from ${signal.fromWallet}: ${v.reason}`,
+      );
+      return;
+    }
     const pc = peerConnections.current.get(signal.from) ||
       await createPeerConnection(signal.from, false);
 
@@ -430,12 +482,12 @@ export function useMeetingService({
         }));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        onSignal?.(createSignalingMessage({
+        await emitSignedSignal({
           type: "answer",
           sdp: answer.sdp,
           from: identity?.walletAddress || "",
           to: signal.from,
-        }));
+        }, onSignal);
         break;
 
       case "answer":

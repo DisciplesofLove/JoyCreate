@@ -1,6 +1,11 @@
 /**
  * JoyMarketplace Sync Client
- * Renderer-side API for syncing with joymarketplace.io
+ * Renderer-side API for syncing with joymarketplace.io.
+ *
+ * @deprecated These channels are maintained as compatibility shims and
+ * are slated for removal once all callers migrate to the unified
+ * `joybridge:*` namespace defined in `src/ipc/joybridge_client.ts`.
+ * Do NOT add new callers — use JoyBridge instead.
  */
 
 import type { IpcRenderer } from "electron";
@@ -118,6 +123,13 @@ export interface PayoutVerification {
 // CLIENT API
 // =============================================================================
 
+/**
+ * Renderer-side wrapper for the deprecated `marketplace-sync:*` IPC
+ * channels. New code should call `JoyBridgeClient` from
+ * `src/ipc/joybridge_client.ts` instead.
+ *
+ * @deprecated
+ */
 export const MarketplaceSyncClient = {
   // ===========================================================================
   // CONFIGURATION

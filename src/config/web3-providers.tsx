@@ -1,34 +1,22 @@
+/**
+ * @deprecated Replaced by `JoyWalletProviders` in `./joy-wallet-providers.tsx`,
+ * which now mounts WagmiProvider + ThirdwebProvider + PrivyProvider once at
+ * the app root in `src/renderer.tsx`.
+ *
+ * This file is kept as a compatibility shim so older imports still resolve.
+ * Remove it once all consumers have migrated.
+ */
+
 import React from "react";
-import { ThirdwebProvider } from "thirdweb/react";
-import { http, createConfig, WagmiProvider } from "wagmi";
-import { polygonAmoy } from "wagmi/chains";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// Wagmi config targeting Polygon Amoy
-export const wagmiConfig = createConfig({
-  chains: [polygonAmoy],
-  transports: {
-    [polygonAmoy.id]: http(),
-  },
-});
-
-// Dedicated query client for the Web3 provider tree
-const web3QueryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
-});
+// Re-export the canonical wagmi config so legacy imports keep working.
+export { wagmiConfig } from "./joy-wallet-providers";
 
 /**
- * Wraps children in WagmiProvider + ThirdwebProvider + QueryClientProvider.
- * Use this around pages that need wallet / Thirdweb / on-chain functionality.
+ * @deprecated No-op wrapper. The real providers are mounted globally at
+ * the app root via `JoyWalletProviders`. This component just renders its
+ * children to avoid breaking imports.
  */
 export function Web3Providers({ children }: { children: React.ReactNode }) {
-  return (
-    <WagmiProvider config={wagmiConfig}>
-      <QueryClientProvider client={web3QueryClient}>
-        <ThirdwebProvider>
-          {children}
-        </ThirdwebProvider>
-      </QueryClientProvider>
-    </WagmiProvider>
-  );
+  return <>{children}</>;
 }

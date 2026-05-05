@@ -484,15 +484,38 @@ export default function JoyCreatorStudioPage() {
     queryFn: () => nftClient.getStats(),
   });
 
-  const { data: listings = [], isLoading: listingsLoading, refetch: refetchListings } = useQuery({
+  const { data: rawListings = [], isLoading: listingsLoading, refetch: refetchListings } = useQuery({
     queryKey: ["nft-listings"],
     queryFn: () => nftClient.getAllListings(),
   });
 
-  const { data: assets = [], isLoading: assetsLoading, refetch: refetchAssets } = useQuery({
+  const { data: rawAssets = [], isLoading: assetsLoading, refetch: refetchAssets } = useQuery({
     queryKey: ["all-assets"],
     queryFn: () => assetClient.listAll(),
   });
+
+  // ── Graph-only filter ───────────────────────────────────────────────────
+  // Pull the full set of on-chain tokenIds from the marketplace subgraph so
+  // we only display listings that actually exist in the graph. Anything in
+  // the local SQLite/file store that hasn't been lazy-minted (draft /
+  // pending / not-yet-indexed) is hidden from the marketplace surfaces.
+  const { data: graphSet } = useMarketplaceBrowse({ pageSize: 500 });
+  const graphTokenIds = new Set<string>(
+    (graphSet?.items ?? []).map((it) => String(it.id)),
+  );
+
+  // Only listings whose on-chain tokenId is indexed by the subgraph.
+  const listings = (rawListings as NFTListing[]).filter(
+    (l) => l.token_id && graphTokenIds.has(String(l.token_id)),
+  );
+
+  // Only assets that have at least one graph-indexed listing.
+  const graphAssetIds = new Set<string>(
+    (rawListings as NFTListing[])
+      .filter((l) => l.token_id && graphTokenIds.has(String(l.token_id)))
+      .map((l) => l.asset_id),
+  );
+  const assets = (rawAssets as Asset[]).filter((a) => graphAssetIds.has(a.id));
 
   const { data: portfolio } = useQuery({
     queryKey: ["nft-portfolio"],

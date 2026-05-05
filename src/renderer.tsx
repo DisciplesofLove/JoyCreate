@@ -15,6 +15,7 @@ import { showError, showMcpConsentToast } from "./lib/toast";
 import { IpcClient } from "./ipc/ipc_client";
 import { useSetAtom } from "jotai";
 import { pendingAgentConsentsAtom } from "./atoms/chatAtoms";
+import { JoyWalletProviders } from "./config/joy-wallet-providers";
 
 // @ts-ignore
 console.log("Running in mode:", import.meta.env.MODE);
@@ -173,12 +174,14 @@ function App() {
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    {posthogClient ? (
-      <PostHogProvider client={posthogClient}>
+    <JoyWalletProviders>
+      {posthogClient ? (
+        <PostHogProvider client={posthogClient}>
+          <App />
+        </PostHogProvider>
+      ) : (
         <App />
-      </PostHogProvider>
-    ) : (
-      <App />
-    )}
+      )}
+    </JoyWalletProviders>
   </QueryClientProvider>,
 );

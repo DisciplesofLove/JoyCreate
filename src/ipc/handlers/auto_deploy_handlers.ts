@@ -10,6 +10,7 @@
  */
 
 import { ipcMain, IpcMainInvokeEvent } from "electron";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import { db } from "../../db";
 import { apps } from "../../db/schema";
 import { eq } from "drizzle-orm";
@@ -550,6 +551,6 @@ async function handleCheckCompleteness(
 // ============================================================================
 
 export function registerAutoDeployHandlers(): void {
-  ipcMain.handle("deploy:auto-deploy", handleAutoDeploy);
+  ipcMain.handle("deploy:auto-deploy", guarded("deploy:auto-deploy", handleAutoDeploy));
   ipcMain.handle("deploy:check-completeness", handleCheckCompleteness);
 }

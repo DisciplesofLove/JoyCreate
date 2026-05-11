@@ -9,6 +9,7 @@
  */
 
 import { IpcMainInvokeEvent, ipcMain } from "electron";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import log from "electron-log";
 import { randomUUID } from "node:crypto";
 import { getOpenClawCNS } from "@/lib/openclaw_cns";
@@ -935,23 +936,23 @@ async function handleGetWorkspace(
 
 export function registerAgentWorkspaceHandlers(): void {
   // Task CRUD
-  ipcMain.handle("agent:workspace:task:create", handleCreateTask);
+  ipcMain.handle("agent:workspace:task:create", guarded("agent:workspace:task:create", handleCreateTask));
   ipcMain.handle("agent:workspace:task:list", handleListTasks);
   ipcMain.handle("agent:workspace:task:get", handleGetTask);
-  ipcMain.handle("agent:workspace:task:update", handleUpdateTask);
-  ipcMain.handle("agent:workspace:task:delete", handleDeleteTask);
+  ipcMain.handle("agent:workspace:task:update", guarded("agent:workspace:task:update", handleUpdateTask));
+  ipcMain.handle("agent:workspace:task:delete", guarded("agent:workspace:task:delete", handleDeleteTask));
 
   // Task Execution
-  ipcMain.handle("agent:workspace:task:execute", handleExecuteTask);
+  ipcMain.handle("agent:workspace:task:execute", guarded("agent:workspace:task:execute", handleExecuteTask));
   ipcMain.handle("agent:workspace:task:executions", handleListExecutions);
 
   // Knowledge Source CRUD
-  ipcMain.handle("agent:workspace:knowledge:add", handleAddKnowledgeSource);
+  ipcMain.handle("agent:workspace:knowledge:add", guarded("agent:workspace:knowledge:add", handleAddKnowledgeSource));
   ipcMain.handle("agent:workspace:knowledge:list", handleListKnowledgeSources);
   ipcMain.handle("agent:workspace:knowledge:get", handleGetKnowledgeSource);
-  ipcMain.handle("agent:workspace:knowledge:update", handleUpdateKnowledgeSource);
-  ipcMain.handle("agent:workspace:knowledge:delete", handleDeleteKnowledgeSource);
-  ipcMain.handle("agent:workspace:knowledge:sync", handleSyncKnowledgeSource);
+  ipcMain.handle("agent:workspace:knowledge:update", guarded("agent:workspace:knowledge:update", handleUpdateKnowledgeSource));
+  ipcMain.handle("agent:workspace:knowledge:delete", guarded("agent:workspace:knowledge:delete", handleDeleteKnowledgeSource));
+  ipcMain.handle("agent:workspace:knowledge:sync", guarded("agent:workspace:knowledge:sync", handleSyncKnowledgeSource));
   ipcMain.handle("agent:workspace:knowledge:query", handleQueryKnowledge);
 
   // Workspace

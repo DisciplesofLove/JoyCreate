@@ -18,6 +18,7 @@ import { eq } from "drizzle-orm";
 import log from "electron-log";
 import * as fs from "fs-extra";
 import * as path from "path";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import type { UnifiedPublishPayload, PublishResult } from "@/types/publish_types";
 import { JOYMARKETPLACE_API } from "@/config/joymarketplace";
 import {
@@ -182,7 +183,7 @@ async function getCredentials(): Promise<{ apiKey: string; publisherId: string }
 export function registerAgentMarketplaceHandlers(): void {
   ipcMain.handle(
     "agent:publish-to-marketplace",
-    async (
+    guarded("agent:publish-to-marketplace", async (
       _e,
       payload: UnifiedPublishPayload & { dryRun?: boolean },
     ): Promise<PublishResult & { onchain: PublishOutcome }> => {
@@ -212,11 +213,11 @@ export function registerAgentMarketplaceHandlers(): void {
         status: outcome.ok ? (outcome.dryRun ? "draft" : "published") : "draft",
         onchain: outcome,
       } as PublishResult & { onchain: PublishOutcome };
-    },
+    }),
   );
 
   // Unpublish an agent (legacy Supabase path; unchanged).
-  ipcMain.handle("agent:unpublish", async (_e, agentId: number) => {
+  ipcMain.handle("agent:unpublish", guarded("agent:unpublish", async (_e, agentId: number) => {
     const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
     if (!agent) throw new Error(`Agent not found: ${agentId}`);
 
@@ -251,12 +252,12 @@ export function registerAgentMarketplaceHandlers(): void {
 
     logger.info(`Agent ${agentId} unpublished`);
     return { ok: true };
-  });
+  }));
 
   // Update a published agent listing (legacy Supabase path; unchanged).
   ipcMain.handle(
     "agent:update-listing",
-    async (
+    guarded("agent:update-listing", async (
       _e,
       params: { agentId: number; updates: Partial<UnifiedPublishPayload> },
     ) => {
@@ -283,7 +284,7 @@ export function registerAgentMarketplaceHandlers(): void {
         throw new Error(`Update failed: ${response.status} \u2014 ${body}`);
       }
       return response.json();
-    },
+    }),
   );
 }
 

@@ -9,6 +9,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import log from "electron-log";
 import AdmZip from "adm-zip";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import type { Asset, AssetType } from "@/types/asset_types";
 import type {
   AssetChunk,
@@ -591,9 +592,9 @@ export function registerNFTHandlers() {
   initNFTDirs();
 
   // Chunk an asset
-  ipcMain.handle("nft:chunk-asset", async (_, asset: Asset, config?: Partial<ChunkingConfig>) => {
+  ipcMain.handle("nft:chunk-asset", guarded("nft:chunk-asset", async (_, asset: Asset, config?: Partial<ChunkingConfig>) => {
     return chunkAsset(asset, config);
-  });
+  }));
 
   // Get chunks for an asset
   ipcMain.handle("nft:get-chunks", async (_, assetId: string) => {
@@ -601,7 +602,7 @@ export function registerNFTHandlers() {
   });
 
   // Create listing for a chunk
-  ipcMain.handle("nft:create-listing", async (_, params: {
+  ipcMain.handle("nft:create-listing", guarded("nft:create-listing", async (_, params: {
     asset: Asset;
     chunk: AssetChunk;
     pricing: NFTPricing;
@@ -615,10 +616,10 @@ export function registerNFTHandlers() {
       params.license,
       params.network
     );
-  });
+  }));
 
   // Bulk create listings for all chunks
-  ipcMain.handle("nft:bulk-create-listings", async (_, params: {
+  ipcMain.handle("nft:bulk-create-listings", guarded("nft:bulk-create-listings", async (_, params: {
     asset: Asset;
     pricing: NFTPricing;
     license: NFTLicenseType;
@@ -639,7 +640,7 @@ export function registerNFTHandlers() {
     }
     
     return listings;
-  });
+  }));
 
   // Get all listings
   ipcMain.handle("nft:list-all", async () => {
@@ -661,7 +662,7 @@ export function registerNFTHandlers() {
   });
 
   // Update listing pricing
-  ipcMain.handle("nft:update-pricing", async (_, listingId: string, pricing: NFTPricing) => {
+  ipcMain.handle("nft:update-pricing", guarded("nft:update-pricing", async (_, listingId: string, pricing: NFTPricing) => {
     const listingPath = path.join(getListingsDir(), `${listingId}.json`);
     if (!await fs.pathExists(listingPath)) {
       throw new Error("Listing not found");
@@ -671,20 +672,20 @@ export function registerNFTHandlers() {
     listing.pricing = pricing;
     await fs.writeJson(listingPath, listing, { spaces: 2 });
     return listing;
-  });
+  }));
 
   // Update listing status
-  ipcMain.handle("nft:update-status", async (_, listingId: string, status: NFTListing["status"]) => {
+  ipcMain.handle("nft:update-status", guarded("nft:update-status", async (_, listingId: string, status: NFTListing["status"]) => {
     return updateListingStatus(listingId, status);
-  });
+  }));
 
   // Publish to marketplace
-  ipcMain.handle("nft:publish", async (_, listingId: string, apiKey: string) => {
+  ipcMain.handle("nft:publish", guarded("nft:publish", async (_, listingId: string, apiKey: string) => {
     return publishToMarketplace(listingId, apiKey);
-  });
+  }));
 
   // Bulk publish all listings for an asset
-  ipcMain.handle("nft:bulk-publish", async (_, assetId: string, apiKey: string) => {
+  ipcMain.handle("nft:bulk-publish", guarded("nft:bulk-publish", async (_, assetId: string, apiKey: string) => {
     const listings = await getListingsByAsset(assetId);
     const results: { listingId: string; success: boolean; error?: string }[] = [];
     
@@ -700,15 +701,15 @@ export function registerNFTHandlers() {
     }
     
     return results;
-  });
+  }));
 
   // Delete listing
-  ipcMain.handle("nft:delete-listing", async (_, listingId: string) => {
+  ipcMain.handle("nft:delete-listing", guarded("nft:delete-listing", async (_, listingId: string) => {
     const listingPath = path.join(getListingsDir(), `${listingId}.json`);
     if (await fs.pathExists(listingPath)) {
       await fs.remove(listingPath);
     }
-  });
+  }));
 
   // Get portfolio
   ipcMain.handle("nft:portfolio", async () => {

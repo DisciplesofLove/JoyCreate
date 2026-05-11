@@ -23,6 +23,7 @@
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import log from "electron-log";
 import * as crypto from "crypto";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import {
   celestiaBlobService,
   CELESTIA_NAMESPACES,
@@ -51,7 +52,7 @@ export function registerCelestiaBlobHandlers(): void {
    */
   ipcMain.handle(
     "celestia:blob:submit",
-    async (
+    guarded("celestia:blob:submit", async (
       _event: IpcMainInvokeEvent,
       params: {
         /** base64-encoded data */
@@ -91,7 +92,7 @@ export function registerCelestiaBlobHandlers(): void {
       }
 
       return result;
-    },
+    }),
   );
 
   /**
@@ -99,7 +100,7 @@ export function registerCelestiaBlobHandlers(): void {
    */
   ipcMain.handle(
     "celestia:blob:submit-json",
-    async (
+    guarded("celestia:blob:submit-json", async (
       _event: IpcMainInvokeEvent,
       params: {
         json: unknown;
@@ -126,7 +127,7 @@ export function registerCelestiaBlobHandlers(): void {
       }
 
       return result;
-    },
+    }),
   );
 
   /**
@@ -134,7 +135,7 @@ export function registerCelestiaBlobHandlers(): void {
    */
   ipcMain.handle(
     "celestia:blob:submit-file",
-    async (
+    guarded("celestia:blob:submit-file", async (
       _event: IpcMainInvokeEvent,
       params: {
         filePath: string;
@@ -161,7 +162,7 @@ export function registerCelestiaBlobHandlers(): void {
       }
 
       return result;
-    },
+    }),
   );
 
   // ---------------------------------------------------------------------------
@@ -415,12 +416,12 @@ export function registerCelestiaBlobHandlers(): void {
    */
   ipcMain.handle(
     "celestia:config:update",
-    async (
+    guarded("celestia:config:update", async (
       _event: IpcMainInvokeEvent,
       updates: Partial<CelestiaConfig>,
     ): Promise<CelestiaConfig> => {
       return celestiaBlobService.updateConfig(updates);
-    },
+    }),
   );
 
   /**
@@ -454,9 +455,9 @@ export function registerCelestiaBlobHandlers(): void {
    */
   ipcMain.handle(
     "celestia:config:reset",
-    async (): Promise<CelestiaConfig> => {
+    guarded("celestia:config:reset", async (): Promise<CelestiaConfig> => {
       return celestiaBlobService.resetConfig();
-    },
+    }),
   );
 
   /**

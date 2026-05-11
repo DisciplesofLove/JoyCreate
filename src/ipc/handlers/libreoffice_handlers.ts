@@ -5,6 +5,7 @@
 
 import { ipcMain, app, shell, BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import { buildMcpToolSet } from "@/lib/mcp_ai_bridge";
 import { spawn, exec } from "child_process";
 import * as fs from "fs/promises";
@@ -2411,9 +2412,9 @@ export function registerLibreOfficeHandlers() {
   });
 
   // Create document
-  ipcMain.handle("libreoffice:create", async (_, request: CreateDocumentRequest) => {
+  ipcMain.handle("libreoffice:create", guarded("libreoffice:create", async (_, request: CreateDocumentRequest) => {
     return manager.createDocument(request);
-  });
+  }));
 
   // List documents
   ipcMain.handle("libreoffice:list", async (_, query?: DocumentListQuery) => {
@@ -2426,12 +2427,12 @@ export function registerLibreOfficeHandlers() {
   });
 
   // Delete document
-  ipcMain.handle("libreoffice:delete", async (_, id: number) => {
+  ipcMain.handle("libreoffice:delete", guarded("libreoffice:delete", async (_, id: number) => {
     return manager.deleteDocument(id);
-  });
+  }));
 
   // Update document metadata (name, description, tags)
-  ipcMain.handle("libreoffice:update-metadata", async (_, params: { id: number; name?: string; description?: string; tags?: string[] }) => {
+  ipcMain.handle("libreoffice:update-metadata", guarded("libreoffice:update-metadata", async (_, params: { id: number; name?: string; description?: string; tags?: string[] }) => {
     const db = getDb();
     const existing = db.select().from(documents).where(eq(documents.id, params.id)).get();
     if (!existing) throw new Error(`Document not found: ${params.id}`);
@@ -2443,22 +2444,22 @@ export function registerLibreOfficeHandlers() {
 
     db.update(documents).set(updates).where(eq(documents.id, params.id)).run();
     return db.select().from(documents).where(eq(documents.id, params.id)).get();
-  });
+  }));
 
   // Export document
-  ipcMain.handle("libreoffice:export", async (_, request: ExportDocumentRequest) => {
+  ipcMain.handle("libreoffice:export", guarded("libreoffice:export", async (_, request: ExportDocumentRequest) => {
     return manager.exportDocument(request);
-  });
+  }));
 
   // Open document in LibreOffice
-  ipcMain.handle("libreoffice:open", async (_, id: number) => {
+  ipcMain.handle("libreoffice:open", guarded("libreoffice:open", async (_, id: number) => {
     return manager.openDocument(id);
-  });
+  }));
 
   // Download document (copy to Downloads folder and show in explorer)
-  ipcMain.handle("libreoffice:download", async (_, id: number) => {
+  ipcMain.handle("libreoffice:download", guarded("libreoffice:download", async (_, id: number) => {
     return manager.downloadDocument(id);
-  });
+  }));
 
   // Show document in file explorer
   ipcMain.handle("libreoffice:show-in-folder", async (_, id: number) => {
@@ -2478,15 +2479,15 @@ export function registerLibreOfficeHandlers() {
 
   // Lifecycle: signal that a consumer has unmounted.
   // When no consumers remain, kills any orphaned soffice processes.
-  ipcMain.handle("libreoffice:shutdown", async () => {
+  ipcMain.handle("libreoffice:shutdown", guarded("libreoffice:shutdown", async () => {
     await manager.shutdown();
-  });
+  }));
 
   // AI streaming document generation — sends libreoffice:generate-chunk events
   // to the renderer with live text chunks and completes with the saved document.
   ipcMain.handle(
     "libreoffice:stream-generate",
-    async (
+    guarded("libreoffice:stream-generate", async (
       event,
       params: {
         requestId: string;
@@ -2508,7 +2509,7 @@ export function registerLibreOfficeHandlers() {
           });
         });
       return { started: true };
-    }
+    })
   );
 
   // Read the plain-text / structured content of an existing document.
@@ -2519,7 +2520,7 @@ export function registerLibreOfficeHandlers() {
   // Overwrite a document with edited content.
   ipcMain.handle(
     "libreoffice:update-content",
-    async (
+    guarded("libreoffice:update-content", async (
       _event,
       id: number,
       payload: {
@@ -2529,13 +2530,13 @@ export function registerLibreOfficeHandlers() {
       }
     ) => {
       return manager.updateDocumentContent(id, payload);
-    }
+    })
   );
 
   // Stream an AI editing command on selected document text.
   ipcMain.handle(
     "libreoffice:ai-assist",
-    async (
+    guarded("libreoffice:ai-assist", async (
       event,
       requestId: string,
       params: {
@@ -2561,7 +2562,7 @@ export function registerLibreOfficeHandlers() {
           });
         });
       return { started: true };
-    }
+    })
   );
 }
 

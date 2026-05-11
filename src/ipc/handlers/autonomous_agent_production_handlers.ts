@@ -4,6 +4,7 @@
  */
 
 import { ipcMain, BrowserWindow } from "electron";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import {
   getProductionSystem,
   type ScheduleId,
@@ -40,15 +41,15 @@ export function registerAutonomousAgentProductionHandlers(): void {
   // SYSTEM LIFECYCLE
   // ---------------------------------------------------------------------------
   
-  ipcMain.handle("autonomous-prod:initialize", async () => {
+  ipcMain.handle("autonomous-prod:initialize", guarded("autonomous-prod:initialize", async () => {
     await system.initialize();
     return { success: true };
-  });
+  }));
   
-  ipcMain.handle("autonomous-prod:shutdown", async () => {
+  ipcMain.handle("autonomous-prod:shutdown", guarded("autonomous-prod:shutdown", async () => {
     await system.shutdown();
     return { success: true };
-  });
+  }));
   
   // ---------------------------------------------------------------------------
   // RESOURCE MONITORING
@@ -95,12 +96,12 @@ export function registerAutonomousAgentProductionHandlers(): void {
   
   ipcMain.handle(
     "autonomous-prod:create-schedule",
-    async (
+    guarded("autonomous-prod:create-schedule", async (
       _event,
       schedule: Omit<Schedule, "id" | "createdAt" | "updatedAt" | "runCount" | "failureCount">
     ): Promise<Schedule> => {
       return system.createSchedule(schedule);
-    }
+    })
   );
   
   ipcMain.handle(
@@ -116,17 +117,17 @@ export function registerAutonomousAgentProductionHandlers(): void {
   
   ipcMain.handle(
     "autonomous-prod:request-approval",
-    async (
+    guarded("autonomous-prod:request-approval", async (
       _event,
       request: Omit<ApprovalRequest, "id" | "status" | "createdAt">
     ): Promise<ApprovalRequest> => {
       return system.requestApproval(request);
-    }
+    })
   );
   
   ipcMain.handle(
     "autonomous-prod:respond-approval",
-    async (
+    guarded("autonomous-prod:respond-approval", async (
       _event,
       approvalId: ApprovalId,
       approved: boolean,
@@ -135,7 +136,7 @@ export function registerAutonomousAgentProductionHandlers(): void {
       modifiedAction?: string
     ): Promise<void> => {
       return system.respondToApproval(approvalId, approved, approvedBy, reason, modifiedAction);
-    }
+    })
   );
   
   ipcMain.handle(
@@ -169,12 +170,12 @@ export function registerAutonomousAgentProductionHandlers(): void {
   
   ipcMain.handle(
     "autonomous-prod:create-notification",
-    async (
+    guarded("autonomous-prod:create-notification", async (
       _event,
       notification: Omit<Notification, "id" | "delivered" | "read" | "dismissed" | "createdAt">
     ): Promise<Notification> => {
       return system.createNotification(notification);
-    }
+    })
   );
   
   ipcMain.handle(
@@ -191,9 +192,9 @@ export function registerAutonomousAgentProductionHandlers(): void {
   
   ipcMain.handle(
     "autonomous-prod:mark-notification-read",
-    async (_event, id: NotificationId): Promise<void> => {
+    guarded("autonomous-prod:mark-notification-read", async (_event, id: NotificationId): Promise<void> => {
       return system.markNotificationRead(id);
-    }
+    })
   );
   
   // ---------------------------------------------------------------------------
@@ -225,14 +226,14 @@ export function registerAutonomousAgentProductionHandlers(): void {
   
   ipcMain.handle(
     "autonomous-prod:record-quota-usage",
-    async (
+    guarded("autonomous-prod:record-quota-usage", async (
       _event,
       agentId: AutonomousAgentId,
       resource: string,
       amount: number
     ): Promise<void> => {
       return system.recordQuotaUsage(agentId, resource as any, amount);
-    }
+    })
   );
   
   // ---------------------------------------------------------------------------
@@ -241,22 +242,22 @@ export function registerAutonomousAgentProductionHandlers(): void {
   
   ipcMain.handle(
     "autonomous-prod:add-knowledge-node",
-    async (
+    guarded("autonomous-prod:add-knowledge-node", async (
       _event,
       node: Omit<KnowledgeNode, "id" | "accessCount" | "usefulnessScore" | "createdAt" | "updatedAt">
     ): Promise<KnowledgeNode> => {
       return system.addKnowledgeNode(node);
-    }
+    })
   );
   
   ipcMain.handle(
     "autonomous-prod:add-knowledge-edge",
-    async (
+    guarded("autonomous-prod:add-knowledge-edge", async (
       _event,
       edge: Omit<KnowledgeEdge, "id" | "createdAt">
     ): Promise<KnowledgeEdge> => {
       return system.addKnowledgeEdge(edge);
-    }
+    })
   );
   
   ipcMain.handle(
@@ -275,7 +276,7 @@ export function registerAutonomousAgentProductionHandlers(): void {
   
   ipcMain.handle(
     "autonomous-prod:record-event",
-    async (
+    guarded("autonomous-prod:record-event", async (
       _event,
       analyticsEvent: {
         agentId: AutonomousAgentId;
@@ -298,7 +299,7 @@ export function registerAutonomousAgentProductionHandlers(): void {
         sessionId: analyticsEvent.sessionId,
         duration: analyticsEvent.duration,
       });
-    }
+    })
   );
   
   ipcMain.handle(
@@ -320,13 +321,13 @@ export function registerAutonomousAgentProductionHandlers(): void {
   
   ipcMain.handle(
     "autonomous-prod:create-backup",
-    async (
+    guarded("autonomous-prod:create-backup", async (
       _event,
       type: Backup["type"],
       agents?: AutonomousAgentId[]
     ): Promise<Backup> => {
       return system.createBackup(type, agents);
-    }
+    })
   );
   
   ipcMain.handle(

@@ -8,6 +8,7 @@ import * as fs from "fs-extra";
 import * as path from "path";
 import log from "electron-log";
 import { db } from "@/db";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import type {
   ScrapingConfig,
   ScrapingJob,
@@ -566,7 +567,7 @@ export function registerScraperHandlers() {
   });
 
   // Create/save scraping config
-  ipcMain.handle("scraper:config:save", async (_, config: ScrapingConfig): Promise<ScrapingConfig> => {
+  ipcMain.handle("scraper:config:save", guarded("scraper:config:save", async (_, config: ScrapingConfig): Promise<ScrapingConfig> => {
     const configDir = getConfigsDir();
     await fs.ensureDir(configDir);
     
@@ -580,15 +581,15 @@ export function registerScraperHandlers() {
     await fs.writeJson(filePath, config, { spaces: 2 });
     
     return config;
-  });
+  }));
 
   // Delete scraping config
-  ipcMain.handle("scraper:config:delete", async (_, configId: string): Promise<void> => {
+  ipcMain.handle("scraper:config:delete", guarded("scraper:config:delete", async (_, configId: string): Promise<void> => {
     const filePath = path.join(getConfigsDir(), `${configId}.json`);
     if (await fs.pathExists(filePath)) {
       await fs.remove(filePath);
     }
-  });
+  }));
 
   // Get scraping templates
   ipcMain.handle("scraper:templates", async (): Promise<ScrapingTemplate[]> => {
@@ -596,7 +597,7 @@ export function registerScraperHandlers() {
   });
 
   // Start scraping job
-  ipcMain.handle("scraper:job:start", async (_, configId: string): Promise<ScrapingJob> => {
+  ipcMain.handle("scraper:job:start", guarded("scraper:job:start", async (_, configId: string): Promise<ScrapingJob> => {
     const configPath = path.join(getConfigsDir(), `${configId}.json`);
     if (!await fs.pathExists(configPath)) {
       throw new Error("Scraping config not found");
@@ -628,7 +629,7 @@ export function registerScraperHandlers() {
     });
     
     return job;
-  });
+  }));
 
   // Get job status
   ipcMain.handle("scraper:job:status", async (_, jobId: string): Promise<ScrapingJob | null> => {
@@ -677,13 +678,13 @@ export function registerScraperHandlers() {
   });
 
   // Cancel job
-  ipcMain.handle("scraper:job:cancel", async (_, jobId: string): Promise<void> => {
+  ipcMain.handle("scraper:job:cancel", guarded("scraper:job:cancel", async (_, jobId: string): Promise<void> => {
     if (activeJobs.has(jobId)) {
       const job = activeJobs.get(jobId)!;
       job.status = "cancelled";
       activeJobs.set(jobId, job);
     }
-  });
+  }));
 
   // List datasets
   ipcMain.handle("scraper:dataset:list", async (): Promise<Dataset[]> => {
@@ -739,7 +740,7 @@ export function registerScraperHandlers() {
   });
 
   // Export dataset
-  ipcMain.handle("scraper:dataset:export", async (_, datasetId: string, options: DatasetExportOptions): Promise<string> => {
+  ipcMain.handle("scraper:dataset:export", guarded("scraper:dataset:export", async (_, datasetId: string, options: DatasetExportOptions): Promise<string> => {
     const metaPath = path.join(getDatasetsDir(), `${datasetId}.meta.json`);
     if (!await fs.pathExists(metaPath)) {
       throw new Error("Dataset not found");
@@ -773,19 +774,19 @@ export function registerScraperHandlers() {
     await fs.writeFile(exportPath, exported, "utf-8");
     
     return exportPath;
-  });
+  }));
 
   // Delete dataset
-  ipcMain.handle("scraper:dataset:delete", async (_, datasetId: string): Promise<void> => {
+  ipcMain.handle("scraper:dataset:delete", guarded("scraper:dataset:delete", async (_, datasetId: string): Promise<void> => {
     const metaPath = path.join(getDatasetsDir(), `${datasetId}.meta.json`);
     const dataPath = path.join(getDatasetsDir(), `${datasetId}.json`);
     
     if (await fs.pathExists(metaPath)) await fs.remove(metaPath);
     if (await fs.pathExists(dataPath)) await fs.remove(dataPath);
-  });
+  }));
 
   // Create dataset from manual input
-  ipcMain.handle("scraper:dataset:create", async (_, params: {
+  ipcMain.handle("scraper:dataset:create", guarded("scraper:dataset:create", async (_, params: {
     name: string;
     description?: string;
     data: Record<string, any>[];
@@ -838,10 +839,10 @@ export function registerScraperHandlers() {
     await fs.writeJson(metaPath, dataset, { spaces: 2 });
     
     return dataset;
-  });
+  }));
 
   // Import dataset from file
-  ipcMain.handle("scraper:dataset:import", async (_, filePath: string): Promise<Dataset> => {
+  ipcMain.handle("scraper:dataset:import", guarded("scraper:dataset:import", async (_, filePath: string): Promise<Dataset> => {
     if (!await fs.pathExists(filePath)) {
       throw new Error("File not found");
     }
@@ -886,13 +887,13 @@ export function registerScraperHandlers() {
       name,
       data,
     }) as any;
-  });
+  }));
 
   // Quick scrape single URL
-  ipcMain.handle("scraper:quick-scrape", async (_, url: string, fields: ScrapingField[]): Promise<Record<string, any>> => {
+  ipcMain.handle("scraper:quick-scrape", guarded("scraper:quick-scrape", async (_, url: string, fields: ScrapingField[]): Promise<Record<string, any>> => {
     const { html } = await fetchPage(url);
     return extractFields(html, fields);
-  });
+  }));
 
   logger.info("Scraper IPC handlers registered");
 }

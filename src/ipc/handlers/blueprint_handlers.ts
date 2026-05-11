@@ -1,0 +1,77 @@
+/**
+ * Sovereign Blueprint IPC handlers — main-process surface for the
+ * BlueprintOrchestrator. Mutating channels go through Neural Guard via
+ * `guarded()`; read channels are unwrapped invoke handlers.
+ */
+
+import { ipcMain, type IpcMainInvokeEvent } from "electron";
+import log from "electron-log";
+import { guarded } from "@/ipc/utils/guarded_handle";
+import {
+  getBlueprintOrchestrator,
+  type RunBlueprintOptions,
+} from "@/lib/blueprint/orchestrator";
+import { getRun, listRuns } from "@/lib/blueprint/run_store";
+
+const logger = log.scope("blueprint_handlers");
+
+interface RunPayload {
+  yamlText: string;
+  input?: Record<string, unknown>;
+  agentDid?: string;
+  dryRun?: boolean;
+}
+
+export function registerBlueprintHandlers(): void {
+  ipcMain.handle(
+    "blueprint:run",
+    guarded("blueprint:run", async (_event: IpcMainInvokeEvent, payload: RunPayload) => {
+      if (!payload?.yamlText || typeof payload.yamlText !== "string") {
+        throw new Error("blueprint:run requires { yamlText: string }");
+      }
+      const opts: RunBlueprintOptions = {
+        yamlText: payload.yamlText,
+        input: payload.input,
+        agentDid: payload.agentDid,
+        dryRun: payload.dryRun,
+      };
+      const runId = await getBlueprintOrchestrator().run(opts);
+      return { runId };
+    }),
+  );
+
+  ipcMain.handle(
+    "blueprint:cancel",
+    guarded(
+      "blueprint:cancel",
+      async (_event: IpcMainInvokeEvent, payload: { runId: string }) => {
+        if (!payload?.runId) throw new Error("blueprint:cancel requires { runId }");
+        await getBlueprintOrchestrator().cancel(payload.runId);
+        return { ok: true };
+      },
+    ),
+  );
+
+  ipcMain.handle(
+    "blueprint:get-run",
+    async (_event: IpcMainInvokeEvent, runId: string) => {
+      if (!runId) throw new Error("blueprint:get-run requires runId");
+      const run = await getRun(runId);
+      if (!run) throw new Error(`Run ${runId} not found`);
+      return run;
+    },
+  );
+
+  ipcMain.handle(
+    "blueprint:list-runs",
+    async (_event: IpcMainInvokeEvent, limit?: number) => {
+      return listRuns(limit ?? 100);
+    },
+  );
+
+  // Resume any runs that were left in pending/running/paused state by a
+  // previous session. Errors here are non-fatal — the app must still boot.
+  void getBlueprintOrchestrator()
+    .resumeAllPending()
+    .catch((err) => logger.error("resumeAllPending failed:", err));
+}

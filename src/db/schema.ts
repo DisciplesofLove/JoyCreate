@@ -2769,3 +2769,56 @@ export const agentCollabTasks = sqliteTable("agent_collab_tasks", {
     .notNull()
     .default(sql`(unixepoch())`),
 });
+
+// =============================================================================
+// SOVEREIGN BLUEPRINT — run state (Phase D of blueprint engine plan)
+// =============================================================================
+
+export const blueprintRuns = sqliteTable("blueprint_runs", {
+  id: text("id").primaryKey(),
+  blueprintId: text("blueprint_id").notNull(),
+  blueprintVersion: text("blueprint_version").notNull(),
+  /** SHA-256 of the entire raw YAML — tamper detection across runs. */
+  manifestHash: text("manifest_hash").notNull(),
+  agentDid: text("agent_did").notNull(),
+  status: text("status", {
+    enum: ["pending", "running", "paused", "succeeded", "failed", "aborted"],
+  })
+    .notNull()
+    .default("pending"),
+  /** Id of the next node to run (or the currently-running one). */
+  currentNodeId: text("current_node_id"),
+  /** Map<nodeId, { status, output, intentHash, error? }>. */
+  nodeStateJson: text("node_state_json", { mode: "json" })
+    .$type<Record<string, BlueprintNodeRunState>>()
+    .default(sql`'{}'`),
+  /** Initial input to the run. */
+  inputJson: text("input_json", { mode: "json" }).$type<Record<string, unknown> | null>(),
+  /** Final output (last node's output). */
+  outputJson: text("output_json", { mode: "json" }).$type<unknown>(),
+  error: text("error"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+});
+
+export type BlueprintRunStatus =
+  | "pending"
+  | "running"
+  | "paused"
+  | "succeeded"
+  | "failed"
+  | "aborted";
+
+export interface BlueprintNodeRunState {
+  status: "pending" | "running" | "succeeded" | "failed" | "skipped";
+  intentHash?: string;
+  output?: unknown;
+  error?: string;
+  startedAt?: number;
+  completedAt?: number;
+}

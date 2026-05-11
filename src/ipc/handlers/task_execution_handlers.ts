@@ -14,6 +14,7 @@
  */
 
 import { ipcMain, app, BrowserWindow } from "electron";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import * as fs from "fs-extra";
 import * as path from "path";
 import log from "electron-log";
@@ -1040,7 +1041,7 @@ export function registerTaskExecutionHandlers() {
 
   // ========== Task CRUD ==========
 
-  ipcMain.handle("task-engine:create-task", async (_event, args: {
+  ipcMain.handle("task-engine:create-task", guarded("task-engine:create-task", async (_event, args: {
     name: string;
     description?: string;
     type: TaskType;
@@ -1120,9 +1121,9 @@ export function registerTaskExecutionHandlers() {
       logger.error("Create task failed:", error);
       throw error;
     }
-  });
+  }));
 
-  ipcMain.handle("task-engine:create-from-template", async (_event, args: {
+  ipcMain.handle("task-engine:create-from-template", guarded("task-engine:create-from-template", async (_event, args: {
     templateId: string;
     name: string;
     input?: any;
@@ -1185,7 +1186,7 @@ export function registerTaskExecutionHandlers() {
       logger.error("Create from template failed:", error);
       throw error;
     }
-  });
+  }));
 
   ipcMain.handle("task-engine:get-task", async (_event, taskId: string) => {
     try {
@@ -1247,7 +1248,7 @@ export function registerTaskExecutionHandlers() {
     }
   });
 
-  ipcMain.handle("task-engine:cancel-task", async (_event, taskId: string) => {
+  ipcMain.handle("task-engine:cancel-task", guarded("task-engine:cancel-task", async (_event, taskId: string) => {
     try {
       const task = tasks.get(taskId);
       if (!task) throw new Error("Task not found");
@@ -1287,9 +1288,9 @@ export function registerTaskExecutionHandlers() {
       logger.error("Cancel task failed:", error);
       throw error;
     }
-  });
+  }));
 
-  ipcMain.handle("task-engine:retry-task", async (_event, taskId: string) => {
+  ipcMain.handle("task-engine:retry-task", guarded("task-engine:retry-task", async (_event, taskId: string) => {
     try {
       const task = tasks.get(taskId);
       if (!task) throw new Error("Task not found");
@@ -1320,11 +1321,11 @@ export function registerTaskExecutionHandlers() {
       logger.error("Retry task failed:", error);
       throw error;
     }
-  });
+  }));
 
   // ========== Queue Management ==========
 
-  ipcMain.handle("task-engine:create-queue", async (_event, args: {
+  ipcMain.handle("task-engine:create-queue", guarded("task-engine:create-queue", async (_event, args: {
     name: string;
     description?: string;
     maxConcurrency?: number;
@@ -1360,7 +1361,7 @@ export function registerTaskExecutionHandlers() {
       logger.error("Create queue failed:", error);
       throw error;
     }
-  });
+  }));
 
   ipcMain.handle("task-engine:list-queues", async () => {
     try {
@@ -1384,7 +1385,7 @@ export function registerTaskExecutionHandlers() {
     }
   });
 
-  ipcMain.handle("task-engine:pause-queue", async (_event, queueId: string) => {
+  ipcMain.handle("task-engine:pause-queue", guarded("task-engine:pause-queue", async (_event, queueId: string) => {
     try {
       const queue = queues.get(queueId);
       if (!queue) throw new Error("Queue not found");
@@ -1397,9 +1398,9 @@ export function registerTaskExecutionHandlers() {
       logger.error("Pause queue failed:", error);
       throw error;
     }
-  });
+  }));
 
-  ipcMain.handle("task-engine:resume-queue", async (_event, queueId: string) => {
+  ipcMain.handle("task-engine:resume-queue", guarded("task-engine:resume-queue", async (_event, queueId: string) => {
     try {
       const queue = queues.get(queueId);
       if (!queue) throw new Error("Queue not found");
@@ -1412,11 +1413,11 @@ export function registerTaskExecutionHandlers() {
       logger.error("Resume queue failed:", error);
       throw error;
     }
-  });
+  }));
 
   // ========== Batch Operations ==========
 
-  ipcMain.handle("task-engine:create-batch", async (_event, args: {
+  ipcMain.handle("task-engine:create-batch", guarded("task-engine:create-batch", async (_event, args: {
     name: string;
     tasks: Array<{
       name: string;
@@ -1517,7 +1518,7 @@ export function registerTaskExecutionHandlers() {
       logger.error("Create batch failed:", error);
       throw error;
     }
-  });
+  }));
 
   ipcMain.handle("task-engine:get-batch", async (_event, batchId: string) => {
     try {

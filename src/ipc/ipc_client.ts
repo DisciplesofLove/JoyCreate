@@ -463,6 +463,27 @@ export class IpcClient {
     return this.ipcRenderer.invoke(channel, ...args);
   }
 
+  /**
+   * Neural Guard wrapper: wallet-signs the payload, then invokes the channel
+   * with `{ payload, signedIntent }` so the main-process handler can call
+   * `assertIntent` to verify identity, freshness, and policy before acting.
+   *
+   * Use this for every side-effecting "skill" channel (scraper, deploy,
+   * mint, libreoffice, etc.). Pure read channels (get-app, list-chats, …)
+   * keep using `invoke()` directly.
+   *
+   * @throws when no wallet is available or the user rejects the signature.
+   */
+  public async signAndInvoke<P, R = unknown>(
+    channel: string,
+    payload: P,
+    options: { agentDid?: string; agentWallet?: string } = {},
+  ): Promise<R> {
+    const { signIntent } = await import("../lib/neural_guard");
+    const signedIntent = await signIntent(channel, payload, options);
+    return this.ipcRenderer.invoke(channel, { payload, signedIntent });
+  }
+
   public async restartJoy(): Promise<void> {
     await this.ipcRenderer.invoke("restart-joy");
   }

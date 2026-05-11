@@ -6,6 +6,7 @@
  */
 
 import { ipcMain } from "electron";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import type {
   CreateSkillParams,
   UpdateSkillParams,
@@ -42,9 +43,9 @@ export function registerSkillHandlers(): void {
 
   // ── CRUD ──────────────────────────────────────────────────────
 
-  ipcMain.handle("skill:create", async (_, params: CreateSkillParams) => {
+  ipcMain.handle("skill:create", guarded("skill:create", async (_, params: CreateSkillParams) => {
     return createSkill(params);
-  });
+  }));
 
   ipcMain.handle("skill:get", async (_, id: number) => {
     return getSkill(id);
@@ -54,13 +55,13 @@ export function registerSkillHandlers(): void {
     return listSkills(params);
   });
 
-  ipcMain.handle("skill:update", async (_, params: UpdateSkillParams) => {
+  ipcMain.handle("skill:update", guarded("skill:update", async (_, params: UpdateSkillParams) => {
     return updateSkill(params);
-  });
+  }));
 
-  ipcMain.handle("skill:delete", async (_, id: number) => {
+  ipcMain.handle("skill:delete", guarded("skill:delete", async (_, id: number) => {
     return deleteSkill(id);
-  });
+  }));
 
   // ── Search / Match ────────────────────────────────────────────
 
@@ -133,22 +134,22 @@ export function registerSkillHandlers(): void {
 
   ipcMain.handle(
     "skill:publish",
-    async (_, params: SkillPublishRequest) => {
+    guarded("skill:publish", async (_, params: SkillPublishRequest) => {
       // Mark for publishing — actual marketplace upload would call the marketplace API
       const { updateSkill: update } = await import("@/lib/skill_engine");
       return update({
         id: params.skillId,
         enabled: true,
       });
-    },
+    }),
   );
 
-  ipcMain.handle("skill:unpublish", async (_, skillId: number) => {
+  ipcMain.handle("skill:unpublish", guarded("skill:unpublish", async (_, skillId: number) => {
     const { updateSkill: update } = await import("@/lib/skill_engine");
     return update({
       id: skillId,
     });
-  });
+  }));
 
   // ── Import / Export ───────────────────────────────────────────
 
@@ -157,7 +158,7 @@ export function registerSkillHandlers(): void {
     return JSON.stringify(skill, null, 2);
   });
 
-  ipcMain.handle("skill:import", async (_, json: string) => {
+  ipcMain.handle("skill:import", guarded("skill:import", async (_, json: string) => {
     const data = JSON.parse(json);
     return createSkill({
       name: data.name,
@@ -172,7 +173,7 @@ export function registerSkillHandlers(): void {
       examples: data.examples,
       tags: data.tags,
     });
-  });
+  }));
 
   // ── Self-Learning / Bootstrap / Export MD ───────────────────
 
@@ -180,17 +181,17 @@ export function registerSkillHandlers(): void {
     return exportSkillsMarkdown();
   });
 
-  ipcMain.handle("skill:bootstrap", async () => {
+  ipcMain.handle("skill:bootstrap", guarded("skill:bootstrap", async () => {
     return ensureBootstrapSkills();
-  });
+  }));
 
   ipcMain.handle(
     "skill:learn",
-    async (
+    guarded("skill:learn", async (
       _,
       params: { message: string; agentId?: number },
     ) => {
       return learnSkillFromMessage(params.message, params.agentId);
-    },
+    }),
   );
 }

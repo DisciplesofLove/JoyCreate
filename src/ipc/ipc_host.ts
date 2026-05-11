@@ -96,6 +96,7 @@ import { registerModelFactoryHandlers } from "./handlers/model_factory_handlers"
 import { registerHuggingFaceHandlers } from "./handlers/huggingface_handlers";
 import { registerAgentFactoryHandlers } from "./handlers/agent_factory_handlers";
 import { registerSkillHandlers } from "./handlers/skill_handlers";
+import { registerBlueprintHandlers } from "./handlers/blueprint_handlers";
 import { registerWidgetHandlers } from "./handlers/widget_handlers";
 import { registerSchedulerHandlers } from "./handlers/scheduler_handlers";
 import { registerToolMacroHandlers } from "./handlers/tool_macro_handlers";
@@ -162,8 +163,12 @@ import {
   registerTaskExecutorHandlers,
   registerSystemServicesHandlers,
 } from "@/lib/kanban_task_executor";
+import { registerDefaultPolicies } from "@/lib/neural_guard_policy";
 
 export function registerIpcHandlers() {
+  // Neural Guard: register baseline allow-list before any handler runs.
+  // Default action is now "deny" — unguarded channels fail closed.
+  registerDefaultPolicies();
   // Register all IPC handlers by category
   registerAppHandlers();
   registerChatHandlers();
@@ -312,6 +317,9 @@ export function registerIpcHandlers() {
   
   // Skill System - Reusable, marketplace-sellable skills
   registerSkillHandlers();
+
+  // Sovereign Blueprint Engine - YAML DAG with Whitehat intent hashing
+  registerBlueprintHandlers();
 
   // Extensibility surfaces — widgets, scheduler, tool macros, universal tool catalog
   registerWidgetHandlers();

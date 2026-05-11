@@ -2174,6 +2174,11 @@ const validInvokeChannels = [
   "skill:export-md",
   "skill:bootstrap",
   "skill:learn",
+  // Sovereign Blueprint Engine — YAML DAG with Whitehat intent hashing
+  "blueprint:run",
+  "blueprint:cancel",
+  "blueprint:get-run",
+  "blueprint:list-runs",
   // Extensibility surfaces — widgets, scheduler, tool macros, universal tool catalog
   "widget:initialize",
   "widget:list",

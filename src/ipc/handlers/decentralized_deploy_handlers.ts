@@ -9,6 +9,7 @@ import * as path from "path";
 import { app } from "electron";
 import log from "electron-log";
 import { getJoyAppPath } from "@/paths/paths";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import { db } from "../../db";
 import { apps } from "../../db/schema";
 import { eq } from "drizzle-orm";
@@ -709,12 +710,12 @@ export function registerDecentralizedDeployHandlers(): void {
   // Save platform credentials
   ipcMain.handle(
     "decentralized:save-credentials",
-    async (_, platform: DecentralizedPlatform, credentials: PlatformCredentials) => {
+    guarded("decentralized:save-credentials", async (_, platform: DecentralizedPlatform, credentials: PlatformCredentials) => {
       const allCreds = await loadCredentials();
       allCreds[platform] = { ...credentials, platform };
       await saveCredentials(allCreds);
       return { success: true };
-    }
+    })
   );
 
   // Get platform credentials (without sensitive data)
@@ -737,21 +738,21 @@ export function registerDecentralizedDeployHandlers(): void {
   // Remove platform credentials
   ipcMain.handle(
     "decentralized:remove-credentials",
-    async (_, platform: DecentralizedPlatform) => {
+    guarded("decentralized:remove-credentials", async (_, platform: DecentralizedPlatform) => {
       const allCreds = await loadCredentials();
       delete allCreds[platform];
       await saveCredentials(allCreds);
       return { success: true };
-    }
+    })
   );
 
   // Deploy to decentralized platform
   ipcMain.handle(
     "decentralized:deploy",
-    async (_, request: DecentralizedDeployRequest) => {
+    guarded("decentralized:deploy", async (_, request: DecentralizedDeployRequest) => {
       logger.info(`Deploying app ${request.appId} to ${request.platform}`);
       return deployToPlatform(request);
-    }
+    })
   );
 
   // Get deployments for an app

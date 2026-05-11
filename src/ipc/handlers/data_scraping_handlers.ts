@@ -20,6 +20,7 @@ import * as crypto from "crypto";
 import log from "electron-log";
 import { v4 as uuidv4 } from "uuid";
 import { db } from "@/db";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import { eq } from "drizzle-orm";
 import {
   datasetItems,
@@ -384,7 +385,7 @@ export function registerDataScrapingHandlers() {
   /**
    * Scrape and save to dataset
    */
-  ipcMain.handle("scraping:scrape-to-dataset", async (_event, args: {
+  ipcMain.handle("scraping:scrape-to-dataset", guarded("scraping:scrape-to-dataset", async (_event, args: {
     datasetId: string;
     url: string;
     config?: Partial<ScrapingConfig>;
@@ -436,14 +437,14 @@ export function registerDataScrapingHandlers() {
       logger.error("Scrape to dataset failed:", error);
       throw error;
     }
-  });
+  }));
 
   // ========== RSS/Atom Feed to Dataset ==========
 
   /**
    * Scrape RSS feed to dataset
    */
-  ipcMain.handle("scraping:scrape-feed-to-dataset", async (event, args: {
+  ipcMain.handle("scraping:scrape-feed-to-dataset", guarded("scraping:scrape-feed-to-dataset", async (event, args: {
     datasetId: string;
     feedUrl: string;
     scrapeFullContent?: boolean;
@@ -528,14 +529,14 @@ export function registerDataScrapingHandlers() {
       logger.error("Scrape feed to dataset failed:", error);
       throw error;
     }
-  });
+  }));
 
   // ========== API Scraping ==========
 
   /**
    * Scrape paginated API
    */
-  ipcMain.handle("scraping:scrape-api", async (event, args: {
+  ipcMain.handle("scraping:scrape-api", guarded("scraping:scrape-api", async (event, args: {
     datasetId: string;
     config: ScrapingConfig;
   }) => {
@@ -650,14 +651,14 @@ export function registerDataScrapingHandlers() {
       logger.error("Scrape API failed:", error);
       throw error;
     }
-  });
+  }));
 
   // ========== Utilities ==========
 
   /**
    * Extract URLs from page
    */
-  ipcMain.handle("scraping:extract-urls", async (_event, args: {
+  ipcMain.handle("scraping:extract-urls", guarded("scraping:extract-urls", async (_event, args: {
     url: string;
     pattern?: string;
     maxUrls?: number;
@@ -679,7 +680,7 @@ export function registerDataScrapingHandlers() {
       logger.error("Extract URLs failed:", error);
       throw error;
     }
-  });
+  }));
 
   logger.info("Data Scraping handlers registered");
 }

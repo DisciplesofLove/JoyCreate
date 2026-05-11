@@ -7,6 +7,7 @@
  */
 
 import { ipcMain, IpcMainInvokeEvent, shell } from "electron";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import { spawn, ChildProcess, exec, execSync } from "child_process";
 import path from "node:path";
 import fs from "fs-extra";
@@ -756,7 +757,7 @@ export function registerServicesHandlers(): void {
   // Start a service
   ipcMain.handle(
     "services:start",
-    async (_event: IpcMainInvokeEvent, serviceId: ServiceId) => {
+    guarded("services:start", async (_event: IpcMainInvokeEvent, serviceId: ServiceId) => {
       logger.info(`Starting service: ${serviceId}`);
       
       switch (serviceId) {
@@ -769,13 +770,13 @@ export function registerServicesHandlers(): void {
         default:
           throw new Error(`Unknown service: ${serviceId}`);
       }
-    }
+    })
   );
 
   // Stop a service
   ipcMain.handle(
     "services:stop",
-    async (_event: IpcMainInvokeEvent, serviceId: ServiceId) => {
+    guarded("services:stop", async (_event: IpcMainInvokeEvent, serviceId: ServiceId) => {
       logger.info(`Stopping service: ${serviceId}`);
       
       switch (serviceId) {
@@ -788,13 +789,13 @@ export function registerServicesHandlers(): void {
         default:
           throw new Error(`Unknown service: ${serviceId}`);
       }
-    }
+    })
   );
 
   // Restart a service
   ipcMain.handle(
     "services:restart",
-    async (_event: IpcMainInvokeEvent, serviceId: ServiceId) => {
+    guarded("services:restart", async (_event: IpcMainInvokeEvent, serviceId: ServiceId) => {
       logger.info(`Restarting service: ${serviceId}`);
       
       switch (serviceId) {
@@ -813,11 +814,11 @@ export function registerServicesHandlers(): void {
         default:
           throw new Error(`Unknown service: ${serviceId}`);
       }
-    }
+    })
   );
 
   // Start all services
-  ipcMain.handle("services:start:all", async () => {
+  ipcMain.handle("services:start:all", guarded("services:start:all", async () => {
     logger.info("Starting all services...");
     const results = await Promise.all([
       startN8nService(),
@@ -825,10 +826,10 @@ export function registerServicesHandlers(): void {
       startOllamaService(),
     ]);
     return results;
-  });
+  }));
 
   // Stop all services
-  ipcMain.handle("services:stop:all", async () => {
+  ipcMain.handle("services:stop:all", guarded("services:stop:all", async () => {
     logger.info("Stopping all services...");
     const results = await Promise.all([
       stopN8nService(),
@@ -836,7 +837,7 @@ export function registerServicesHandlers(): void {
       stopOllamaService(),
     ]);
     return results;
-  });
+  }));
 
   logger.info("External services handlers registered");
 }

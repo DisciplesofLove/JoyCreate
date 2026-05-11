@@ -202,6 +202,18 @@ export function registerDefaultPolicies(): void {
     // Sovereign Blueprint Engine
     "blueprint:run",
     "blueprint:cancel",
+    // Whitehat MCP Sandbox — Claude Desktop interceptor
+    "whitehat:mcp:respond",
+    "whitehat:mcp:revoke",
+    "whitehat:mcp:simulate",
+    // Left Gauntlet — scraper + verifier pipeline
+    "gauntlet:run",
+    "gauntlet:cancel",
+    "gauntlet:create-session",
+    "gauntlet:delete-session",
+    "gauntlet:test-firecrawl",
+    "gauntlet:test-ollama",
+    "gauntlet:verify-only",
   ];
   for (const c of channels) allow(c);
 }

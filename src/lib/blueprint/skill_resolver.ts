@@ -37,8 +37,9 @@ export interface BuiltinAdapter {
 export const BUILTIN_ADAPTERS: Record<BuiltinAdapterName, BuiltinAdapter> = {
   "firecrawl-deep-scrape": {
     name: "firecrawl-deep-scrape",
-    channel: "scraper:quick-scrape",
-    description: "Local Puppeteer/Firecrawl deep scrape of a target URL with configurable depth.",
+    channel: "gauntlet:run",
+    description:
+      "Left Gauntlet headful scrape: Electron browser → Firecrawl → Whitehat verifier → IPLD anchor.",
   },
   "libreoffice-calc-export": {
     name: "libreoffice-calc-export",

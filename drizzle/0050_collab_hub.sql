@@ -1,4 +1,7 @@
-CREATE TABLE `agent_collab_channels` (
+-- NOTE: This migration was originally a duplicate of 0048 (it recreated the
+-- same agent_collab_* tables). Every statement now uses IF NOT EXISTS so it
+-- is a safe no-op for databases that already applied 0048.
+CREATE TABLE IF NOT EXISTS `agent_collab_channels` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`name` text NOT NULL,
 	`description` text,
@@ -11,8 +14,8 @@ CREATE TABLE `agent_collab_channels` (
 	FOREIGN KEY (`created_by_agent_id`) REFERENCES `agents`(`id`) ON UPDATE no action ON DELETE set null
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `agent_collab_channels_name_unique` ON `agent_collab_channels` (`name`);--> statement-breakpoint
-CREATE TABLE `agent_collab_messages` (
+CREATE UNIQUE INDEX IF NOT EXISTS `agent_collab_channels_name_unique` ON `agent_collab_channels` (`name`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `agent_collab_messages` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`channel_id` integer,
 	`from_agent_id` integer,
@@ -28,7 +31,7 @@ CREATE TABLE `agent_collab_messages` (
 	FOREIGN KEY (`to_agent_id`) REFERENCES `agents`(`id`) ON UPDATE no action ON DELETE set null
 );
 --> statement-breakpoint
-CREATE TABLE `agent_collab_subscriptions` (
+CREATE TABLE IF NOT EXISTS `agent_collab_subscriptions` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`agent_id` integer NOT NULL,
 	`channel_id` integer NOT NULL,
@@ -38,8 +41,8 @@ CREATE TABLE `agent_collab_subscriptions` (
 	FOREIGN KEY (`channel_id`) REFERENCES `agent_collab_channels`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `agent_collab_subscriptions_agent_id_channel_id_unique` ON `agent_collab_subscriptions` (`agent_id`,`channel_id`);--> statement-breakpoint
-CREATE TABLE `agent_collab_tasks` (
+CREATE UNIQUE INDEX IF NOT EXISTS `agent_collab_subscriptions_agent_id_channel_id_unique` ON `agent_collab_subscriptions` (`agent_id`,`channel_id`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `agent_collab_tasks` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`from_agent_id` integer NOT NULL,
 	`to_agent_id` integer NOT NULL,

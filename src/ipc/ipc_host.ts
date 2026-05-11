@@ -97,6 +97,8 @@ import { registerHuggingFaceHandlers } from "./handlers/huggingface_handlers";
 import { registerAgentFactoryHandlers } from "./handlers/agent_factory_handlers";
 import { registerSkillHandlers } from "./handlers/skill_handlers";
 import { registerBlueprintHandlers } from "./handlers/blueprint_handlers";
+import { registerWhitehatMcpHandlers } from "./handlers/whitehat_mcp_handlers";
+import { registerGauntletHandlers } from "./handlers/gauntlet_handlers";
 import { registerWidgetHandlers } from "./handlers/widget_handlers";
 import { registerSchedulerHandlers } from "./handlers/scheduler_handlers";
 import { registerToolMacroHandlers } from "./handlers/tool_macro_handlers";
@@ -320,6 +322,10 @@ export function registerIpcHandlers() {
 
   // Sovereign Blueprint Engine - YAML DAG with Whitehat intent hashing
   registerBlueprintHandlers();
+
+  // Whitehat MCP Sandbox - intercepts Claude Desktop MCP traffic
+  registerWhitehatMcpHandlers();
+  registerGauntletHandlers();
 
   // Extensibility surfaces — widgets, scheduler, tool macros, universal tool catalog
   registerWidgetHandlers();

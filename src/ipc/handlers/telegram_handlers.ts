@@ -19,8 +19,9 @@ import {
   runPublishCommand,
 } from "@/lib/joymarketplace/bot_publish_commands";
 import { homedir } from "node:os";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readSettings } from "@/main/settings";
 
 const logger = log.scope("telegram-ipc");
 
@@ -727,6 +728,38 @@ You don't just talk about doing things — you actually do them. When someone as
 // AUTO-START HELPER — called from main.ts after app is ready
 // =============================================================================
 
+/**
+ * Surgically disable the OpenClaw daemon's Telegram channel via a text-level
+ * edit. We don't `JSON.stringify` because that strips BOM and reformats the
+ * config (a known truncation bug — see /memories/repo/openclaw-config.md).
+ *
+ * Returns `true` if the file was changed, `false` if it was already disabled
+ * or the regex didn't match.
+ */
+function disableDaemonTelegramChannel(): boolean {
+  try {
+    const daemonConfigPath = join(homedir(), ".openclaw", "openclaw.json");
+    if (!existsSync(daemonConfigPath)) return false;
+    const raw = readFileSync(daemonConfigPath, "utf8");
+    // Match the `"telegram": { ... "enabled": true ... }` block. The
+    // `[^{}]*?` keeps us inside the immediate object body.
+    const next = raw.replace(
+      /("telegram"\s*:\s*\{[^{}]*?"enabled"\s*:\s*)true/,
+      "$1false",
+    );
+    if (next === raw) return false;
+    writeFileSync(daemonConfigPath, next, "utf8");
+    logger.info(
+      "Disabled daemon Telegram channel in openclaw.json (text-level edit). " +
+        "Restart the daemon to release the bot token.",
+    );
+    return true;
+  } catch (err) {
+    logger.warn("Failed to disable daemon Telegram channel:", err);
+    return false;
+  }
+}
+
 export async function tryAutoStartTelegramBot(): Promise<void> {
   try {
     // Resolve the token FIRST — we need it both for daemon-skip and local-start paths
@@ -774,8 +807,33 @@ export async function tryAutoStartTelegramBot(): Promise<void> {
       logger.info("Local Telegram bot pre-configured (standby for watchdog fallback)");
     }
 
-    // If the daemon is running AND explicitly handling Telegram, skip starting
-    // the local poller to avoid 409 "Conflict" errors from two pollers on the same token.
+    // Decide ownership. Default = "local" so JoyCreate's in-process bot
+    // (with full IPC + tool access) handles Telegram. The OpenClaw daemon's
+    // Telegram channel is suppressed to avoid 409 conflicts on getUpdates.
+    const settings = readSettings();
+    const owner: "local" | "daemon" = settings.telegramOwner ?? "local";
+
+    if (owner === "local") {
+      // Suppress the daemon's poller so we don't fight over the token.
+      const changed = disableDaemonTelegramChannel();
+      if (changed) {
+        logger.warn(
+          "Daemon Telegram was enabled — patched config to disable it. " +
+            "Existing daemon process is still polling until restarted; " +
+            "expect transient 409 reclaim attempts on the local bot until then.",
+        );
+      }
+      if (!bot.getStatus().running) {
+        await bot.configure({ token, enabled: true });
+        logger.info(
+          `Telegram bot auto-started (owner=local): @${bot.getStatus().botUsername}`,
+        );
+      }
+      return;
+    }
+
+    // owner === "daemon": legacy behavior — defer to the daemon if it has
+    // Telegram enabled, otherwise fall through and start local.
     if (gw.isBridged()) {
       // Check 1: daemon health endpoint for telegram status
       try {

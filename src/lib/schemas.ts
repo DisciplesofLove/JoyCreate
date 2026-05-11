@@ -351,6 +351,18 @@ export const UserSettingsSchema = z.object({
   voiceMcpToolsAllow: z.array(z.string()).optional(),
 
   ////////////////////////////////
+  // TELEGRAM BOT OWNERSHIP
+  ////////////////////////////////
+  /**
+   * Which process owns the Telegram bot's getUpdates polling.
+   * - `"local"` (default): JoyCreate's in-process bot owns polling so it can
+   *   call IPC handlers and execute tools. The OpenClaw daemon's Telegram
+   *   channel is suppressed to avoid 409 conflicts.
+   * - `"daemon"`: the OpenClaw daemon owns Telegram (legacy behavior).
+   */
+  telegramOwner: z.enum(["local", "daemon"]).optional(),
+
+  ////////////////////////////////
   // E2E TESTING ONLY.
   ////////////////////////////////
   isTestMode: z.boolean().optional(),

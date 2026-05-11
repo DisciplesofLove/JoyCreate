@@ -67,6 +67,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "@tanstack/react-router";
 import { useMcp, type Transport } from "@/hooks/useMcp";
+import { WhitehatMcpPanel } from "@/components/mcp/WhitehatMcpPanel";
 import { useEnsureN8nMcpTrigger } from "@/hooks/useEnsureN8nMcpTrigger";
 import type { McpServerStatusInfo } from "@/ipc/ipc_types";
 import { showError, showSuccess } from "@/lib/toast";
@@ -141,7 +142,7 @@ const McpHubPage: React.FC = () => {
   const ensureN8nTrigger = useEnsureN8nMcpTrigger();
 
   const [topTab, setTopTab] = useState<
-    "my-servers" | "registry" | "custom" | "resources" | "prompts"
+    "my-servers" | "registry" | "custom" | "resources" | "prompts" | "whitehat"
   >("my-servers");
   const [otherSettingsOpen, setOtherSettingsOpen] = useState(false);
   // Resource viewer dialog
@@ -512,6 +513,10 @@ const McpHubPage: React.FC = () => {
             <TabsTrigger value="prompts" className="gap-2">
               <MessageSquare className="h-4 w-4" />
               Prompts
+            </TabsTrigger>
+            <TabsTrigger value="whitehat" className="gap-2">
+              <Shield className="h-4 w-4" />
+              Whitehat
             </TabsTrigger>
           </TabsList>
 
@@ -1085,6 +1090,11 @@ const McpHubPage: React.FC = () => {
                 );
               })
             )}
+          </TabsContent>
+
+          {/* ═══════════ WHITEHAT ═══════════ */}
+          <TabsContent value="whitehat" className="mt-0">
+            <WhitehatMcpPanel />
           </TabsContent>
         </Tabs>
       </div>

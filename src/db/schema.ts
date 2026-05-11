@@ -2591,6 +2591,54 @@ export const openclawChannelMessages = sqliteTable("openclaw_channel_messages", 
     .default(sql`(unixepoch())`),
 });
 
+// =============================================================================
+// WHITEHAT MCP SANDBOX — gates Claude Desktop's MCP traffic against approved
+// invocation hashes (SHA-256 over canonical {server, tool, args} manifests).
+// =============================================================================
+
+export const whitehatMcpAllowlist = sqliteTable(
+  "whitehat_mcp_allowlist",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    serverName: text("server_name").notNull(),
+    toolName: text("tool_name").notNull(),
+    /** SHA-256 of {server, tool, canonicalize(args)} — 64 lowercase hex. */
+    invocationHash: text("invocation_hash").notNull(),
+    /** Optional human-readable label. */
+    label: text("label"),
+    /** "once" entries are revoked after first use; "always" persist. */
+    scope: text("scope", { enum: ["once", "always"] })
+      .notNull()
+      .default("always"),
+    grantedBy: text("granted_by"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
+  },
+  (t) => ({
+    uniqHash: unique().on(t.serverName, t.toolName, t.invocationHash),
+  }),
+);
+
+export const whitehatMcpAudit = sqliteTable("whitehat_mcp_audit", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  serverName: text("server_name").notNull(),
+  toolName: text("tool_name").notNull(),
+  invocationHash: text("invocation_hash").notNull(),
+  argsJson: text("args_json", { mode: "json" }).$type<unknown>(),
+  decision: text("decision", {
+    enum: ["allow", "deny", "pending", "approved", "revoked"],
+  }).notNull(),
+  reason: text("reason"),
+  /** rpcId from the JSON-RPC request, when known. */
+  rpcId: text("rpc_id"),
+  blueprintRunId: text("blueprint_run_id"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
 // ─── Calendar ─────────────────────────────────────────────────────────────────
 
 /**
@@ -2771,14 +2819,14 @@ export const agentCollabTasks = sqliteTable("agent_collab_tasks", {
 });
 
 // =============================================================================
-// SOVEREIGN BLUEPRINT � run state (Phase D of blueprint engine plan)
+// SOVEREIGN BLUEPRINT � run state (Phase D of blueprint engine plan)
 // =============================================================================
 
 export const blueprintRuns = sqliteTable("blueprint_runs", {
   id: text("id").primaryKey(),
   blueprintId: text("blueprint_id").notNull(),
   blueprintVersion: text("blueprint_version").notNull(),
-  /** SHA-256 of the entire raw YAML � tamper detection across runs. */
+  /** SHA-256 of the entire raw YAML � tamper detection across runs. */
   manifestHash: text("manifest_hash").notNull(),
   agentDid: text("agent_did").notNull(),
   status: text("status", {
@@ -2822,3 +2870,69 @@ export interface BlueprintNodeRunState {
   startedAt?: number;
   completedAt?: number;
 }
+
+// === Left Gauntlet ==========================================================
+
+/**
+ * Saved encrypted browser sessions captured by the Left Gauntlet. The cookie
+ * jar itself lives encrypted on disk under
+ * `userData/gauntlet/sessions/<id>.bin`; this table just holds metadata.
+ */
+export const gauntletSessions = sqliteTable("gauntlet_sessions", {
+  id: text("id").primaryKey(),
+  label: text("label").notNull(),
+  /** URL pattern (e.g. "https://twitter.com/*") this session targets. */
+  originPattern: text("origin_pattern").notNull(),
+  lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * History of every Gauntlet pipeline run.
+ */
+export const gauntletRuns = sqliteTable("gauntlet_runs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id").notNull().unique(),
+  blueprintId: text("blueprint_id"),
+  sessionId: text("session_id"),
+  targetUrl: text("target_url").notNull(),
+  intent: text("intent").notNull(),
+  status: text("status", {
+    enum: ["queued", "running", "succeeded", "failed", "denied", "cancelled"],
+  })
+    .notNull()
+    .default("queued"),
+  /** Hex SHA-256 of the clean Markdown — deterministic content id. */
+  markdownCid: text("markdown_cid"),
+  markdownPath: text("markdown_path"),
+  integrityScore: real("integrity_score"),
+  durationMs: integer("duration_ms"),
+  errorCode: text("error_code"),
+  errorMessage: text("error_message"),
+  screenshotPath: text("screenshot_path"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+});
+
+/**
+ * Per-stage decisions for one Gauntlet run (infiltrate / extract / sanitize /
+ * anchor / verifier).
+ */
+export const gauntletAudit = sqliteTable("gauntlet_audit", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id").notNull(),
+  stage: text("stage", {
+    enum: ["infiltrate", "extract", "sanitize", "anchor", "verifier"],
+  }).notNull(),
+  decision: text("decision", { enum: ["allow", "deny", "strip"] }).notNull(),
+  reason: text("reason"),
+  score: real("score"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+

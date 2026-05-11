@@ -23,6 +23,8 @@ interface ClientEntry {
 }
 
 const RECONNECT_DELAY_MS = 5_000;
+const RECONNECT_MAX_DELAY_MS = 5 * 60_000; // 5 minutes
+const RECONNECT_MAX_ATTEMPTS = 10;
 
 export class McpHubManager extends EventEmitter {
   private static _instance: McpHubManager | undefined;
@@ -34,6 +36,7 @@ export class McpHubManager extends EventEmitter {
   private clients = new Map<number, ClientEntry>();
   private statuses = new Map<number, McpServerStatusInfo>();
   private reconnectTimers = new Map<number, NodeJS.Timeout>();
+  private reconnectAttempts = new Map<number, number>();
   // Optional injection point for tests: pre-built transports keyed by serverId.
   private transportOverrides = new Map<number, Transport>();
 
@@ -175,6 +178,7 @@ export class McpHubManager extends EventEmitter {
     }
 
     this.clients.set(serverId, { client, transport });
+    this.reconnectAttempts.delete(serverId);
     this.setStatus({
       serverId,
       status: "connected",
@@ -184,12 +188,33 @@ export class McpHubManager extends EventEmitter {
 
   private scheduleReconnect(serverId: number): void {
     if (this.reconnectTimers.has(serverId)) return;
+    const attempt = (this.reconnectAttempts.get(serverId) ?? 0) + 1;
+    if (attempt > RECONNECT_MAX_ATTEMPTS) {
+      logger.warn(
+        `MCP ${serverId}: giving up auto-reconnect after ${RECONNECT_MAX_ATTEMPTS} attempts. Reconnect manually from the MCP Hub UI.`,
+      );
+      this.reconnectAttempts.delete(serverId);
+      this.setStatus({
+        serverId,
+        status: "error",
+        error: `Auto-reconnect gave up after ${RECONNECT_MAX_ATTEMPTS} attempts`,
+      });
+      return;
+    }
+    this.reconnectAttempts.set(serverId, attempt);
+    const delay = Math.min(
+      RECONNECT_DELAY_MS * 2 ** (attempt - 1),
+      RECONNECT_MAX_DELAY_MS,
+    );
     const timer = setTimeout(() => {
       this.reconnectTimers.delete(serverId);
       this.connect(serverId).catch((err) => {
-        logger.warn(`Auto-reconnect for MCP ${serverId} failed:`, err);
+        logger.warn(
+          `Auto-reconnect for MCP ${serverId} (attempt ${attempt}) failed:`,
+          err,
+        );
       });
-    }, RECONNECT_DELAY_MS);
+    }, delay);
     this.reconnectTimers.set(serverId, timer);
   }
 
@@ -199,6 +224,7 @@ export class McpHubManager extends EventEmitter {
       clearTimeout(t);
       this.reconnectTimers.delete(serverId);
     }
+    this.reconnectAttempts.delete(serverId);
   }
 
   /**

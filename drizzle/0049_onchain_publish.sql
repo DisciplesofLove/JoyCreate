@@ -23,5 +23,4 @@ CREATE TABLE `onchain_publish_bundles` (
 -- migration 0028, never modeled in the current schema). We intentionally keep that
 -- table in place to avoid data loss — nothing in the runtime touches it anymore,
 -- and a future migration can clean it up explicitly if/when desired.
---> statement-breakpoint
 ALTER TABLE `agents` ADD `dry_run_at` integer;

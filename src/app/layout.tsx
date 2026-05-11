@@ -9,6 +9,7 @@ import { AssistantContextProvider } from "@/components/joy-assistant/AssistantCo
 import { JoyAssistantPanel } from "@/components/joy-assistant/JoyAssistantPanel";
 import { JoyAssistantBoundary } from "@/components/joy-assistant/JoyAssistantBoundary";
 import { VoiceCommandOverlay } from "@/components/voice-command/VoiceCommandOverlay";
+import { WhitehatMcpApprovalDialog } from "@/components/mcp/WhitehatMcpApprovalDialog";
 import { useRunApp } from "@/hooks/useRunApp";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
@@ -105,6 +106,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <VoiceCommandOverlay />
             </AssistantContextProvider>
             <Toaster richColors />
+            <WhitehatMcpApprovalDialog />
           </SidebarProvider>
         </DeepLinkProvider>
       </ThemeProvider>

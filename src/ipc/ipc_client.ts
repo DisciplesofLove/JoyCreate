@@ -157,6 +157,130 @@ export interface GitHubDeviceFlowErrorData {
   error: string;
 }
 
+export interface WhitehatMcpPendingEntry {
+  id: number;
+  serverName: string;
+  toolName: string;
+  invocationHash: string;
+  args: unknown;
+  rpcId: string | number | null;
+  createdAt: number;
+}
+
+export interface WhitehatMcpAllowlistRow {
+  id: number;
+  serverName: string;
+  toolName: string;
+  invocationHash: string;
+  label: string | null;
+  scope: "once" | "always";
+  grantedBy: string | null;
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
+export interface WhitehatMcpAuditRow {
+  id: number;
+  serverName: string;
+  toolName: string;
+  invocationHash: string;
+  argsJson: unknown;
+  decision: "allow" | "deny" | "pending" | "approved" | "revoked";
+  reason: string | null;
+  rpcId: string | null;
+  blueprintRunId: string | null;
+  createdAt: number;
+}
+
+// ── Left Gauntlet ─────────────────────────────────────────────────────────
+export type GauntletStage = "infiltrate" | "extract" | "sanitize" | "anchor";
+export type GauntletRunStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "denied"
+  | "cancelled";
+
+export interface GauntletProgressEvent {
+  runId: string;
+  stage: GauntletStage;
+  progress: number;
+  message: string;
+  timestamp: number;
+}
+
+export interface GauntletRunRow {
+  id: number;
+  runId: string;
+  blueprintId: string | null;
+  sessionId: string | null;
+  targetUrl: string;
+  intent: string;
+  status: GauntletRunStatus;
+  markdownCid: string | null;
+  markdownPath: string | null;
+  integrityScore: number | null;
+  durationMs: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  screenshotPath: string | null;
+  createdAt: number;
+  completedAt: number | null;
+}
+
+export interface GauntletAuditRow {
+  id: number;
+  runId: string;
+  stage: GauntletStage | "verifier";
+  decision: "allow" | "deny" | "strip";
+  reason: string | null;
+  score: number | null;
+  createdAt: number;
+}
+
+export interface GauntletSessionRow {
+  id: string;
+  label: string;
+  originPattern: string;
+  lastUsedAt: number | null;
+  createdAt: number;
+}
+
+export interface GauntletRunDetail extends GauntletRunRow {
+  markdown: string | null;
+  audit: GauntletAuditRow[];
+}
+
+export interface GauntletRunInput {
+  targetUrl: string;
+  intentText: string;
+  blueprintId?: string;
+  sessionId?: string;
+  hijackThreshold?: number;
+  verifierModel?: string;
+}
+
+export interface GauntletRunResult {
+  runId: string;
+  status: GauntletRunStatus;
+  markdownCid?: string;
+  markdownPath?: string;
+  integrityScore?: number;
+  durationMs: number;
+  screenshotPath?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface GauntletVerifierResult {
+  safe: boolean;
+  score: number;
+  hijackProbability: number;
+  reason: string;
+  strippedHidden: boolean;
+}
+
 interface DeleteCustomModelParams {
   providerId: string;
   modelApiName: string;
@@ -193,6 +317,12 @@ export class IpcClient {
   >;
   private forceCloseHandlers: Set<(data: any) => void>;
   private agentBlueprintHandlers: Set<(data: { chatId: number; blueprint: any; intent: any }) => void>;
+  private whitehatMcpPendingHandlers: Set<
+    (entry: WhitehatMcpPendingEntry) => void
+  >;
+  private gauntletProgressHandlers: Set<
+    (evt: GauntletProgressEvent) => void
+  >;
   private constructor() {
     this.ipcRenderer = ((window as any).electron?.ipcRenderer ?? {
       invoke: async (..._args: any[]) => null,
@@ -213,6 +343,8 @@ export class IpcClient {
     this.githubFlowErrorHandlers = new Set();
     this.forceCloseHandlers = new Set();
     this.agentBlueprintHandlers = new Set();
+    this.whitehatMcpPendingHandlers = new Set();
+    this.gauntletProgressHandlers = new Set();
     // Set up listeners for stream events
     this.ipcRenderer.on("chat:response:chunk", (data) => {
       if (
@@ -320,6 +452,34 @@ export class IpcClient {
       ) {
         for (const handler of this.agentBlueprintHandlers) {
           handler(data as unknown as { chatId: number; blueprint: any; intent: any });
+        }
+      }
+    });
+
+    // Whitehat MCP — pending approval requests from the sandbox proxy
+    this.ipcRenderer.on("whitehat:mcp:pending", (data) => {
+      if (
+        data &&
+        typeof data === "object" &&
+        "id" in data &&
+        "invocationHash" in data
+      ) {
+        for (const handler of this.whitehatMcpPendingHandlers) {
+          handler(data as unknown as WhitehatMcpPendingEntry);
+        }
+      }
+    });
+
+    // Left Gauntlet — stage progress events
+    this.ipcRenderer.on("gauntlet:progress", (data) => {
+      if (
+        data &&
+        typeof data === "object" &&
+        "runId" in data &&
+        "stage" in data
+      ) {
+        for (const handler of this.gauntletProgressHandlers) {
+          handler(data as unknown as GauntletProgressEvent);
         }
       }
     });
@@ -4775,5 +4935,106 @@ export class IpcClient {
     replyToMessageId?: string;
   }): Promise<unknown> {
     return this.ipcRenderer.invoke("discord:send-message", params);
+  }
+
+  // ===========================================================================
+  // Whitehat MCP Sandbox — Claude Desktop interceptor surface
+  // ===========================================================================
+
+  public onWhitehatMcpPending(
+    handler: (entry: WhitehatMcpPendingEntry) => void,
+  ): () => void {
+    this.whitehatMcpPendingHandlers.add(handler);
+    return () => {
+      this.whitehatMcpPendingHandlers.delete(handler);
+    };
+  }
+
+  public async listWhitehatMcpPending(): Promise<WhitehatMcpPendingEntry[]> {
+    return this.ipcRenderer.invoke("whitehat:mcp:list-pending");
+  }
+
+  public async listWhitehatMcpAllowlist(): Promise<WhitehatMcpAllowlistRow[]> {
+    return this.ipcRenderer.invoke("whitehat:mcp:list-allowlist");
+  }
+
+  public async listWhitehatMcpAudit(
+    limit = 100,
+  ): Promise<WhitehatMcpAuditRow[]> {
+    return this.ipcRenderer.invoke("whitehat:mcp:list-audit", limit);
+  }
+
+  public async respondWhitehatMcp(
+    id: number,
+    choice: "once" | "always" | "deny",
+  ): Promise<{ ok: true }> {
+    return this.signAndInvoke("whitehat:mcp:respond", { id, choice });
+  }
+
+  public async revokeWhitehatMcp(id: number): Promise<{ ok: true }> {
+    return this.signAndInvoke("whitehat:mcp:revoke", { id });
+  }
+
+  // ===========================================================================
+  // Left Gauntlet — Puppeteer + Firecrawl + Whitehat scraper
+  // ===========================================================================
+
+  public onGauntletProgress(
+    handler: (evt: GauntletProgressEvent) => void,
+  ): () => void {
+    this.gauntletProgressHandlers.add(handler);
+    return () => {
+      this.gauntletProgressHandlers.delete(handler);
+    };
+  }
+
+  public async runGauntlet(input: GauntletRunInput): Promise<GauntletRunResult> {
+    return this.signAndInvoke("gauntlet:run", input);
+  }
+
+  public async cancelGauntlet(runId: string): Promise<{ ok: true }> {
+    return this.signAndInvoke("gauntlet:cancel", { runId });
+  }
+
+  public async listGauntletRuns(limit = 100): Promise<GauntletRunRow[]> {
+    return this.ipcRenderer.invoke("gauntlet:list-runs", limit);
+  }
+
+  public async getGauntletRun(
+    runId: string,
+  ): Promise<GauntletRunDetail | null> {
+    return this.ipcRenderer.invoke("gauntlet:get-run", runId);
+  }
+
+  public async listGauntletSessions(): Promise<GauntletSessionRow[]> {
+    return this.ipcRenderer.invoke("gauntlet:list-sessions");
+  }
+
+  public async createGauntletSession(input: {
+    label: string;
+    originPattern: string;
+    loginUrl: string;
+  }): Promise<GauntletSessionRow> {
+    return this.signAndInvoke("gauntlet:create-session", input);
+  }
+
+  public async deleteGauntletSession(id: string): Promise<{ ok: true }> {
+    return this.signAndInvoke("gauntlet:delete-session", { id });
+  }
+
+  public async testGauntletFirecrawl(): Promise<{ ok: true }> {
+    return this.signAndInvoke("gauntlet:test-firecrawl", {});
+  }
+
+  public async testGauntletOllama(): Promise<{ ok: true; models: string[] }> {
+    return this.signAndInvoke("gauntlet:test-ollama", {});
+  }
+
+  public async verifyGauntletMarkdown(input: {
+    markdown: string;
+    intent: string;
+    model?: string;
+  }): Promise<GauntletVerifierResult> {
+    return this.signAndInvoke("gauntlet:verify-only", input);
   }
 }

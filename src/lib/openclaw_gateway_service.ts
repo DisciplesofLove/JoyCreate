@@ -601,19 +601,35 @@ export class OpenClawGatewayService extends EventEmitter {
     this.externalGatewayAlive = true;
     this.state.connectedAt = this.state.connectedAt || Date.now();
 
-    // If the daemon's config has Telegram enabled, stop the local bot to avoid
-    // 409 Conflict loops from two pollers on the same token.
+    // If the daemon's config has Telegram enabled, decide whether to stop the
+    // local bot (legacy "daemon owns Telegram" behavior) or stop the daemon's
+    // poller (new default — local bot owns Telegram so it can call IPC tools).
     try {
       const daemonConfigPath = path.join(app.getPath("home"), ".openclaw", "openclaw.json");
       if (nodeFs.existsSync(daemonConfigPath)) {
         const raw = nodeFs.readFileSync(daemonConfigPath, "utf8").replace(/^\uFEFF/, "");
         const daemonCfg = JSON.parse(raw);
         if (daemonCfg?.channels?.telegram?.enabled && daemonCfg?.channels?.telegram?.botToken) {
-          const { getTelegramBot } = await import("@/lib/telegram_bot_service");
-          const localBot = getTelegramBot();
-          if (localBot.getStatus().running) {
-            logger.info("Stopping local Telegram bot — daemon handles Telegram");
-            await localBot.stop();
+          // Resolve ownership preference. Default = "local".
+          let owner: "local" | "daemon" = "local";
+          try {
+            const { readSettings } = await import("@/main/settings");
+            owner = readSettings().telegramOwner ?? "local";
+          } catch {
+            // settings unavailable — fall back to safe default
+          }
+          if (owner === "daemon") {
+            const { getTelegramBot } = await import("@/lib/telegram_bot_service");
+            const localBot = getTelegramBot();
+            if (localBot.getStatus().running) {
+              logger.info("Stopping local Telegram bot — daemon handles Telegram (telegramOwner=daemon)");
+              await localBot.stop();
+            }
+          } else {
+            logger.info(
+              "telegramOwner=local — leaving local Telegram bot running. " +
+                "tryAutoStartTelegramBot will patch the daemon config to disable its Telegram channel.",
+            );
           }
         }
       }

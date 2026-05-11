@@ -4,7 +4,7 @@ import { isPreviewOpenAtom } from "@/atoms/viewAtoms";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useSettings } from "@/hooks/useSettings";
 // @ts-ignore
-import customLogo from "../../assets/smileyone.png";
+import customLogo from "../../assets/icon/logo.png";
 import { useDeepLink } from "@/contexts/DeepLinkContext";
 import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "@/contexts/ThemeContext";

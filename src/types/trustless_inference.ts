@@ -140,6 +140,14 @@ export interface InferenceRecord {
   pinned: boolean;
   verified: boolean;
   createdAt: number;
+  /** Celestia DA anchor — height of the block that contains the record's anchor blob */
+  celestiaHeight?: number;
+  /** Celestia DA commitment / hash for the anchored blob */
+  celestiaCommitment?: string;
+  /** Base64 namespace under which the record was anchored */
+  celestiaNamespace?: string;
+  /** ISO-8601 timestamp of when the record was anchored */
+  celestiaAnchoredAt?: string;
 }
 
 // ============================================================================

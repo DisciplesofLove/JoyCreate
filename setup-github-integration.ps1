@@ -192,7 +192,7 @@ pnpm install
 npm run dev
 
 # Start n8n (in separate terminal)
-npx n8n start
+npx n8n
 
 # Start OpenClaw Gateway (if not auto-started)
 openclaw gateway start

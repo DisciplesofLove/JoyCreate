@@ -457,6 +457,9 @@ export function registerLibraryHandlers() {
       db.update(libraryItems)
         .set({
           storageTier: "celestia",
+          celestiaHeight: result.height,
+          celestiaCommitment: result.commitment,
+          celestiaNamespace: result.namespace,
           updatedAt: new Date(),
         })
         .where(eq(libraryItems.id, params.id))
@@ -465,6 +468,8 @@ export function registerLibraryHandlers() {
       return {
         contentHash: result.contentHash,
         height: result.height,
+        commitment: result.commitment,
+        namespace: result.namespace,
         ...(encryptionKey ? { encryptionKeyHex: encryptionKey.toString("hex") } : {}),
       };
     },

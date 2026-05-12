@@ -82,6 +82,7 @@ import { teamRoute } from "./routes/team";
 import { imageStudioRoute } from "./routes/image-studio";
 import { videoStudioRoute } from "./routes/video-studio";
 import { ssiCredentialsRoute } from "./routes/ssi-credentials";
+import { sovereignForgeRoute } from "./routes/sovereign-forge";
 import { creatorProfileRoute } from "./routes/creator-profile";
 import { agenticOSRoute } from "./routes/agentic-os";
 import { automationOrchestratorRoute } from "./routes/automation-orchestrator";
@@ -177,6 +178,7 @@ const routeTree = rootRoute.addChildren([
   imageStudioRoute,
   videoStudioRoute,
   ssiCredentialsRoute,
+  sovereignForgeRoute,
   creatorProfileRoute,
   agenticOSRoute,
   automationOrchestratorRoute,

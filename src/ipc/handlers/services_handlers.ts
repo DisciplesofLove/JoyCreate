@@ -51,7 +51,7 @@ function resolveNodeCli(name: "npx" | "npm" | "node"): string {
 // SERVICE TYPES
 // =============================================================================
 
-export type ServiceId = "n8n" | "celestia" | "ollama";
+export type ServiceId = "n8n" | "celestia" | "ollama" | "radicle";
 
 export interface ServiceStatus {
   id: ServiceId;
@@ -100,6 +100,15 @@ const SERVICE_CONFIGS: Record<ServiceId, ServiceConfig> = {
     description: "Local LLM inference server",
     port: 11434,
     healthCheckUrl: "http://localhost:11434/api/tags",
+  },
+  radicle: {
+    id: "radicle",
+    name: "Radicle P2P Node",
+    description: "Sovereign peer-to-peer Git network (Heartwood)",
+    port: 8776,
+    // Radicle exposes an HTTP API on 8080 by default and a gossip port on 8776.
+    // Prefer the HTTP API for health checks.
+    healthCheckUrl: "http://127.0.0.1:8080/api/v1/node",
   },
 };
 
@@ -306,7 +315,7 @@ async function startN8nService(): Promise<ServiceStatus> {
         `set "DB_POSTGRESDB_CONNECTION_TIMEOUT=60000"`,
         `set "N8N_PORT=${config.port}"`,
         `set "N8N_SECURE_COOKIE=false"`,
-        `${n8nLauncher} start`,
+        `${n8nLauncher}`,
       ].join(" && ");
     } else {
       logger.info("PostgreSQL not available \u2014 using SQLite backend");
@@ -318,7 +327,7 @@ async function startN8nService(): Promise<ServiceStatus> {
         `set "N8N_PORT=${config.port}"`,
         `set "N8N_SECURE_COOKIE=false"`,
         `set "N8N_USER_FOLDER=${path.join(getUserDataPath(), "n8n")}"`,
-        `${n8nLauncher} start`,
+        `${n8nLauncher}`,
       ].join(" && ");
     }
     
@@ -662,6 +671,174 @@ async function stopOllamaService(): Promise<ServiceStatus> {
   };
 }
 
+// =============================================================================
+// RADICLE SIDECAR
+// =============================================================================
+
+/**
+ * Resolve the absolute path to the `rad` CLI. Looks in common per-user install
+ * locations (the official Radicle installer drops it under ~/.radicle/bin),
+ * then falls back to PATH lookup via `where`/`which`.
+ */
+export function resolveRadicleBinary(): string | null {
+  const ext = process.platform === "win32" ? ".exe" : "";
+  const candidates: string[] = [];
+
+  if (process.platform === "win32") {
+    const home = process.env.USERPROFILE || "";
+    candidates.push(path.join(home, ".radicle", "bin", `rad${ext}`));
+    candidates.push(path.join(home, ".cargo", "bin", `rad${ext}`));
+  } else {
+    const home = process.env.HOME || "";
+    candidates.push(path.join(home, ".radicle", "bin", "rad"));
+    candidates.push(path.join(home, ".cargo", "bin", "rad"));
+    candidates.push("/usr/local/bin/rad");
+    candidates.push("/opt/homebrew/bin/rad");
+  }
+
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+
+  try {
+    const whichCmd = process.platform === "win32" ? "where rad" : "which rad";
+    const out = execSync(whichCmd, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const first = out.split(/\r?\n/)[0];
+    if (first && fs.existsSync(first)) return first;
+  } catch {
+    // not on PATH
+  }
+
+  return null;
+}
+
+export function getRadicleHomePath(): string {
+  const home =
+    process.platform === "win32"
+      ? process.env.USERPROFILE || ""
+      : process.env.HOME || "";
+  return process.env.RAD_HOME || path.join(home, ".radicle");
+}
+
+async function startRadicleService(): Promise<ServiceStatus> {
+  const config = SERVICE_CONFIGS.radicle;
+
+  // Already healthy?
+  if (config.healthCheckUrl && (await checkServiceHealth(config.healthCheckUrl))) {
+    logger.info("Radicle node already running");
+    return {
+      id: "radicle",
+      name: config.name,
+      running: true,
+      port: config.port,
+      startedAt: serviceStartTimes.get("radicle"),
+    };
+  }
+
+  const radBin = resolveRadicleBinary();
+  if (!radBin) {
+    return {
+      id: "radicle",
+      name: config.name,
+      running: false,
+      error:
+        "Radicle CLI (`rad`) not found. Install from https://radicle.xyz, then restart.",
+    };
+  }
+
+  // Require an identity to exist before starting the node.
+  const radHome = getRadicleHomePath();
+  const keysDir = path.join(radHome, "keys");
+  if (!fs.existsSync(path.join(keysDir, "radicle"))) {
+    return {
+      id: "radicle",
+      name: config.name,
+      running: false,
+      error:
+        "No Radicle identity found. Create one via the Sovereign Network panel before starting the node.",
+    };
+  }
+
+  try {
+    logger.info("Starting Radicle node...");
+    const radCommand = [
+      `echo Starting Radicle node...`,
+      `set "RAD_HOME=${radHome}"`,
+      `"${radBin}" node start`,
+    ].join(" && ");
+    launchInExternalTerminal("Radicle P2P Node", radCommand);
+
+    serviceStartTimes.set("radicle", Date.now());
+
+    let attempts = 0;
+    while (attempts < 20) {
+      await new Promise((r) => setTimeout(r, 1500));
+      if (
+        config.healthCheckUrl &&
+        (await checkServiceHealth(config.healthCheckUrl))
+      ) {
+        logger.info("Radicle node started successfully");
+        return {
+          id: "radicle",
+          name: config.name,
+          running: true,
+          port: config.port,
+          startedAt: serviceStartTimes.get("radicle"),
+        };
+      }
+      attempts++;
+    }
+
+    return {
+      id: "radicle",
+      name: config.name,
+      running: false,
+      port: config.port,
+      error: "Service starting... check the terminal window",
+    };
+  } catch (error) {
+    logger.error("Failed to start Radicle node:", error);
+    return {
+      id: "radicle",
+      name: config.name,
+      running: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+async function stopRadicleService(): Promise<ServiceStatus> {
+  const config = SERVICE_CONFIGS.radicle;
+  const radBin = resolveRadicleBinary();
+
+  logger.info("Stopping Radicle node...");
+
+  if (radBin) {
+    try {
+      execSync(`"${radBin}" node stop`, { stdio: "ignore", timeout: 10_000 });
+    } catch {
+      // fall through to taskkill
+    }
+  }
+
+  if (process.platform === "win32") {
+    try {
+      execSync(
+        'taskkill /FI "WINDOWTITLE eq JoyCreate - Radicle P2P Node*" /F',
+        { stdio: "ignore" }
+      );
+    } catch {
+      // window may not exist
+    }
+  }
+
+  serviceStartTimes.delete("radicle");
+  return { id: "radicle", name: config.name, running: false };
+}
+
 async function getServiceStatus(serviceId: ServiceId): Promise<ServiceStatus> {
   const config = SERVICE_CONFIGS[serviceId];
   
@@ -710,6 +887,19 @@ async function getServiceStatus(serviceId: ServiceId): Promise<ServiceStatus> {
       };
     }
     
+    case "radicle": {
+      const isHealthy = config.healthCheckUrl
+        ? await checkServiceHealth(config.healthCheckUrl)
+        : false;
+      return {
+        id: "radicle",
+        name: config.name,
+        running: isHealthy,
+        startedAt: serviceStartTimes.get("radicle"),
+        port: config.port,
+      };
+    }
+    
     default:
       return {
         id: serviceId,
@@ -725,6 +915,7 @@ async function getAllServicesStatus(): Promise<ServiceStatus[]> {
     getServiceStatus("n8n"),
     getServiceStatus("celestia"),
     getServiceStatus("ollama"),
+    getServiceStatus("radicle"),
   ]);
   return statuses;
 }
@@ -767,6 +958,8 @@ export function registerServicesHandlers(): void {
           return startCelestiaService();
         case "ollama":
           return startOllamaService();
+        case "radicle":
+          return startRadicleService();
         default:
           throw new Error(`Unknown service: ${serviceId}`);
       }
@@ -786,6 +979,8 @@ export function registerServicesHandlers(): void {
           return stopCelestiaService();
         case "ollama":
           return stopOllamaService();
+        case "radicle":
+          return stopRadicleService();
         default:
           throw new Error(`Unknown service: ${serviceId}`);
       }
@@ -811,6 +1006,10 @@ export function registerServicesHandlers(): void {
           await stopOllamaService();
           await new Promise((r) => setTimeout(r, 2000));
           return startOllamaService();
+        case "radicle":
+          await stopRadicleService();
+          await new Promise((r) => setTimeout(r, 2000));
+          return startRadicleService();
         default:
           throw new Error(`Unknown service: ${serviceId}`);
       }
@@ -824,6 +1023,7 @@ export function registerServicesHandlers(): void {
       startN8nService(),
       startCelestiaService(),
       startOllamaService(),
+      startRadicleService(),
     ]);
     return results;
   }));
@@ -835,6 +1035,7 @@ export function registerServicesHandlers(): void {
       stopN8nService(),
       stopCelestiaService(),
       stopOllamaService(),
+      stopRadicleService(),
     ]);
     return results;
   }));
@@ -842,13 +1043,14 @@ export function registerServicesHandlers(): void {
   logger.info("External services handlers registered");
 }
 
-/** Start all backend services (n8n, Celestia, Ollama). Best-effort, non-throwing. */
+/** Start all backend services (n8n, Celestia, Ollama, Radicle). Best-effort, non-throwing. */
 export async function startAllServices(): Promise<ServiceStatus[]> {
   logger.info("Auto-starting all backend services...");
   return Promise.all([
     startN8nService().catch((e) => ({ id: "n8n" as const, name: "n8n", running: false, error: String(e) })),
     startCelestiaService().catch((e) => ({ id: "celestia" as const, name: "Celestia", running: false, error: String(e) })),
     startOllamaService().catch((e) => ({ id: "ollama" as const, name: "Ollama", running: false, error: String(e) })),
+    startRadicleService().catch((e) => ({ id: "radicle" as const, name: "Radicle", running: false, error: String(e) })),
   ]);
 }
 

@@ -134,6 +134,9 @@ import { registerOpenClawActivityHandlers } from "./handlers/openclaw_activity_h
 import { registerFlywheelHandlers } from "./handlers/flywheel_handlers";
 import { registerModelRegistryHandlers } from "./handlers/model_registry_handlers";
 import { registerSsiHandlers } from "./handlers/ssi_handlers";
+import { registerRadicleHandlers } from "./handlers/radicle_handlers";
+import { registerSovereignModelsHandlers } from "./handlers/sovereign_models_handlers";
+import { registerSovereignForksHandlers } from "./handlers/sovereign_forks_handlers";
 import { registerEmailHandlers } from "./handlers/email_handlers";
 import { registerMissionHandlers } from "./handlers/mission_handlers";
 import { registerA2aHandlers } from "./handlers/a2a_handlers";
@@ -438,6 +441,15 @@ export function registerIpcHandlers() {
 
   // Self-Sovereign Identity — W3C DIDs, Verifiable Credentials, Celestia anchoring
   registerSsiHandlers();
+
+  // Sovereign Forge — Radicle P2P repos, Whitehat manifests, audit pipeline
+  registerRadicleHandlers();
+
+  // Sovereign Forge — Phase 5: IPFS-pinned + Celestia-anchored AI model weights
+  registerSovereignModelsHandlers();
+
+  // Sovereign Forge — Phase 6: ERC-1155 sovereign fork lineage tracking
+  registerSovereignForksHandlers();
 
   // AI Email Agent System — multi-account email with AI triage, compose, summarize
   registerEmailHandlers();

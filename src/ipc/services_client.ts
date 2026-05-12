@@ -6,7 +6,7 @@
 
 import type { IpcRenderer } from "electron";
 
-export type ServiceId = "n8n" | "celestia" | "ollama";
+export type ServiceId = "n8n" | "celestia" | "ollama" | "radicle";
 
 export interface ServiceStatus {
   id: ServiceId;

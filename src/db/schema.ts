@@ -34,6 +34,12 @@ export const libraryItems = sqliteTable("library_items", {
   storageTier: text("storage_tier").notNull().default("local"),
   cid: text("cid"),
   arweaveId: text("arweave_id"),
+  /** Celestia DA anchor — height of the block containing the blob */
+  celestiaHeight: integer("celestia_height"),
+  /** Celestia DA commitment (hex) for the submitted blob */
+  celestiaCommitment: text("celestia_commitment"),
+  /** Base64 namespace the blob was published under */
+  celestiaNamespace: text("celestia_namespace"),
   pinned: integer("pinned", { mode: "boolean" }).notNull().default(sql`0`),
   tags: text("tags", { mode: "json" }).$type<string[]>().default(sql`'[]'`),
   category: text("category"),
@@ -2439,6 +2445,9 @@ export * from "./agent_provenance_schema";
 
 // ── Local-AI Playground Chat persistence ──────────────────────
 export * from "./playground_chat_schema";
+
+// ── Sovereign Network — Radicle + Whitehat + IPFS model CIDs ──
+export * from "./radicle_schema";
 
 // -- Image Studio (AI Image Generation + Canvas Editing) ------
 export const imageStudioImages = sqliteTable("image_studio_images", {

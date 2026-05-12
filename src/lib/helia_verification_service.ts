@@ -423,6 +423,15 @@ class HeliaVerificationService {
     }
   }
 
+  /**
+   * Persist updates to an existing record (e.g. after Celestia anchoring
+   * augments it with `celestiaHeight` / `celestiaCommitment`).
+   */
+  async updateRecord(record: InferenceRecord): Promise<void> {
+    this.records.set(record.id, record);
+    await this.saveRecords();
+  }
+
   async unpinRecord(recordId: string): Promise<void> {
     const record = this.records.get(recordId);
     if (!record || !this.helia) return;
@@ -601,6 +610,30 @@ class HeliaVerificationService {
     await fs.ensureDir(path.dirname(outputPath));
     await fs.writeFile(outputPath, data);
     return { bytes: data.length };
+  }
+
+  /** Pin an arbitrary CID (used for sovereign model weights, etc.) */
+  async pinCid(cidStr: string): Promise<void> {
+    if (!this.helia) throw new Error("Helia node not running");
+    await loadEsmModules();
+    const cid = CID.parse(cidStr);
+    await this.helia.pins.add(cid);
+  }
+
+  /** Unpin an arbitrary CID. */
+  async unpinCid(cidStr: string): Promise<void> {
+    if (!this.helia) throw new Error("Helia node not running");
+    await loadEsmModules();
+    const cid = CID.parse(cidStr);
+    await this.helia.pins.rm(cid);
+  }
+
+  /** Check whether a CID is pinned in the local Helia node. */
+  async isCidPinned(cidStr: string): Promise<boolean> {
+    if (!this.helia) return false;
+    await loadEsmModules();
+    const cid = CID.parse(cidStr);
+    return this.helia.pins.isPinned(cid);
   }
 }
 

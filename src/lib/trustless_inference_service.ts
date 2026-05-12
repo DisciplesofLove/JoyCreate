@@ -37,6 +37,8 @@ const logger = log.scope("trustless_inference");
 interface TrustlessServiceConfig {
   enableVerification: boolean;
   autoPin: boolean;
+  /** Publish a tiny anchor blob to Celestia after each verified inference */
+  autoAnchorCelestia: boolean;
   maxRecordsInMemory: number;
   providers: LocalModelProvider[];
 }
@@ -56,6 +58,7 @@ class TrustlessInferenceService {
     this.config = {
       enableVerification: true,
       autoPin: false,
+      autoAnchorCelestia: true,
       maxRecordsInMemory: 1000,
       providers: ["ollama", "lmstudio"],
       ...config,
@@ -230,6 +233,51 @@ class TrustlessInferenceService {
       // Auto-pin if configured
       if (this.config.autoPin) {
         await heliaVerificationService.pinRecord(record.id);
+      }
+
+      // Auto-anchor to Celestia DA so the record gets a verifiable
+      // block-height "CA number" the renderer can display.
+      if (this.config.autoAnchorCelestia) {
+        try {
+          const { celestiaBlobService } = await import(
+            "@/lib/celestia_blob_service"
+          );
+          const anchorPayload = {
+            type: "joycreate-inference-anchor",
+            recordId: record.id,
+            cid: record.cid,
+            requestCid: proof.requestCid,
+            responseCid: proof.responseCid,
+            proofCid: proof.proofCid,
+            modelId: modelInfo.id,
+            modelProvider: provider,
+            createdAt: new Date(record.createdAt).toISOString(),
+          };
+          const anchor = await celestiaBlobService.submitJSON(anchorPayload, {
+            label: `inference:${record.id}`,
+            dataType: "inference-anchor",
+          });
+          record.celestiaHeight = anchor.height;
+          record.celestiaCommitment = anchor.commitment;
+          record.celestiaNamespace = anchor.namespace;
+          record.celestiaAnchoredAt = new Date().toISOString();
+          await heliaVerificationService.updateRecord(record);
+          logger.info("Inference anchored to Celestia", {
+            id: record.id,
+            height: anchor.height,
+          });
+        } catch (anchorErr) {
+          logger.warn(
+            "Celestia anchor unavailable \u2014 inference still verified locally",
+            {
+              id: record.id,
+              error:
+                anchorErr instanceof Error
+                  ? anchorErr.message
+                  : String(anchorErr),
+            },
+          );
+        }
       }
 
       // Verify the record

@@ -1352,6 +1352,15 @@ function writeAuditLog(
         metadataJson: metadata ?? null,
       })
       .run();
+    void import("@/lib/hyper/mirror_audit").then(({ mirrorAuditEvent }) =>
+      mirrorAuditEvent("vault-audit", targetId ?? "global", {
+        action,
+        targetId,
+        targetType,
+        details,
+        at: new Date().toISOString(),
+      }),
+    );
   } catch {
     // Don't let audit log failures break anything
   }

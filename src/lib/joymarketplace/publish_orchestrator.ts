@@ -206,7 +206,7 @@ export class PublishOrchestrator {
       if (mint.txHash) outcome.mintTxHash = mint.txHash;
       if (mint.gasEstimate != null) {
         outcome.estimatedGas = {
-          ...(outcome.estimatedGas ?? {}),
+          ...outcome.estimatedGas,
           mint: mint.gasEstimate.toString(),
         };
       }
@@ -230,7 +230,7 @@ export class PublishOrchestrator {
         );
         if (list.gasEstimate != null) {
           outcome.estimatedGas = {
-            ...(outcome.estimatedGas ?? {}),
+            ...outcome.estimatedGas,
             listing: list.gasEstimate.toString(),
           };
         }
@@ -328,7 +328,7 @@ export class PublishOrchestrator {
       image: contentCid ? `ipfs://${contentCid}` : undefined,
       external_url: `${MARKETPLACE_URL_BASE}/asset/`,
       properties: {
-        ...(input.metadata ?? {}),
+        ...input.metadata,
         assetType: input.assetType,
         priceUsdc: input.priceUsdc ?? 0,
         royaltyBps: input.royaltyBps ?? 250,

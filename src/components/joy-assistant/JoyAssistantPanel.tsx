@@ -792,8 +792,8 @@ function AssistantModelPicker() {
               const isSelected =
                 model?.provider === "ollama" && model?.name === m.modelName;
               // Warn about large models that are slow in the side panel
-              const isLarge = /[:\-_\/](\d+)b(?:[:\-_.]|$)/i.test(m.modelName)
-                && parseFloat((m.modelName.match(/[:\-_\/](\d+)b(?:[:\-_.]|$)/i) ?? [])[1] ?? "0") >= 14;
+              const isLarge = /[:\-_/](\d+)b(?:[:\-_.]|$)/i.test(m.modelName)
+                && parseFloat((m.modelName.match(/[:\-_/](\d+)b(?:[:\-_.]|$)/i) ?? [])[1] ?? "0") >= 14;
               return (
                 <DropdownMenuItem
                   key={`ollama-${m.modelName}`}

@@ -603,6 +603,15 @@ const menuCategories = [
         activeBg: "bg-amber-500/15",
         activeText: "text-amber-600 dark:text-amber-400",
       },
+      {
+        title: "Blueprints",
+        to: "/joy/blueprints",
+        icon: BrainCircuit,
+        gradient: "from-violet-500 to-indigo-500",
+        hoverBg: "hover:bg-violet-500/10",
+        activeBg: "bg-violet-500/15",
+        activeText: "text-violet-600 dark:text-violet-400",
+      },
     ],
   },
   {

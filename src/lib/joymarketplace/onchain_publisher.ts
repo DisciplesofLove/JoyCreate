@@ -119,7 +119,7 @@ export class OnchainPublisher {
         this.provider,
       );
       const can = await gate.canMint(signerAddress);
-      if (Boolean(can)) return { canMint: true };
+      if (can) return { canMint: true };
       return { canMint: false, reason: "JoyCreatorGate.canMint returned false (no .joy name on this wallet?)" };
     } catch (err) {
       return {

@@ -18,6 +18,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import log from "electron-log";
 import {
   type Blueprint,
@@ -38,6 +39,7 @@ import {
   type BlueprintRunRecord,
 } from "./run_store";
 import { executeSkill } from "@/lib/skill_engine";
+import { runOpusReasoning } from "./adapters/opus_reasoning";
 
 const logger = log.scope("BlueprintOrchestrator");
 
@@ -72,6 +74,7 @@ export class BlueprintOrchestrator extends EventEmitter {
       manifestHash,
       agentDid: opts.agentDid ?? bp.author_did,
       input: opts.input ?? null,
+      yamlText: opts.yamlText,
     });
 
     if (opts.dryRun) {
@@ -223,22 +226,149 @@ export class BlueprintOrchestrator extends EventEmitter {
       }
       return result.output;
     }
-    // Built-in adapter execution is wired in a follow-up phase; for now the
-    // resolver + hashing path is exercised but actual side effects throw.
-    throw new Error(
-      `Built-in adapter "${resolved.adapter.name}" execution is not wired in the foundation slice. ` +
-        `Channel: ${resolved.adapter.channel}.`,
-    );
+
+    // Built-in adapter dispatch.
+    const adapter = resolved.adapter;
+
+    // Special-case: opus-reasoning runs in-process via the LLM client.
+    // Its `channel` is a synthetic marker so that the intent hash stays
+    // stable across hosts that may not register a literal IPC channel.
+    if (adapter.name === "opus-reasoning") {
+      return runOpusReasoning(params);
+    }
+
+    const handler = getInvokeHandler(adapter.channel);
+    if (!handler) {
+      throw new Error(
+        `Built-in adapter "${adapter.name}" cannot dispatch: IPC channel "${adapter.channel}" has no registered handler. ` +
+          `(Is the corresponding registerXxxHandlers() called from ipc_host?)`,
+      );
+    }
+
+    const fakeEvent = {
+      sender: { id: -1, send: () => {} },
+    } as unknown as IpcMainInvokeEvent;
+
+    const argMode = adapter.argMode ?? "object";
+    try {
+      if (argMode === "none") return await handler(fakeEvent);
+      if (argMode === "positional") {
+        const args = Array.isArray((params as { _args?: unknown[] })._args)
+          ? ((params as { _args: unknown[] })._args)
+          : [];
+        return await handler(fakeEvent, ...args);
+      }
+      return await handler(fakeEvent, params);
+    } catch (err) {
+      throw new Error(
+        `Adapter "${adapter.name}" (channel ${adapter.channel}) failed: ${(err as Error).message}`,
+      );
+    }
   }
 
   private async resumeOne(run: BlueprintRunRecord): Promise<void> {
-    // The original YAML is not stored; without it we cannot verify or
-    // re-execute. Mark such runs as failed so they don't sit forever in
-    // "running". Future work: persist the YAML alongside `manifestHash`
-    // (see plan, follow-up considerations).
-    await updateRunStatus(run.id, "failed", {
-      error: "Resume not supported in foundation slice (YAML not persisted).",
+    if (!run.yamlText) {
+      // Legacy rows with no persisted YAML cannot be safely resumed.
+      await updateRunStatus(run.id, "failed", {
+        error: "Cannot resume: original YAML not persisted (legacy run).",
+      });
+      return;
+    }
+    const bp = parseBlueprint(run.yamlText);
+    const order = topoSort(bp);
+    const resolved = await this.resolveAll(order);
+    this.verifyAll(order, resolved);
+
+    // Replay completed nodes' outputs into the template context, then
+    // continue from the first non-succeeded node.
+    const outputs: Record<string, unknown> = { $USER_INPUT: run.input ?? {} };
+    let lastOutput: unknown = run.output ?? null;
+    let resumeIdx = 0;
+    for (let i = 0; i < order.length; i++) {
+      const node = order[i];
+      const state = run.nodeState[node.id];
+      if (state?.status === "succeeded") {
+        outputs[node.id] = { output: state.output };
+        lastOutput = state.output;
+        resumeIdx = i + 1;
+      } else {
+        break;
+      }
+    }
+
+    if (resumeIdx >= order.length) {
+      await updateRunStatus(run.id, "succeeded", { output: lastOutput });
+      return;
+    }
+
+    const ctrl = new AbortController();
+    this.inFlight.set(run.id, ctrl);
+    void this.continueRun(run.id, order, resolved, outputs, resumeIdx, ctrl).catch((err) => {
+      logger.error(`Resumed run ${run.id} crashed:`, err);
     });
+  }
+
+  private async continueRun(
+    runId: string,
+    order: BlueprintNode[],
+    resolved: Map<string, ResolvedSkill>,
+    outputs: Record<string, unknown>,
+    startIdx: number,
+    ctrl: AbortController,
+  ): Promise<void> {
+    await updateRunStatus(runId, "running");
+    this.emit("run:start", runId);
+    let lastOutput: unknown = null;
+    try {
+      for (let i = startIdx; i < order.length; i++) {
+        if (ctrl.signal.aborted) throw new Error("Run aborted");
+        const node = order[i];
+        const r = resolved.get(node.id)!;
+        assertIntentHash(node.id, node.verify_intent, r);
+        const startedAt = Date.now();
+        const params = substituteTemplates(node.params, outputs);
+        await updateNodeState(runId, node.id, {
+          status: "running",
+          intentHash: node.verify_intent,
+          startedAt,
+        });
+        this.emit("node:start", { runId, nodeId: node.id });
+        try {
+          const out = await this.executeNode(node, r, params);
+          outputs[node.id] = { output: out };
+          lastOutput = out;
+          await updateNodeState(runId, node.id, {
+            status: "succeeded",
+            intentHash: node.verify_intent,
+            output: out,
+            startedAt,
+            completedAt: Date.now(),
+          });
+          this.emit("node:complete", { runId, nodeId: node.id, output: out });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await updateNodeState(runId, node.id, {
+            status: "failed",
+            intentHash: node.verify_intent,
+            error: msg,
+            startedAt,
+            completedAt: Date.now(),
+          });
+          this.emit("node:fail", { runId, nodeId: node.id, error: msg });
+          throw err;
+        }
+      }
+      await updateRunStatus(runId, "succeeded", { output: lastOutput });
+      this.emit("run:complete", runId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const status =
+        err instanceof BlueprintIntegrityError ? "aborted" : "failed";
+      await updateRunStatus(runId, status, { error: msg });
+      this.emit("run:fail", { runId, error: msg, status });
+    } finally {
+      this.inFlight.delete(runId);
+    }
   }
 }
 
@@ -297,3 +427,20 @@ function lookup(path: string, ctx: Record<string, unknown>): unknown {
 }
 
 export { BlueprintParseError, BlueprintIntegrityError };
+
+// ---------------------------------------------------------------------------
+// IPC handler bridge — call any registered ipcMain.handle() from main code.
+// ---------------------------------------------------------------------------
+type IpcInvokeHandler = (
+  event: IpcMainInvokeEvent,
+  ...args: unknown[]
+) => unknown;
+interface IpcMainWithInternals {
+  _invokeHandlers?: Map<string, IpcInvokeHandler>;
+}
+function getInvokeHandler(channel: string): IpcInvokeHandler | undefined {
+  const internals = ipcMain as unknown as IpcMainWithInternals;
+  const map = internals._invokeHandlers;
+  if (!(map instanceof Map)) return undefined;
+  return map.get(channel);
+}

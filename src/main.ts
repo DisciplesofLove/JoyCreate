@@ -138,6 +138,26 @@ export async function onReady() {
   await onFirstRunMaybe(settings);
   createWindow();
 
+  // ── Auto-start the Hypercore peer layer (Holepunch). ─────────────
+  // Best-effort, fire-and-forget — never blocks UI even if discovery / DHT
+  // bootstrap is slow. Honours the `hyperEnabled` settings flag (defaults
+  // to true so installs get federated state by default).
+  if (settings.hyperEnabled !== false) {
+    void (async () => {
+      try {
+        const { getHyperService } = await import("./lib/hyper/hyper_service");
+        const { startAnchorScheduler } = await import(
+          "./lib/hyper/anchor_service"
+        );
+        await getHyperService().start();
+        startAnchorScheduler();
+        logger.info("HyperService auto-started");
+      } catch (err) {
+        logger.warn("HyperService auto-start failed", err);
+      }
+    })();
+  }
+
   // ── Start OpenClaw gateway immediately (no delay needed) ──
   const openClawLogger = log.scope("openclaw-init");
   const { Socket: NetSocket } = await import("node:net");
@@ -735,9 +755,14 @@ function setupResponseHeaderOverrides(): void {
       // Match any request to 127.0.0.1 or localhost on:
       //   - ports 18790-18799 (OpenClaw daemon / gateway portal)
       //   - port 5678         (embedded n8n UI)
+      // Also strip frame-ancestors for known-safe third-party auth iframes
+      // (Privy embedded wallet) since their server CSP doesn't include the
+      // file:// / localhost:5173 origins the desktop app uses.
       const isGatewayResponse =
         /^https?:\/\/(127\.0\.0\.1|localhost):1879[0-9]/.test(url) ||
-        /^https?:\/\/(127\.0\.0\.1|localhost):5678(\/|$)/.test(url);
+        /^https?:\/\/(127\.0\.0\.1|localhost):5678(\/|$)/.test(url) ||
+        url.startsWith('https://auth.privy.io/') ||
+        /^https:\/\/[^/]*\.privy\.io\//.test(url);
 
       if (isGatewayResponse) {
         // Remove X-Frame-Options regardless of casing

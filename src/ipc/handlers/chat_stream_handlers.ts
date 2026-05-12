@@ -1640,7 +1640,7 @@ ${formattedSearchReplaceIssues}`,
               // Filter out problems from scaffold/library files (e.g. shadcn/ui)
               // These files are omitted from AI context and will always have
               // errors when regenerated, causing an infinite fix loop.
-              const SKIP_FIX_PATTERNS = [/[\/\\]components[\/\\]ui[\/\\]/];
+              const SKIP_FIX_PATTERNS = [/[/\\]components[/\\]ui[/\\]/];
               const filterSkippedProblems = (report: typeof problemReport) => ({
                 ...report,
                 problems: report.problems.filter(

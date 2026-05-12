@@ -73,7 +73,7 @@ export async function getExternalMcpAgentTools(): Promise<ToolDefinition[]> {
         name: fqName,
         description:
           descriptor.description ??
-          `External MCP tool \"${toolName}\" from server \"${server.name}\"`,
+          `External MCP tool "${toolName}" from server "${server.name}"`,
         inputSchema: z.record(z.unknown()),
         defaultConsent: "ask",
         getConsentPreview: (args) =>

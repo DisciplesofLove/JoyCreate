@@ -97,8 +97,8 @@ export class McpHubManager extends EventEmitter {
             ? ({
                 fetch: (input: any, init: any) =>
                   fetch(input, {
-                    ...(init || {}),
-                    headers: { ...(init?.headers || {}), ...headers },
+                    ...init,
+                    headers: { ...init?.headers, ...headers },
                   }),
               } as any)
             : undefined,

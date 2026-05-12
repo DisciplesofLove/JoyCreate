@@ -198,7 +198,7 @@ export interface GenerateManifestParams {
 export async function generateManifest(
   params: GenerateManifestParams
 ): Promise<WhitehatManifest> {
-  const policy: WhitehatPolicy = { ...defaultPolicy(), ...(params.policy ?? {}) };
+  const policy: WhitehatPolicy = { ...defaultPolicy(), ...params.policy };
 
   const fileHashes: Record<string, string> = {};
   const totalBytes = { value: 0 };

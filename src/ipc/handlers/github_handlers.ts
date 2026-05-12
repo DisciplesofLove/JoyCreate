@@ -13,7 +13,6 @@ import { eq } from "drizzle-orm";
 import { GithubUser } from "../../lib/schemas";
 import log from "electron-log";
 import { IS_TEST_BUILD } from "../utils/test_utils";
-import path from "node:path"; // ← ADD THIS
 
 const logger = log.scope("github_handlers");
 

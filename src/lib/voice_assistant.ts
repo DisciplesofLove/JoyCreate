@@ -301,6 +301,10 @@ export class VoiceAssistant extends EventEmitter {
   // ===========================================================================
   
   async startListening(): Promise<string> {
+    // Idempotent: if already listening, return the existing session id
+    if (this.state === "listening" && this.currentSession) {
+      return this.currentSession.id;
+    }
     if (this.state !== "idle") {
       throw new Error(`Cannot start listening in state: ${this.state}`);
     }

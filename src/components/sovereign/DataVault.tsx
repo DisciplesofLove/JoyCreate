@@ -83,6 +83,7 @@ import {
   AlertTriangle,
   Info,
   Sparkles,
+  Network,
 } from "lucide-react";
 import {
   useDataVault,
@@ -100,6 +101,8 @@ import {
   usePolicyAudit,
   usePurchases,
 } from "@/ipc/sovereign_data_client";
+import { IpcClient } from "@/ipc/ipc_client";
+import { toast } from "sonner";
 import type {
   SovereignData,
   DataType,
@@ -575,6 +578,28 @@ export function DataVault({ className, onSelectData }: DataVaultProps) {
                       >
                         <Globe className="h-4 w-4 mr-2" />
                         Sync to IPFS
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            const status = await IpcClient.getInstance().hyperStatus();
+                            if (!status.ready) {
+                              await IpcClient.getInstance().hyperStart();
+                            }
+                            await IpcClient.getInstance().hyperJoinTopic({
+                              scope: "content-blobs",
+                              subjectId: data.id,
+                              type: "drive",
+                            });
+                            toast.success("Replicating via Hyper Swarm");
+                          } catch (err) {
+                            toast.error(err instanceof Error ? err.message : String(err));
+                          }
+                        }}
+                      >
+                        <Network className="h-4 w-4 mr-2" />
+                        Replicate via Hyper Swarm
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={(e) => {

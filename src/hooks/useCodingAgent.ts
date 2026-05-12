@@ -259,7 +259,7 @@ export function useCodingAgent(options: UseCodingAgentOptions = {}) {
   const start = useCallback(
     async (config?: Partial<AgentConfig>) => {
       const newSession = await createSession.mutateAsync({
-        workingDirectory: options.workingDirectory || process.cwd(),
+        workingDirectory: options.workingDirectory,
         autoApprove: options.autoApprove ?? false,
         safeMode: options.safeMode ?? true,
         modelId: options.modelId,

@@ -285,11 +285,11 @@ export class AgentOrchestratorEngine extends EventEmitter {
     // Merge configs
     const execConfig: ExecutionConfig = {
       ...this.executionConfig,
-      ...(request.executionConfig ?? {}),
+      ...request.executionConfig,
     };
     const commConfig: CommunicationConfig = {
       ...this.communicationConfig,
-      ...(request.communicationConfig ?? {}),
+      ...request.communicationConfig,
     };
 
     // Create orchestration
@@ -756,7 +756,7 @@ Respond ONLY with valid JSON, no markdown formatting.`;
     longTermConfig?: Partial<LongTermTaskConfig>,
   ): Promise<void> {
     plan.status = "executing";
-    const ltConfig = { ...this.longTermConfig, ...(longTermConfig ?? {}) };
+    const ltConfig = { ...this.longTermConfig, ...longTermConfig };
 
     // Track completed tasks
     const completedTasks = new Set<string>();

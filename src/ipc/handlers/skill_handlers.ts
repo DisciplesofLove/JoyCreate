@@ -137,10 +137,37 @@ export function registerSkillHandlers(): void {
     guarded("skill:publish", async (_, params: SkillPublishRequest) => {
       // Mark for publishing — actual marketplace upload would call the marketplace API
       const { updateSkill: update } = await import("@/lib/skill_engine");
-      return update({
+      const updated = await update({
         id: params.skillId,
         enabled: true,
       });
+      // Phase 3: best-effort publish skill bundle to a per-skill hyperdrive
+      // so peers can fetch the implementation code without going through the
+      // marketplace. Failure does not abort the publish.
+      try {
+        const { HyperDriveStore } = await import("@/lib/hyper/hyper_drive_store");
+        const { makeTopicId } = await import("@/lib/hyper/discovery");
+        const subjectId = String(params.skillId);
+        const drive = new HyperDriveStore("skills", subjectId);
+        const bundlePath = "/skill.json";
+        const ok = await drive.tryPut(bundlePath, JSON.stringify(updated, null, 2));
+        if (ok) {
+          const { getDb } = await import("@/db");
+          const { skills } = await import("@/db/schema");
+          const { eq } = await import("drizzle-orm");
+          const discoveryKeyHex = makeTopicId("skills", subjectId).discoveryKeyHex;
+          await getDb()
+            .update(skills)
+            .set({
+              hyperDrivePath: bundlePath,
+              hyperDiscoveryKeyHex: discoveryKeyHex,
+            })
+            .where(eq(skills.id, params.skillId));
+        }
+      } catch {
+        // best-effort — swarm offline shouldn't break publish
+      }
+      return updated;
     }),
   );
 

@@ -525,6 +525,33 @@ export async function publishModel(modelId: string): Promise<PublishResult> {
     result.publishState = result.celestiaHeight ? "published" : "pinned";
   }
 
+  // Mirror to Hyperbee so peers discover the entry without IPFS / Celestia.
+  void (async () => {
+    try {
+      const { HyperKvStore } = await import("@/lib/hyper/hyper_kv_store");
+      const store = new HyperKvStore<Record<string, unknown>>(
+        "model-registry",
+        entry.family ?? "global",
+      );
+      await store.tryPut(entry.id, {
+        id: entry.id,
+        name: entry.name,
+        version: entry.version,
+        family: entry.family,
+        modelType: entry.modelType,
+        author: entry.author,
+        contentHash: entry.contentHash,
+        manifestCid: result.manifestCid ?? null,
+        bundleCid: result.bundleCid ?? null,
+        celestiaHeight: result.celestiaHeight ?? null,
+        publishState: result.publishState,
+        publishedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      logger.warn("hyper model-registry mirror failed", err);
+    }
+  })();
+
   return result;
 }
 

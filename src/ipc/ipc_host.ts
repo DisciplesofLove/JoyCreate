@@ -97,6 +97,8 @@ import { registerHuggingFaceHandlers } from "./handlers/huggingface_handlers";
 import { registerAgentFactoryHandlers } from "./handlers/agent_factory_handlers";
 import { registerSkillHandlers } from "./handlers/skill_handlers";
 import { registerBlueprintHandlers } from "./handlers/blueprint_handlers";
+import { registerHyperHandlers } from "./handlers/hyper_handlers";
+import { registerCopilotHandlers } from "./handlers/copilot_handlers";
 import { registerWhitehatMcpHandlers } from "./handlers/whitehat_mcp_handlers";
 import { registerGauntletHandlers } from "./handlers/gauntlet_handlers";
 import { registerWidgetHandlers } from "./handlers/widget_handlers";
@@ -325,6 +327,13 @@ export function registerIpcHandlers() {
 
   // Sovereign Blueprint Engine - YAML DAG with Whitehat intent hashing
   registerBlueprintHandlers();
+
+  // Hypercore peer layer (Holepunch) — append-only logs, hyperbee KV,
+  // hyperdrive blobs and hyperswarm peer discovery.
+  registerHyperHandlers();
+
+  // Copilot — NLP-driven self-healing assistant (Ollama router + Claude Code SDK)
+  registerCopilotHandlers();
 
   // Whitehat MCP Sandbox - intercepts Claude Desktop MCP traffic
   registerWhitehatMcpHandlers();

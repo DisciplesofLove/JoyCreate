@@ -20,6 +20,22 @@ export default defineConfig({
         "datastore-fs",
         "multiformats",
         "@libp2p/crypto",
+        // Holepunch (hypercore) stack — native addons + ESM
+        "hypercore",
+        "hyperbee",
+        "hyperdrive",
+        "hyperswarm",
+        "corestore",
+        "autobase",
+        "b4a",
+        "compact-encoding",
+        "sodium-native",
+        "udx-native",
+        "random-access-file",
+        "random-access-storage",
+        "hypercore-crypto",
+        "protomux",
+        "streamx",
         // WebSocket optional native modules (ws package)
         "bufferutil",
         "utf-8-validate",
@@ -45,6 +61,9 @@ export default defineConfig({
         "dugite",
         // discord.js — heavy native deps, externalize
         "discord.js",
+        // Claude Code SDK — uses package.json exports map that Vite/Rollup
+        // can't resolve at build time; lazy-loaded by copilot/claude_runner.ts
+        "@anthropic-ai/claude-code",
       ],
     },
   },

@@ -136,6 +136,29 @@ export async function emitEvent(
       createdAt: ts,
     })
     .returning();
+
+  // Mirror to hypercore log so peers can replicate provenance events without
+  // hitting Celestia. Best-effort, fire-and-forget.
+  void (async () => {
+    try {
+      const { HyperLogStore } = await import("@/lib/hyper/hyper_log_store");
+      const store = new HyperLogStore("provenance", input.principalDid);
+      await store.tryAppend({
+        id: row.id,
+        kind: row.kind,
+        principalDid: row.principalDid,
+        subjectRef: row.subjectRef,
+        payloadHash: row.payloadHash,
+        signatureHex: row.signatureHex,
+        algorithm: row.algorithm,
+        issuerDid: row.issuerDid,
+        createdAt: row.createdAt.toISOString(),
+      });
+    } catch (err) {
+      logger.warn("hyper provenance mirror failed", err);
+    }
+  })();
+
   return row;
 }
 

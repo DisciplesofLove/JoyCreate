@@ -18,6 +18,14 @@ import {
   detectPublishCommand,
   runPublishCommand,
 } from "@/lib/joymarketplace/bot_publish_commands";
+import {
+  detectBlueprintCommand,
+  runBlueprintCommand,
+} from "@/lib/blueprint/bot_blueprint_commands";
+import {
+  detectCopilotCommand,
+  runCopilotCommand,
+} from "@/lib/copilot/bot_copilot_commands";
 import { homedir } from "node:os";
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -119,6 +127,30 @@ export function registerTelegramHandlers() {
         data: event,
         source: "telegram",
       });
+    }
+  });
+
+  // ── 409 Conflict self-heal ────────────────────────────────────────────────
+  // If Telegram returns 409 it means another poller (almost always the
+  // OpenClaw daemon) is holding the getUpdates lease. Evict it via WS RPC
+  // so our local bot can take over without restarting the daemon.
+  let lastConflictEvictAt = 0;
+  bot.on("conflict", async () => {
+    const now = Date.now();
+    if (now - lastConflictEvictAt < 15_000) return; // throttle
+    lastConflictEvictAt = now;
+    try {
+      const { stopDaemonChannel } = await import("@/lib/openclaw_daemon_rpc");
+      const r = await stopDaemonChannel("telegram");
+      if (r.ok) {
+        logger.info("409 conflict — evicted daemon Telegram poller via WS RPC");
+      } else {
+        logger.debug(
+          `409 conflict — daemon RPC channels.stop returned: ${r.error?.code} ${r.error?.message ?? ""}`,
+        );
+      }
+    } catch (err) {
+      logger.debug("409 conflict — daemon RPC unavailable:", err);
     }
   });
 
@@ -237,6 +269,42 @@ You don't just talk about doing things — you actually do them. When someone as
         const msg = err instanceof Error ? err.message : String(err);
         bot
           .sendMessage(chatId, `❌ Publish command failed: ${msg}`)
+          .catch(() => {});
+      }
+      return;
+    }
+
+    // ── Copilot slash command ──
+    // /copilot <prompt>  → routes through local Ollama → tool/code-task pipeline
+    const copilotMatch = detectCopilotCommand(content);
+    if (copilotMatch) {
+      bot.sendChatAction(chatId, "typing").catch(() => {});
+      try {
+        const reply = await runCopilotCommand(copilotMatch, "telegram");
+        await sendChunkedMessage(bot, chatId, reply);
+      } catch (err) {
+        logger.error("Telegram copilot command failed:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        bot
+          .sendMessage(chatId, `❌ Copilot command failed: ${msg}`)
+          .catch(() => {});
+      }
+      return;
+    }
+
+    // ── Sovereign Blueprint slash commands ──
+    // /blueprint <intent>   /blueprint_status <id>   /blueprint_runs   /blueprint_help
+    const blueprintMatch = detectBlueprintCommand(content);
+    if (blueprintMatch) {
+      bot.sendChatAction(chatId, "typing").catch(() => {});
+      try {
+        const reply = await runBlueprintCommand(blueprintMatch);
+        await sendChunkedMessage(bot, chatId, reply);
+      } catch (err) {
+        logger.error("Telegram blueprint command failed:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        bot
+          .sendMessage(chatId, `❌ Blueprint command failed: ${msg}`)
           .catch(() => {});
       }
       return;
@@ -814,15 +882,34 @@ export async function tryAutoStartTelegramBot(): Promise<void> {
     const owner: "local" | "daemon" = settings.telegramOwner ?? "local";
 
     if (owner === "local") {
-      // Suppress the daemon's poller so we don't fight over the token.
+      // 1) Persist: text-edit the daemon config so future restarts don't
+      //    relaunch the channel.
       const changed = disableDaemonTelegramChannel();
       if (changed) {
-        logger.warn(
-          "Daemon Telegram was enabled — patched config to disable it. " +
-            "Existing daemon process is still polling until restarted; " +
-            "expect transient 409 reclaim attempts on the local bot until then.",
+        logger.info(
+          "Daemon Telegram was enabled — patched config to disable it across restarts.",
         );
       }
+      // 2) Runtime: tell the *running* daemon to stop polling RIGHT NOW
+      //    via WS RPC. This frees the bot token immediately so the local
+      //    poller never collides (no 409 spam).
+      try {
+        const { stopDaemonChannel } = await import("@/lib/openclaw_daemon_rpc");
+        const stopRes = await stopDaemonChannel("telegram");
+        if (stopRes.ok) {
+          logger.info("Daemon Telegram poller stopped via WS RPC — token freed");
+        } else if (stopRes.error?.code === "WS_ERROR" || stopRes.error?.code === "CLOSED") {
+          // Daemon not reachable on WS — nothing to evict, safe to proceed
+          logger.debug(`Daemon WS not reachable (${stopRes.error.code}) — assuming no daemon poller to evict`);
+        } else {
+          logger.warn(
+            `Daemon channels.stop telegram returned: ${stopRes.error?.code} ${stopRes.error?.message ?? ""}`,
+          );
+        }
+      } catch (rpcErr) {
+        logger.debug("Daemon WS RPC unavailable:", rpcErr);
+      }
+
       if (!bot.getStatus().running) {
         await bot.configure({ token, enabled: true });
         logger.info(

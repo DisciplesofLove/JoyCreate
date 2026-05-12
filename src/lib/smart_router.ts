@@ -208,7 +208,7 @@ export interface ProviderStats {
 class ComplexityAnalyzer {
   private tokenPatterns = {
     code: /```[\s\S]*?```|`[^`]+`|function\s+\w+|class\s+\w+|const\s+\w+|let\s+\w+|import\s+|export\s+/gi,
-    math: /\$[\s\S]*?\$|\\\[[\s\S]*?\\\]|âˆ‘|âˆ«|âˆ‚|âˆš|âˆž|\d+[\+\-\*\/\^]\d+/gi,
+    math: /\$[\s\S]*?\$|\\\[[\s\S]*?\\\]|âˆ‘|âˆ«|âˆ‚|âˆš|âˆž|\d+[+\-*/^]\d+/gi,
     reasoning: /explain|why|how|analyze|compare|contrast|evaluate|assess|reason|think through/gi,
     creative: /write|create|compose|generate|imagine|story|poem|narrative|fiction/gi,
     factual: /what is|who is|when did|where is|define|list|name|identify/gi,

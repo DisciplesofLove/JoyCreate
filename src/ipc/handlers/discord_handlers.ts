@@ -18,6 +18,14 @@ import {
   detectPublishCommand,
   runPublishCommand,
 } from "@/lib/joymarketplace/bot_publish_commands";
+import {
+  detectBlueprintCommand,
+  runBlueprintCommand,
+} from "@/lib/blueprint/bot_blueprint_commands";
+import {
+  detectCopilotCommand,
+  runCopilotCommand,
+} from "@/lib/copilot/bot_copilot_commands";
 import { homedir } from "node:os";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -236,6 +244,44 @@ You don't just talk about doing things — you actually do them. When someone as
         const msg = err instanceof Error ? err.message : String(err);
         bot
           .sendMessage(channelId, `❌ Publish command failed: ${msg}`)
+          .catch(() => {});
+      }
+      return;
+    }
+
+    // ── Copilot slash command ──
+    // !copilot <prompt>  → NLP router → tool/code-task pipeline
+    const copilotMatch = detectCopilotCommand(content);
+    if (copilotMatch) {
+      bot.sendTyping(channelId).catch(() => {});
+      try {
+        const reply = await runCopilotCommand(copilotMatch, "discord");
+        await sendChunkedMessage(bot, channelId, reply);
+      } catch (err) {
+        logger.error("Discord copilot command failed:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        bot
+          .sendMessage(channelId, `❌ Copilot command failed: ${msg}`)
+          .catch(() => {});
+      }
+      return;
+    }
+
+    // ── Sovereign Blueprint slash commands ──
+    // !blueprint <intent>   !blueprint_status <id>   !blueprint_runs   !blueprint_help
+    // The shared detector expects "/" — normalize "!" → "/" for Discord.
+    const blueprintInput = content.replace(/^!blueprint/i, "/blueprint");
+    const blueprintMatch = detectBlueprintCommand(blueprintInput);
+    if (blueprintMatch) {
+      bot.sendTyping(channelId).catch(() => {});
+      try {
+        const reply = await runBlueprintCommand(blueprintMatch);
+        await sendChunkedMessage(bot, channelId, reply);
+      } catch (err) {
+        logger.error("Discord blueprint command failed:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        bot
+          .sendMessage(channelId, `❌ Blueprint command failed: ${msg}`)
           .catch(() => {});
       }
       return;

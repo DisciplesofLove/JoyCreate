@@ -520,9 +520,7 @@ async function insertDatasetItem(params: InsertItemParams): Promise<void> {
   const qualitySignals = {
     languageConfidence: params.tags.languageConfidence,
     overallQuality: params.tags.qualityScore,
-    customSignals: {
-      ...(params.tags.sentiment ? { sentimentScore: params.tags.sentiment.score } : {}),
-    },
+    customSignals: (params.tags.sentiment ? { sentimentScore: params.tags.sentiment.score } : {}),
   };
 
   const lineage: ItemLineage = {

@@ -241,6 +241,15 @@ async function writeAudit(
       reason,
       rpcId: rpcId == null ? null : String(rpcId),
     });
+    const { mirrorAuditEvent } = await import("@/lib/hyper/mirror_audit");
+    mirrorAuditEvent("whitehat-anchor", inv.serverName, {
+      serverName: inv.serverName,
+      toolName: inv.toolName,
+      invocationHash,
+      decision,
+      reason,
+      at: new Date().toISOString(),
+    });
   } catch (err) {
     logger.error("audit insert failed:", err);
   }

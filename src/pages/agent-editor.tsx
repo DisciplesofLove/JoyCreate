@@ -308,7 +308,7 @@ export default function AgentEditorPage() {
     // never had MCP scoping configured.
     const previousAllow = agent?.config?.mcpToolsAllow;
     const previousAllowIsArray = Array.isArray(previousAllow);
-    const baseConfig = { ...(agent?.config ?? {}) } as Record<string, unknown>;
+    const baseConfig = { ...agent?.config } as Record<string, unknown>;
     if (mcpToolsAllowTouched || previousAllowIsArray) {
       baseConfig.mcpToolsAllow = Array.from(mcpToolsAllow);
     } else {

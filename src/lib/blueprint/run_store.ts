@@ -11,6 +11,38 @@ import {
   type BlueprintNodeRunState,
   type BlueprintRunStatus,
 } from "@/db/schema";
+import { HyperLogStore } from "@/lib/hyper/hyper_log_store";
+
+// ---------------------------------------------------------------------------
+// Hypercore replication (Phase 1) — every state mutation of a blueprint run
+// is fire-and-forget appended to a per-run hypercore log so peers can verify
+// the run's history end-to-end. Failures are swallowed so the local SQLite
+// write path is never blocked by the swarm being offline.
+// ---------------------------------------------------------------------------
+
+interface BlueprintRunEvent {
+  kind:
+    | "created"
+    | "status-changed"
+    | "node-state-changed";
+  runId: string;
+  ts: number;
+  payload: Record<string, unknown>;
+}
+
+async function emitRunEvent(runId: string, event: BlueprintRunEvent): Promise<void> {
+  const store = new HyperLogStore<BlueprintRunEvent>("blueprint-runs", runId);
+  const result = await store.tryAppend(event);
+  if (!result) return;
+  try {
+    await getDb()
+      .update(blueprintRuns)
+      .set({ hyperSeq: result.seq, hyperHash: result.hashHex })
+      .where(eq(blueprintRuns.id, runId));
+  } catch {
+    // best-effort — losing the seq stamp doesn't break the run
+  }
+}
 
 export interface BlueprintRunRecord {
   id: string;
@@ -24,6 +56,7 @@ export interface BlueprintRunRecord {
   input: Record<string, unknown> | null;
   output: unknown;
   error: string | null;
+  yamlText: string | null;
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;
@@ -36,6 +69,7 @@ export interface CreateRunArgs {
   manifestHash: string;
   agentDid: string;
   input: Record<string, unknown> | null;
+  yamlText: string;
 }
 
 export async function createRun(args: CreateRunArgs): Promise<BlueprintRunRecord> {
@@ -51,9 +85,23 @@ export async function createRun(args: CreateRunArgs): Promise<BlueprintRunRecord
       status: "pending",
       nodeStateJson: {},
       inputJson: args.input,
+      yamlText: args.yamlText,
     })
     .returning();
-  return rowToRecord(row);
+  const record = rowToRecord(row);
+  void emitRunEvent(record.id, {
+    kind: "created",
+    runId: record.id,
+    ts: Date.now(),
+    payload: {
+      blueprintId: record.blueprintId,
+      blueprintVersion: record.blueprintVersion,
+      manifestHash: record.manifestHash,
+      agentDid: record.agentDid,
+      input: record.input,
+    },
+  });
+  return record;
 }
 
 export async function getRun(id: string): Promise<BlueprintRunRecord | null> {
@@ -101,6 +149,17 @@ export async function updateRunStatus(
     updates.completedAt = new Date();
   }
   await db.update(blueprintRuns).set(updates).where(eq(blueprintRuns.id, id));
+  void emitRunEvent(id, {
+    kind: "status-changed",
+    runId: id,
+    ts: Date.now(),
+    payload: {
+      status,
+      currentNodeId: extra.currentNodeId ?? null,
+      output: extra.output ?? null,
+      error: extra.error ?? null,
+    },
+  });
 }
 
 export async function updateNodeState(
@@ -113,11 +172,17 @@ export async function updateNodeState(
     where: eq(blueprintRuns.id, id),
   });
   if (!row) throw new Error(`Blueprint run ${id} not found`);
-  const merged = { ...(row.nodeStateJson ?? {}), [nodeId]: state };
+  const merged = { ...row.nodeStateJson, [nodeId]: state };
   await db
     .update(blueprintRuns)
     .set({ nodeStateJson: merged, currentNodeId: nodeId, updatedAt: new Date() })
     .where(eq(blueprintRuns.id, id));
+  void emitRunEvent(id, {
+    kind: "node-state-changed",
+    runId: id,
+    ts: Date.now(),
+    payload: { nodeId, state },
+  });
 }
 
 function rowToRecord(row: typeof blueprintRuns.$inferSelect): BlueprintRunRecord {
@@ -133,6 +198,7 @@ function rowToRecord(row: typeof blueprintRuns.$inferSelect): BlueprintRunRecord
     input: row.inputJson,
     output: row.outputJson,
     error: row.error,
+    yamlText: row.yamlText ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     completedAt: row.completedAt,

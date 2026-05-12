@@ -554,7 +554,7 @@ export function registerNlpPipelineHandlers() {
         nlpStats: {
           totalAnnotations: meta.nlp_total_annotations || 0,
           entityCount: allEntities.length,
-          topicCount: [...new Set(allTopics)].length,
+          topicCount: new Set(allTopics).size,
           sentimentDistribution: sentimentDist,
           languages: [...languages],
           domains: [...domains],

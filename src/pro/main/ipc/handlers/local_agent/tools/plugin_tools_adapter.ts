@@ -47,7 +47,7 @@ export function getPluginAgentTools(): ToolDefinition[] {
       name,
       description:
         cmd.title ??
-        `Run plugin command \"${cmd.id}\" contributed by plugin ${cmd.pluginId}.`,
+        `Run plugin command "${cmd.id}" contributed by plugin ${cmd.pluginId}.`,
       inputSchema: z.object({ args: z.array(z.unknown()).optional() }),
       defaultConsent: "ask",
       getConsentPreview: (args) => `${name}(${JSON.stringify(args.args ?? []).slice(0, 80)})`,

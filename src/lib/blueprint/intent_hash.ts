@@ -48,6 +48,7 @@ export function canonicalManifest(resolved: ResolvedSkill): Record<string, unkno
     name: resolved.adapter.name,
     channel: resolved.adapter.channel,
     description: resolved.adapter.description,
+    argMode: resolved.adapter.argMode ?? "object",
     adaptersVersion: BUILTIN_ADAPTERS_VERSION,
   };
 }

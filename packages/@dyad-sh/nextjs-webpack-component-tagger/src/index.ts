@@ -67,7 +67,7 @@ export default function joyTaggerLoader(this: any, code: string) {
             }
           } catch (error) {
             console.warn(
-              `[joy-tagger] Warning: Failed to process JSX node in ${this.resourcePath}:`,,
+              `[joy-tagger] Warning: Failed to process JSX node in ${this.resourcePath}:`,
               error,
             );
           }
@@ -86,7 +86,7 @@ export default function joyTaggerLoader(this: any, code: string) {
       };
     } catch (error) {
       console.warn(
-        `[joy-tagger] Warning: Failed to transform ${this.resourcePath}:`,,
+        `[joy-tagger] Warning: Failed to transform ${this.resourcePath}:`,
         error,
       );
       return null;

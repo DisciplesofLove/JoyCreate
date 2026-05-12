@@ -24,8 +24,35 @@ import {
   agentCollabSubscriptions,
   agentCollabTasks,
 } from "@/db/schema";
+import { HyperKvStore } from "@/lib/hyper/hyper_kv_store";
+import { makeTopicId } from "@/lib/hyper/discovery";
 
 const logger = log.scope("collab_hub_handlers");
+
+// ---------------------------------------------------------------------------
+// Hypercore replication (Phase 2) — mirror channel metadata onto a per-channel
+// hyperbee so peers replicating the same topic see the channel definition.
+// Failures are best-effort and never block the SQLite write path.
+// ---------------------------------------------------------------------------
+
+async function mirrorChannelToHyperbee(
+  channelId: number,
+  meta: { name: string; description: string | null; topic: string | null; visibility: string; archived: boolean },
+): Promise<void> {
+  const subjectId = String(channelId);
+  const kv = new HyperKvStore<typeof meta>("agent-collab-channels", subjectId);
+  const ok = await kv.tryPut("meta", meta);
+  if (!ok) return;
+  try {
+    const discoveryKeyHex = makeTopicId("agent-collab-channels", subjectId).discoveryKeyHex;
+    await db
+      .update(agentCollabChannels)
+      .set({ hyperDiscoveryKeyHex: discoveryKeyHex })
+      .where(eq(agentCollabChannels.id, channelId));
+  } catch {
+    // best-effort
+  }
+}
 
 // =============================================================================
 // Runtime validators (SQLite has no CHECK constraints for our drizzle enums)
@@ -300,6 +327,13 @@ export function registerCollaborationHubHandlers(): void {
         })
         .returning();
       logger.info(`Created channel ${row.id} (${row.name})`);
+      void mirrorChannelToHyperbee(row.id, {
+        name: row.name,
+        description: row.description ?? null,
+        topic: row.topic ?? null,
+        visibility: row.visibility,
+        archived: Boolean(row.archived),
+      });
       return mapChannel(row);
     },
   );
@@ -334,6 +368,15 @@ export function registerCollaborationHubHandlers(): void {
         .set(patch)
         .where(eq(agentCollabChannels.id, params.id))
         .returning();
+      if (row) {
+        void mirrorChannelToHyperbee(row.id, {
+          name: row.name,
+          description: row.description ?? null,
+          topic: row.topic ?? null,
+          visibility: row.visibility,
+          archived: Boolean(row.archived),
+        });
+      }
       return row ? mapChannel(row) : null;
     },
   );
@@ -348,6 +391,15 @@ export function registerCollaborationHubHandlers(): void {
         .set({ archived, updatedAt: new Date() })
         .where(eq(agentCollabChannels.id, params.id))
         .returning();
+      if (row) {
+        void mirrorChannelToHyperbee(row.id, {
+          name: row.name,
+          description: row.description ?? null,
+          topic: row.topic ?? null,
+          visibility: row.visibility,
+          archived: Boolean(row.archived),
+        });
+      }
       return row ? mapChannel(row) : null;
     },
   );
@@ -502,6 +554,35 @@ export function registerCollaborationHubHandlers(): void {
         } catch (err) {
           logger.warn("Failed to touch channel updatedAt", err);
         }
+      }
+      // Mirror to per-channel hypercore so peers replicate the live message
+      // stream. Best-effort, fire-and-forget.
+      if (row.channelId != null) {
+        void (async () => {
+          try {
+            const { HyperLogStore } = await import(
+              "@/lib/hyper/hyper_log_store"
+            );
+            const store = new HyperLogStore(
+              "agent-collab",
+              String(row.channelId),
+            );
+            await store.tryAppend({
+              id: row.id,
+              channelId: row.channelId,
+              fromAgentId: row.fromAgentId,
+              toAgentId: row.toAgentId,
+              kind: row.kind,
+              content: row.content,
+              metadata: row.metadataJson,
+              replyToId: row.replyToId,
+              taskId: row.taskId,
+              createdAt: row.createdAt?.toISOString?.() ?? null,
+            });
+          } catch (err) {
+            logger.warn("hyper collab message mirror failed", err);
+          }
+        })();
       }
       return mapMessage(row);
     },

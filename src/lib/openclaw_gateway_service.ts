@@ -258,10 +258,19 @@ export class OpenClawGatewayService extends EventEmitter {
 
     if (mutated) {
       try {
+        // External daemon may keep the file open / read-only on Windows.
+        // Skip silently if we can't write — the daemon will keep its own
+        // config and our in-memory hardening still applies to bridged calls.
+        try {
+          nodeFs.accessSync(daemonConfigPath, nodeFs.constants.W_OK);
+        } catch {
+          logger.debug("hardenDaemonConfig: daemon config not writable, skipping persist");
+          return;
+        }
         nodeFs.writeFileSync(daemonConfigPath, JSON.stringify(cfg, null, 2), "utf8");
         logger.info("hardenDaemonConfig: wrote sanitized daemon config");
       } catch (err) {
-        logger.warn("hardenDaemonConfig: failed to write daemon config", err);
+        logger.debug("hardenDaemonConfig: failed to write daemon config (non-fatal)", err);
       }
     }
   }

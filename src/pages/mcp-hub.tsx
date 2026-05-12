@@ -1436,14 +1436,14 @@ const InstalledServerCard: React.FC<InstalledServerCardProps> = ({
 
   const handleAddEnv = async () => {
     if (!newEnvKey.trim()) return;
-    const updated = { ...(server.envJson || {}), [newEnvKey.trim()]: newEnvVal };
+    const updated = { ...server.envJson, [newEnvKey.trim()]: newEnvVal };
     await onUpdateEnv(updated);
     setNewEnvKey("");
     setNewEnvVal("");
   };
 
   const handleRemoveEnv = async (key: string) => {
-    const updated = { ...(server.envJson || {}) };
+    const updated = { ...server.envJson };
     delete updated[key];
     await onUpdateEnv(updated);
   };

@@ -1452,6 +1452,279 @@ export class IpcClient {
     });
   }
 
+  // --- Sovereign Blueprint Engine ---
+
+  async blueprintRun(payload: {
+    yamlText: string;
+    input?: Record<string, unknown>;
+    agentDid?: string;
+    dryRun?: boolean;
+  }): Promise<{ runId: string }> {
+    return this.ipcRenderer.invoke("blueprint:run", payload);
+  }
+
+  async blueprintCancel(runId: string): Promise<{ ok: boolean }> {
+    return this.ipcRenderer.invoke("blueprint:cancel", { runId });
+  }
+
+  async blueprintGetRun(runId: string): Promise<any> {
+    return this.ipcRenderer.invoke("blueprint:get-run", runId);
+  }
+
+  async blueprintListRuns(limit?: number): Promise<any[]> {
+    return this.ipcRenderer.invoke("blueprint:list-runs", limit);
+  }
+
+  async blueprintCompose(payload: {
+    intent: string;
+    authorDid?: string;
+    modelId?: string;
+    hints?: string;
+    autoRun?: boolean;
+    input?: Record<string, unknown>;
+  }): Promise<{ yaml: string; blueprint: any; runId?: string }> {
+    return this.ipcRenderer.invoke("blueprint:compose", payload);
+  }
+
+  async blueprintValidate(yamlText: string): Promise<{ blueprint: any }> {
+    return this.ipcRenderer.invoke("blueprint:validate", { yamlText });
+  }
+
+  async blueprintRehash(yamlText: string): Promise<{ yaml: string }> {
+    return this.ipcRenderer.invoke("blueprint:rehash", { yamlText });
+  }
+
+  async blueprintListAdapters(): Promise<
+    Array<{ name: string; channel: string; description: string; paramDocs?: string }>
+  > {
+    return this.ipcRenderer.invoke("blueprint:list-adapters");
+  }
+
+  // --- Hypercore peer layer (Holepunch) -----------------------------------
+
+  async hyperStatus(): Promise<{
+    enabled: boolean;
+    ready: boolean;
+    deviceKeyHex: string | null;
+    swarmConnections: number;
+    topicsCount: number;
+    rootDir: string | null;
+    startedAt: number | null;
+  }> {
+    return this.ipcRenderer.invoke("hyper:status");
+  }
+
+  async hyperStart(): Promise<unknown> {
+    return this.ipcRenderer.invoke("hyper:start");
+  }
+
+  async hyperStop(): Promise<{ ok: true }> {
+    return this.ipcRenderer.invoke("hyper:stop");
+  }
+
+  async hyperListTopics(): Promise<
+    Array<{
+      scope: string;
+      subjectId: string;
+      discoveryKeyHex: string;
+      type: "log" | "bee" | "drive";
+      length: number;
+      writerKeyHex: string;
+      treeHashHex: string | null;
+      joinedAt: number;
+    }>
+  > {
+    return this.ipcRenderer.invoke("hyper:topics:list");
+  }
+
+  async hyperListPeers(): Promise<
+    Array<{
+      publicKeyHex: string;
+      remoteHostHex: string | null;
+      topicsHex: string[];
+      firstSeenAt: number;
+      lastSeenAt: number;
+    }>
+  > {
+    return this.ipcRenderer.invoke("hyper:peers:list");
+  }
+
+  async hyperJoinTopic(args: {
+    scope: string;
+    subjectId: string;
+    type?: "log" | "bee" | "drive";
+  }): Promise<{ ok: true }> {
+    return this.ipcRenderer.invoke("hyper:topics:join", args);
+  }
+
+  async hyperLeaveTopic(args: {
+    scope: string;
+    subjectId: string;
+  }): Promise<{ ok: true }> {
+    return this.ipcRenderer.invoke("hyper:topics:leave", args);
+  }
+
+  async hyperCoreAppend(args: {
+    scope: string;
+    subjectId: string;
+    entry: unknown;
+  }): Promise<{ seq: number; hashHex: string; discoveryKeyHex: string }> {
+    return this.ipcRenderer.invoke("hyper:core:append", args);
+  }
+
+  async hyperCoreRead(args: {
+    scope: string;
+    subjectId: string;
+    start?: number;
+    end?: number;
+  }): Promise<unknown[]> {
+    return this.ipcRenderer.invoke("hyper:core:read", args);
+  }
+
+  async hyperBeePut(args: {
+    scope: string;
+    subjectId: string;
+    key: string;
+    value: unknown;
+  }): Promise<{ ok: true }> {
+    return this.ipcRenderer.invoke("hyper:bee:put", args);
+  }
+
+  async hyperBeeGet(args: {
+    scope: string;
+    subjectId: string;
+    key: string;
+  }): Promise<unknown | null> {
+    return this.ipcRenderer.invoke("hyper:bee:get", args);
+  }
+
+  async hyperBeeList(args: {
+    scope: string;
+    subjectId: string;
+    gte?: string;
+    lt?: string;
+    limit?: number;
+  }): Promise<Array<{ key: string; value: unknown }>> {
+    return this.ipcRenderer.invoke("hyper:bee:list", args);
+  }
+
+  async hyperDrivePut(args: {
+    scope: string;
+    subjectId: string;
+    path: string;
+    data: string | Uint8Array;
+  }): Promise<{ ok: true }> {
+    return this.ipcRenderer.invoke("hyper:drive:put", args);
+  }
+
+  async hyperDriveGet(args: {
+    scope: string;
+    subjectId: string;
+    path: string;
+    encoding?: "utf-8" | "base64";
+  }): Promise<string | null> {
+    return this.ipcRenderer.invoke("hyper:drive:get", args);
+  }
+
+  async hyperDriveList(args: {
+    scope: string;
+    subjectId: string;
+    folder?: string;
+  }): Promise<Array<{ key: string; size: number | null }>> {
+    return this.ipcRenderer.invoke("hyper:drive:list", args);
+  }
+
+  async hyperAnchorNow(): Promise<{ anchored: number }> {
+    return this.ipcRenderer.invoke("hyper:anchor:now");
+  }
+
+  async hyperAutobaseAppend(args: {
+    scope: string;
+    subjectId: string;
+    entry: unknown;
+  }): Promise<{ localLength: number; viewLength: number }> {
+    return this.ipcRenderer.invoke("hyper:autobase:append", args);
+  }
+
+  async hyperAutobaseRead(args: {
+    scope: string;
+    subjectId: string;
+    start?: number;
+    end?: number;
+  }): Promise<unknown[]> {
+    return this.ipcRenderer.invoke("hyper:autobase:read", args);
+  }
+
+  async hyperAutobaseAddWriter(args: {
+    scope: string;
+    subjectId: string;
+    writerKeyHex: string;
+  }): Promise<{ ok: true }> {
+    return this.ipcRenderer.invoke("hyper:autobase:add-writer", args);
+  }
+
+  async hyperAutobaseLocalKey(args: {
+    scope: string;
+    subjectId: string;
+  }): Promise<{ writerKeyHex: string }> {
+    return this.ipcRenderer.invoke("hyper:autobase:local-key", args);
+  }
+
+  // --- Copilot (NLP-driven self-healing assistant) ----------------------
+
+  /** Submit a plain-English prompt. Returns the resulting copilot job. */
+  async copilotAsk(payload: {
+    prompt: string;
+    routerModel?: string;
+    claudeApiKey?: string;
+  }): Promise<unknown> {
+    return this.signAndInvoke("copilot:ask", payload);
+  }
+
+  /** List recent copilot jobs (most-recent first). */
+  async copilotListJobs(limit?: number): Promise<unknown[]> {
+    return this.ipcRenderer.invoke("copilot:list-jobs", limit);
+  }
+
+  /** Fetch a single copilot job by id. */
+  async copilotGetJob(jobId: string): Promise<unknown> {
+    return this.ipcRenderer.invoke("copilot:get-job", jobId);
+  }
+
+  /** Approve an awaiting-approval job (accepts Claude's diff). */
+  async copilotApproveJob(payload: {
+    jobId: string;
+    approverDid?: string;
+  }): Promise<unknown> {
+    return this.signAndInvoke("copilot:approve-job", payload);
+  }
+
+  /** Reject an awaiting-approval job. */
+  async copilotRejectJob(payload: {
+    jobId: string;
+    approverDid?: string;
+    reason?: string;
+  }): Promise<unknown> {
+    return this.signAndInvoke("copilot:reject-job", payload);
+  }
+
+  /** Cancel an in-flight copilot job. */
+  async copilotCancelJob(payload: { jobId: string }): Promise<unknown> {
+    return this.signAndInvoke("copilot:cancel-job", payload);
+  }
+
+  /** Subscribe to copilot streaming progress. Returns an unsubscribe fn. */
+  onCopilotProgress(
+    handler: (chunk: { stage: string; content: string }) => void,
+  ): () => void {
+    const listener = (_: unknown, chunk: { stage: string; content: string }) =>
+      handler(chunk);
+    this.ipcRenderer.on("copilot:progress", listener as never);
+    return () => {
+      this.ipcRenderer.removeListener("copilot:progress", listener as never);
+    };
+  }
+
   // --- Agent Builder AI System Prompt Methods ---
 
   /**
@@ -4095,6 +4368,23 @@ export class IpcClient {
     sortOrder: number;
   }): Promise<any> {
     return this.ipcRenderer.invoke("openclaw:kanban:tasks:move", params);
+  }
+
+  /**
+   * Hard-stop a kanban task. Aborts the in-flight inference (if any) and
+   * marks the task `cancelled` in the DB. Returns whether an active controller
+   * was hit and whether the DB row was updated.
+   */
+  public async stopKanbanTask(params: {
+    taskId: string;
+    reason?: string;
+  }): Promise<{ aborted: boolean; cancelled: boolean }> {
+    return this.ipcRenderer.invoke("openclaw:kanban:tasks:stop", params);
+  }
+
+  /** Emergency stop — abort every in-flight kanban task across all agents. */
+  public async stopAllKanbanTasks(reason?: string): Promise<{ stopped: string[] }> {
+    return this.ipcRenderer.invoke("openclaw:kanban:tasks:stop-all", { reason });
   }
 
   /** List activity log entries */

@@ -910,6 +910,10 @@ export const skills = sqliteTable("skills", {
   updatedAt: integer("updated_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
+  /** Hyperdrive path holding the published skill bundle (Phase 3). */
+  hyperDrivePath: text("hyper_drive_path"),
+  /** Discovery key hex of the hyperdrive carrying this skill (Phase 3). */
+  hyperDiscoveryKeyHex: text("hyper_discovery_key_hex"),
 });
 
 /** Junction table — many-to-many agents ↔ skills */
@@ -2449,6 +2453,9 @@ export * from "./playground_chat_schema";
 // ── Sovereign Network — Radicle + Whitehat + IPFS model CIDs ──
 export * from "./radicle_schema";
 
+// ── Copilot — NLP-driven self-healing assistant ───────────────
+export * from "./copilot_schema";
+
 // -- Image Studio (AI Image Generation + Canvas Editing) ------
 export const imageStudioImages = sqliteTable("image_studio_images", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -2744,6 +2751,8 @@ export const agentCollabChannels = sqliteTable("agent_collab_channels", {
   updatedAt: integer("updated_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
+  /** Hyperbee discovery key hex if this channel is mirrored on the swarm (Phase 2). */
+  hyperDiscoveryKeyHex: text("hyper_discovery_key_hex"),
 });
 
 export const agentCollabMessages = sqliteTable("agent_collab_messages", {
@@ -2861,6 +2870,12 @@ export const blueprintRuns = sqliteTable("blueprint_runs", {
     .notNull()
     .default(sql`(unixepoch())`),
   completedAt: integer("completed_at", { mode: "timestamp" }),
+  /** Original YAML — required for resume after crash and audit replay. */
+  yamlText: text("yaml_text"),
+  /** Hypercore sequence number for the latest event of this run (Phase 1). */
+  hyperSeq: integer("hyper_seq"),
+  /** SHA-256 of the latest hypercore block for this run (Phase 1). */
+  hyperHash: text("hyper_hash"),
 });
 
 export type BlueprintRunStatus =
@@ -2879,6 +2894,73 @@ export interface BlueprintNodeRunState {
   startedAt?: number;
   completedAt?: number;
 }
+
+// =============================================================================
+// HYPERCORE PEER LAYER (Holepunch) — Phase 0 foundation tables.
+// =============================================================================
+
+/**
+ * Registry of every (scope, subjectId) topic this device has joined on the
+ * swarm. Created lazily on first open; rows are never deleted on leave so
+ * we keep an audit trail of what cores existed locally.
+ */
+export const hyperTopics = sqliteTable("hyper_topics", {
+  /** "<scope>:<subjectId>" — primary key for fast lookup. */
+  key: text("key").primaryKey(),
+  scope: text("scope").notNull(),
+  subjectId: text("subject_id").notNull(),
+  /** Hex-encoded blake2b-256 of `joycreate:<scope>:<subjectId>`. */
+  discoveryKeyHex: text("discovery_key_hex").notNull(),
+  coreType: text("core_type", { enum: ["log", "bee", "drive"] }).notNull(),
+  /** Hex-encoded local writer public key (from the corestore namespace). */
+  writerKeyHex: text("writer_key_hex"),
+  joinedAt: integer("joined_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
+});
+
+/**
+ * Peers we've authenticated with. Updated whenever a noise stream
+ * connection is accepted by the local hyperswarm.
+ */
+export const hyperPeers = sqliteTable("hyper_peers", {
+  /** Hex-encoded remote public key. */
+  publicKeyHex: text("public_key_hex").primaryKey(),
+  /** Optional DID claimed by the peer (verified by Phase 5 peer auth). */
+  did: text("did"),
+  /** JSON array of topic keys this peer is replicating with us. */
+  topicsJson: text("topics_json", { mode: "json" })
+    .$type<string[]>()
+    .default(sql`'[]'`),
+  status: text("status", { enum: ["active", "blocked", "stale"] })
+    .notNull()
+    .default("active"),
+  firstSeenAt: integer("first_seen_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  lastSeenAt: integer("last_seen_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * Periodic Celestia anchor checkpoints — record `(topic, length, treeHash)`
+ * pinned to a Celestia blob so any peer can verify tamper-evident history
+ * up to that length.
+ */
+export const hyperAnchorCheckpoints = sqliteTable("hyper_anchor_checkpoints", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  topicKey: text("topic_key").notNull(),
+  /** hypercore length at the moment the anchor was taken. */
+  length: integer("length").notNull(),
+  treeHashHex: text("tree_hash_hex").notNull(),
+  celestiaHeight: integer("celestia_height"),
+  celestiaCommitment: text("celestia_commitment"),
+  anchoredAt: integer("anchored_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
 
 // === Left Gauntlet ==========================================================
 

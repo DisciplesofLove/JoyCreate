@@ -73,8 +73,8 @@ class McpManager {
 
         const customFetch: SseFetch = (input, init) =>
           fetch(input, {
-            ...(init ?? {}),
-            headers: { ...(init?.headers ?? {}), ...headers },
+            ...init,
+            headers: { ...init?.headers, ...headers },
           });
         const eventSourceInit: SseEventSourceInit | undefined = headers
           ? { fetch: customFetch }

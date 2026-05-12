@@ -242,12 +242,12 @@ interface LocalProbeResult {
  */
 function isModelTooLargeForAuto(name: string): boolean {
   // Match patterns like "70b", "34b", "72b", "671b", "8x22b" etc.
-  const m = name.match(/[:\-_\/](\d+(?:\.\d+)?)x?(\d+(?:\.\d+)?)b(?:[:\-_\.]|$)/i);
+  const m = name.match(/[:\-_/](\d+(?:\.\d+)?)x?(\d+(?:\.\d+)?)b(?:[:\-_.]|$)/i);
   if (m) {
     // MoE format: "8x22b" → total ≈ 176B (use expert count × param count)
     return parseFloat(m[1]) * parseFloat(m[2]) >= 14;
   }
-  const m2 = name.match(/[:\-_\/](\d+(?:\.\d+)?)b(?:[:\-_\.]|$)/i);
+  const m2 = name.match(/[:\-_/](\d+(?:\.\d+)?)b(?:[:\-_.]|$)/i);
   if (m2) return parseFloat(m2[1]) >= 14;
   return false; // unknown size → allow
 }
@@ -1449,6 +1449,94 @@ function buildAssistantTools(intent: AssistantIntent) {
     execute: async ({ infoType }) => {
       const info = await getSystemInfo(infoType);
       return { info, executed: true };
+    },
+  });
+
+  // ── Sovereign Blueprint Engine ──
+  // The killer combo: NL → DAG of skill invocations across browser,
+  // scraping, n8n, marketplace, attestation, etc., with Whitehat intent
+  // hashing on every node.
+  tools.compose_blueprint = tool({
+    description:
+      "Compose a Sovereign Blueprint (multi-step automation DAG) from a natural-language intent. " +
+      "Use when the user asks for a complex pipeline like 'scrape X, clean it, publish as ERC-1155', " +
+      "'monitor my emails for legal notices and draft replies', or 'curate a deep-web dataset and mint shards'. " +
+      "Returns the YAML and a runId if autoRun is true.",
+    inputSchema: z.object({
+      intent: z.string().describe("The user's full natural-language intent."),
+      hints: z
+        .string()
+        .optional()
+        .describe("Optional extra constraints (preferred adapters, target marketplace, etc.)"),
+      autoRun: z
+        .boolean()
+        .optional()
+        .describe("When true, execute the blueprint immediately after composing."),
+    }),
+    execute: async ({ intent, hints, autoRun }) => {
+      try {
+        const { composeBlueprint } = await import("@/lib/blueprint/composer");
+        const { getBlueprintOrchestrator } = await import("@/lib/blueprint/orchestrator");
+        const composed = await composeBlueprint({ intent, hints });
+        let runId: string | undefined;
+        if (autoRun) {
+          runId = await getBlueprintOrchestrator().run({ yamlText: composed.yaml });
+        }
+        return {
+          executed: true,
+          yaml: composed.yaml,
+          nodeCount: composed.blueprint.nodes.length,
+          blueprintId: composed.blueprint.id,
+          runId,
+        };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err), executed: false };
+      }
+    },
+  });
+
+  tools.run_blueprint = tool({
+    description:
+      "Execute a Sovereign Blueprint YAML directly. Use when the user already has YAML or " +
+      "wants to re-run a saved blueprint. Returns the runId so progress can be tracked.",
+    inputSchema: z.object({
+      yamlText: z.string().describe("The full Blueprint YAML."),
+      input: z.record(z.string(), z.unknown()).optional().describe("Optional initial input."),
+    }),
+    execute: async ({ yamlText, input }) => {
+      try {
+        const { getBlueprintOrchestrator } = await import("@/lib/blueprint/orchestrator");
+        const runId = await getBlueprintOrchestrator().run({ yamlText, input });
+        return { executed: true, runId };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err), executed: false };
+      }
+    },
+  });
+
+  tools.list_blueprint_runs = tool({
+    description: "List recent Sovereign Blueprint runs with status and timing.",
+    inputSchema: z.object({
+      limit: z.number().int().min(1).max(100).optional(),
+    }),
+    execute: async ({ limit }) => {
+      try {
+        const { listRuns } = await import("@/lib/blueprint/run_store");
+        const runs = await listRuns(limit ?? 20);
+        return {
+          executed: true,
+          runs: runs.map((r) => ({
+            id: r.id,
+            blueprintId: r.blueprintId,
+            status: r.status,
+            currentNodeId: r.currentNodeId,
+            error: r.error,
+            updatedAt: r.updatedAt,
+          })),
+        };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err), executed: false };
+      }
     },
   });
 

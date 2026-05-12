@@ -26,7 +26,7 @@ const logger = log.scope("joy-assistant-tools");
 // ============================================================================
 
 const BLOCKED_COMMANDS = [
-  /\brm\s+-rf\s+[\/\\]/i,
+  /\brm\s+-rf\s+[/\\]/i,
   /\bformat\b/i,
   /\bdel\s+\/s\b/i,
   /\brd\s+\/s\b/i,

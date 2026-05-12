@@ -113,7 +113,19 @@ async function storeContent(
       isChunked: false,
     });
   }
-  
+
+  // Mirror small content blobs into a per-hash hyperdrive so peers can fetch
+  // them by content hash without going through Celestia / IPFS. Best-effort.
+  void (async () => {
+    try {
+      const { HyperDriveStore } = await import("@/lib/hyper/hyper_drive_store");
+      const drive = new HyperDriveStore("content-blobs", hash);
+      await drive.tryPut("/blob", data);
+    } catch {
+      /* swallow — hyper layer is non-critical */
+    }
+  })();
+
   return { hash, storagePath };
 }
 
@@ -550,7 +562,7 @@ export function registerDatasetStudioHandlers() {
       if (!existing) throw new Error(`Item ${itemId} not found`);
       
       const updatedLabels = merge 
-        ? { ...(existing.labelsJson || {}), ...labels }
+        ? { ...existing.labelsJson, ...labels }
         : labels;
       
       await db.update(datasetItems)
@@ -588,7 +600,7 @@ export function registerDatasetStudioHandlers() {
       const [existing] = await db.select().from(datasetItems).where(eq(datasetItems.id, itemId));
       if (!existing) throw new Error(`Item ${itemId} not found`);
       
-      const updatedSignals = { ...(existing.qualitySignalsJson || {}), ...signals };
+      const updatedSignals = { ...existing.qualitySignalsJson, ...signals };
       
       await db.update(datasetItems)
         .set({ qualitySignalsJson: updatedSignals as QualitySignals, updatedAt: new Date() })

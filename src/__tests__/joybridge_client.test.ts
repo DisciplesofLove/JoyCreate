@@ -80,7 +80,10 @@ describe("JoyBridgeClient — auth headers", () => {
     expect(captured?.url).toContain("joybridge-get-store");
     expect(captured?.url).toContain("slug=test");
     const h = captured?.headers ?? {};
-    expect(h["Authorization"]).toBe("Bearer joy_secret");
+    // joy_xxx keys are NOT JWTs and must NOT be sent as Bearer (Supabase
+    // rejects with UNAUTHORIZED_INVALID_JWT_FORMAT). They go via x-joy-api-key.
+    // The publishable key is sent as Bearer for Supabase to accept the request.
+    expect(h["Authorization"]).toBe("Bearer sb_publishable_pub");
     expect(h["x-joy-api-key"]).toBe("joy_secret");
     expect(h["apikey"]).toBe("sb_publishable_pub");
   });

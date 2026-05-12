@@ -77,6 +77,17 @@ class CelestiaAnchorService {
         anchoredAt: new Date(),
       });
 
+      void import("@/lib/hyper/mirror_audit").then(({ mirrorAuditEvent }) =>
+        mirrorAuditEvent("ssi-anchor", event.did, {
+          eventType: event.type,
+          did: event.did,
+          dataHash,
+          celestiaHeight: submission.height,
+          celestiaCommitment: submission.commitment,
+          at: new Date().toISOString(),
+        }),
+      );
+
       logger.info(
         `Anchored ${event.type} for ${event.did} at height ${submission.height}`,
       );

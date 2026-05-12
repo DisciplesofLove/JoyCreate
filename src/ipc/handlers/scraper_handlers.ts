@@ -129,13 +129,13 @@ function extractWithSelector(html: string, selector: string, attribute?: string)
   
   // Basic CSS selector patterns
   const tagMatch = selector.match(/^(\w+)/);
-  const classMatch = selector.match(/\.([^\s.#\[]+)/g);
-  const idMatch = selector.match(/#([^\s.#\[]+)/);
+  const classMatch = selector.match(/\.([^\s.#[]+)/g);
+  const idMatch = selector.match(/#([^\s.#[]+)/);
   
   // Very simple extraction - for proper extraction use cheerio
   if (tagMatch) {
     const tag = tagMatch[1];
-    const regex = new RegExp(`<${tag}[^>]*>(.*?)<\/${tag}>`, "gis");
+    const regex = new RegExp(`<${tag}[^>]*>(.*?)</${tag}>`, "gis");
     let match;
     while ((match = regex.exec(html)) !== null) {
       if (attribute === "href") {

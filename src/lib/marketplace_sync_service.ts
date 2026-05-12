@@ -93,7 +93,15 @@ export interface AssetListing {
   
   // Minting options
   mintOnChain?: boolean;
-  
+
+  // Hypercore peer-discovery hints (Phase 6 federation). When set, browsers
+  // can join the corresponding hyperswarm topic and replicate the asset
+  // bundle directly from peers without going through IPFS gateways.
+  hyperDiscoveryKeyHex?: string;
+  hyperPeerHintHex?: string;
+  hyperScope?: string;
+  hyperSubjectId?: string;
+
   // Additional metadata
   metadata?: Record<string, any>;
 }
@@ -332,12 +340,14 @@ export class MarketplaceSyncService {
     try {
       logger.info(`Syncing listing: ${listing.name}`);
 
+      const enriched = await this.attachHyperHints(listing);
+
       const result = await this.apiRequest<BatchSyncResponse>(
         JOYMARKETPLACE_API.endpoints.syncListing,
         {
           method: "POST",
           body: JSON.stringify({
-            listings: [listing],
+            listings: [enriched],
             clientVersion: this.clientVersion,
             clientPlatform: this.clientPlatform,
           }),
@@ -372,24 +382,30 @@ export class MarketplaceSyncService {
     try {
       logger.info(`Batch syncing ${listings.length} listings`);
 
+      const enriched = await Promise.all(
+        listings.map((l) => this.attachHyperHints(l)),
+      );
+
       const result = await this.apiRequest<BatchSyncResponse>(
         JOYMARKETPLACE_API.endpoints.syncListing,
         {
           method: "POST",
           body: JSON.stringify({
-            listings,
+            listings: enriched,
             clientVersion: this.clientVersion,
             clientPlatform: this.clientPlatform,
           }),
         }
       );
 
-      logger.info(`Batch sync completed: ${result.syncedCount}/${listings.length} to store: ${result.storeName}`);
-      
+      logger.info(
+        `Batch sync completed: ${result.syncedCount}/${listings.length} to store: ${result.storeName}`,
+      );
+
       if (result.collectionContract) {
         logger.info(`Collection contract: ${result.collectionContract}`);
       }
-      
+
       return result;
     } catch (error) {
       logger.error(`Failed to batch sync listings:`, error);
@@ -623,6 +639,39 @@ export class MarketplaceSyncService {
     } catch (error) {
       logger.error(`Failed to get owned NFTs:`, error);
       return [];
+    }
+  }
+
+  /**
+   * Phase 6: enrich an outbound listing with hypercore peer-discovery hints.
+   * Joins (or creates) a per-asset hyperdrive topic, then attaches its
+   * discovery key + this device's swarm public key so browsers can fetch
+   * the asset bundle directly from peers (no IPFS gateway dependency).
+   * Best-effort — failures degrade silently to a hyper-less listing.
+   */
+  private async attachHyperHints(listing: AssetListing): Promise<AssetListing> {
+    if (listing.hyperDiscoveryKeyHex) return listing;
+    try {
+      const { getHyperService } = await import("@/lib/hyper/hyper_service");
+      const { topicKey } = await import("@/lib/hyper/discovery");
+      const svc = getHyperService();
+      if (!svc.isReady()) await svc.start().catch(() => {});
+      if (!svc.isReady()) return listing;
+      const scope = "marketplace-listings";
+      const subjectId = listing.localAssetId;
+      // Eagerly join so peers can find us before the listing propagates.
+      await svc.openDrive(scope, subjectId).catch(() => {});
+      const status = svc.status();
+      return {
+        ...listing,
+        hyperScope: scope,
+        hyperSubjectId: subjectId,
+        hyperDiscoveryKeyHex: topicKey(scope, subjectId).toString("hex"),
+        hyperPeerHintHex: status.deviceKeyHex ?? undefined,
+      };
+    } catch (err) {
+      logger.warn("attachHyperHints failed (continuing without)", err);
+      return listing;
     }
   }
 }

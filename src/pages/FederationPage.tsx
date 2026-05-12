@@ -29,8 +29,9 @@ import {
   Globe, Network, Server, Bot, Package, Fingerprint,
   Settings, Search, Plus, RefreshCw, CheckCircle2, XCircle,
   Shield, Wifi, WifiOff, ArrowUpDown, Link, Unlink,
-  Eye, Users, Activity, Zap, Lock, Unlock,
+  Eye, Users, Activity, Zap, Lock, Unlock, Radio,
 } from "lucide-react";
+import { HyperSwarmTab } from "@/components/federation/HyperSwarmTab";
 
 interface FederationPeer {
   id: string;
@@ -196,6 +197,7 @@ export default function FederationPage() {
         <div className="border-b px-4">
           <TabsList className="bg-transparent">
             <TabsTrigger value="peers" className="gap-1.5"><Server className="w-3.5 h-3.5" /> Peers</TabsTrigger>
+            <TabsTrigger value="hyper" className="gap-1.5"><Radio className="w-3.5 h-3.5" /> Hyper Swarm</TabsTrigger>
             <TabsTrigger value="shared-agents" className="gap-1.5"><Bot className="w-3.5 h-3.5" /> Shared Agents</TabsTrigger>
             <TabsTrigger value="shared-assets" className="gap-1.5"><Package className="w-3.5 h-3.5" /> Shared Assets</TabsTrigger>
             <TabsTrigger value="identity" className="gap-1.5"><Fingerprint className="w-3.5 h-3.5" /> Identity</TabsTrigger>
@@ -207,6 +209,7 @@ export default function FederationPage() {
           <TabsContent value="peers" className="mt-0 space-y-2">
             {MOCK_PEERS.map(peer => <PeerCard key={peer.id} peer={peer} />)}
           </TabsContent>
+          <TabsContent value="hyper" className="mt-0"><HyperSwarmTab /></TabsContent>
           <TabsContent value="shared-agents" className="mt-0"><SharedAgentsTab /></TabsContent>
           <TabsContent value="shared-assets" className="mt-0">
             <div className="text-center py-12 text-muted-foreground/50">

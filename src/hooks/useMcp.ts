@@ -154,7 +154,7 @@ export function useMcp() {
     const unsubscribe = ipc.onMcpStatusChange((info) => {
       queryClient.setQueryData<Record<number, McpServerStatusInfo>>(
         ["mcp", "statuses"],
-        (prev) => ({ ...(prev ?? {}), [info.serverId]: info }),
+        (prev) => ({ ...prev, [info.serverId]: info }),
       );
     });
     return () => {

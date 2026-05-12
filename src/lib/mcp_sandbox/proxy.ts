@@ -58,7 +58,7 @@ export async function runProxy(
   const logOut = streams.log ?? process.stderr;
 
   const child = spawn(config.command, config.args ?? [], {
-    env: { ...process.env, ...(config.env ?? {}) },
+    env: { ...process.env, ...config.env },
     cwd: config.cwd,
     stdio: ["pipe", "pipe", "pipe"],
   });

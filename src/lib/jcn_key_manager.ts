@@ -717,6 +717,15 @@ export class JcnKeyManager {
         ...details,
       },
     });
+    const { mirrorAuditEvent } = await import("@/lib/hyper/mirror_audit");
+    mirrorAuditEvent("jcn-audit", keyId, {
+      action: `key:${action}`,
+      keyId,
+      keyType,
+      algorithm,
+      details,
+      at: new Date().toISOString(),
+    });
   }
   
   // ===========================================================================

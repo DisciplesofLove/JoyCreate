@@ -1,0 +1,1 @@
+ALTER TABLE `blueprint_runs` ADD `yaml_text` text;

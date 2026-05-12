@@ -116,8 +116,8 @@ function computeRuntimeDepClosure(roots: string[]): Set<string> {
       return;
     }
     const deps = {
-      ...(pkg.dependencies || {}),
-      ...(pkg.optionalDependencies || {}),
+      ...pkg.dependencies,
+      ...pkg.optionalDependencies,
     };
     for (const d of Object.keys(deps)) visit(d, dir);
   };

@@ -786,8 +786,11 @@ function AnnotationStudioTab() {
           invoke("annotation:list-tasks"),
           invoke("annotation:list-taxonomies"),
         ]);
-        setTasks(t ?? []);
-        setTaxonomies(tax ?? []);
+        // Handlers return { success, tasks } / { success, taxonomies } — unwrap defensively
+        const taskList = Array.isArray(t) ? t : Array.isArray(t?.tasks) ? t.tasks : [];
+        const taxList = Array.isArray(tax) ? tax : Array.isArray(tax?.taxonomies) ? tax.taxonomies : [];
+        setTasks(taskList);
+        setTaxonomies(taxList);
       } catch {}
       setLoading(false);
     })();
@@ -805,7 +808,7 @@ function AnnotationStudioTab() {
       setShowCreate(false);
       setTaskName("");
       const t = await invoke("annotation:list-tasks");
-      setTasks(t ?? []);
+      setTasks(Array.isArray(t) ? t : Array.isArray(t?.tasks) ? t.tasks : []);
     } catch (err) { console.error(err); }
   };
 

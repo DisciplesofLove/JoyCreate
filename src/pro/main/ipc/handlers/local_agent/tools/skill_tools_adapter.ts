@@ -34,7 +34,7 @@ export async function getSkillAgentTools(): Promise<ToolDefinition[]> {
     const name = `skill_${skill.id}_${sanitize(skill.name)}`;
     return {
       name,
-      description: skill.description ?? `Execute skill \"${skill.name}\"`,
+      description: skill.description ?? `Execute skill "${skill.name}"`,
       inputSchema: z.object({
         input: z.string().describe("Input text or instruction for the skill"),
         context: z.record(z.unknown()).optional(),

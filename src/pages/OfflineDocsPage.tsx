@@ -342,7 +342,7 @@ function MarkdownRenderer({ content }: { content: string }) {
     .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 bg-muted rounded text-sm">$1</code>')
     .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="bg-muted p-4 rounded-lg overflow-x-auto my-4"><code>$2</code></pre>')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-primary hover:underline" target="_blank" rel="noopener">$1</a>')
-    .replace(/^\- (.+)$/gm, '<li class="ml-4">$1</li>')
+    .replace(/^- (.+)$/gm, '<li class="ml-4">$1</li>')
     .replace(/^\d+\. (.+)$/gm, '<li class="ml-4 list-decimal">$1</li>')
     .split("\n\n")
     .map((p) => (p.startsWith("<") ? p : `<p class="my-2">${p}</p>`))

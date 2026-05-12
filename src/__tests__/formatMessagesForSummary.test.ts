@@ -1,5 +1,16 @@
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("electron", () => ({
+  app: {
+    getPath: () => "/tmp/joycreate-test",
+    getName: () => "JoyCreate",
+    getVersion: () => "0.0.0-test",
+  },
+  ipcMain: { handle: vi.fn(), on: vi.fn(), removeHandler: vi.fn() },
+  BrowserWindow: { getAllWindows: () => [] },
+}));
+
 import { formatMessagesForSummary } from "../ipc/handlers/chat_stream_handlers";
-import { describe, it, expect } from "vitest";
 
 describe("formatMessagesForSummary", () => {
   it("should return all messages when there are 8 or fewer messages", () => {

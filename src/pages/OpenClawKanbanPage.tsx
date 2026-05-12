@@ -82,6 +82,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsLeftRight,
+  Square,
+  OctagonAlert,
 } from "lucide-react";
 
 import { NlpAiStudioPanel } from "@/components/openclaw/NlpAiStudioPanel";
@@ -205,11 +207,13 @@ function TaskCard({
   task,
   onMove,
   onDelete,
+  onStop,
   onSelect,
 }: {
   task: any;
   onMove: (taskId: string, status: string) => void;
   onDelete: (taskId: string) => void;
+  onStop: (taskId: string) => void;
   onSelect: (task: any) => void;
 }) {
   const [showActions, setShowActions] = useState(false);
@@ -330,6 +334,18 @@ function TaskCard({
       {/* Quick actions */}
       {showActions && (
         <div className="absolute top-2 right-2 flex items-center gap-1">
+          {task.status === "in_progress" && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onStop(task.id);
+              }}
+              className="p-1 rounded bg-amber-500/20 hover:bg-amber-500/40 transition shadow-sm"
+              title="Hard-stop this task (aborts inference)"
+            >
+              <Square className="w-3 h-3 text-amber-400 fill-amber-400" />
+            </button>
+          )}
           {canMoveRight && (
             <button
               onClick={(e) => {
@@ -374,6 +390,7 @@ function KanbanColumn({
   tasks,
   onMove,
   onDelete,
+  onStop,
   onSelect,
   collapsed,
   onToggleCollapse,
@@ -382,6 +399,7 @@ function KanbanColumn({
   tasks: any[];
   onMove: (taskId: string, status: string) => void;
   onDelete: (taskId: string) => void;
+  onStop: (taskId: string) => void;
   onSelect: (task: any) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
@@ -455,7 +473,7 @@ function KanbanColumn({
   return (
     <div
       data-column-id={column.id}
-      className={`flex flex-col w-[300px] flex-shrink-0 rounded-xl border transition-all ${
+      className={`flex flex-col w-[300px] flex-shrink-0 rounded-xl border transition-all h-full ${
         isDragOver
           ? `${column.borderColor} bg-muted/40 shadow-lg shadow-primary/5 scale-[1.01]`
           : "border-border/50 bg-muted/20"
@@ -495,8 +513,8 @@ function KanbanColumn({
         </div>
       )}
 
-      {/* Tasks — grow with content, board-level scroll handles overflow */}
-      <div className="flex-1 px-2 pb-2">
+      {/* Tasks — column scrolls vertically; board scrolls horizontally */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2" style={{ scrollbarWidth: 'thin' }}>
         <div className="flex flex-col gap-2 p-1">
           {tasks.map((task) => (
             <TaskCard
@@ -504,6 +522,7 @@ function KanbanColumn({
               task={task}
               onMove={onMove}
               onDelete={onDelete}
+              onStop={onStop}
               onSelect={onSelect}
             />
           ))}
@@ -2075,6 +2094,30 @@ export function OpenClawKanbanPage() {
     onError: (err: any) => toast.error(`Failed to delete task: ${err.message}`),
   });
 
+  const stopTaskMutation = useMutation({
+    mutationFn: (params: { taskId: string; reason?: string }) =>
+      ipc.stopKanbanTask(params),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["kanban-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["kanban-analytics"] });
+      if (res.aborted) toast.success("Task aborted");
+      else if (res.cancelled) toast.success("Task cancelled");
+      else toast.info("Task already finished");
+    },
+    onError: (err: any) => toast.error(`Failed to stop task: ${err.message}`),
+  });
+
+  const stopAllMutation = useMutation({
+    mutationFn: () => ipc.stopAllKanbanTasks("Emergency stop \u2014 all agents halted by user"),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["kanban-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["kanban-analytics"] });
+      if (res.stopped.length === 0) toast.info("No active tasks to stop");
+      else toast.success(`Stopped ${res.stopped.length} active task(s)`);
+    },
+    onError: (err: any) => toast.error(`Stop-all failed: ${err.message}`),
+  });
+
   // Group tasks by column
   const tasksByColumn = useMemo(() => {
     const groups: Record<string, any[]> = {};
@@ -2129,6 +2172,15 @@ export function OpenClawKanbanPage() {
     [deleteMutation]
   );
 
+  const handleStop = useCallback(
+    (taskId: string) => {
+      if (confirm("Hard-stop this task? Any in-flight inference will be aborted and the task marked cancelled.")) {
+        stopTaskMutation.mutate({ taskId });
+      }
+    },
+    [stopTaskMutation]
+  );
+
   const handleSelectTask = useCallback((task: any) => {
     setSelectedTask(task);
     setDetailOpen(true);
@@ -2174,6 +2226,28 @@ export function OpenClawKanbanPage() {
             />
             Refresh
           </Button>
+          {(tasksByColumn.in_progress?.length ?? 0) > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+              disabled={stopAllMutation.isPending}
+              onClick={() => {
+                const n = tasksByColumn.in_progress?.length ?? 0;
+                if (
+                  confirm(
+                    `Hard-stop ALL ${n} in-progress task(s)? Every active agent inference will be aborted immediately.`,
+                  )
+                ) {
+                  stopAllMutation.mutate();
+                }
+              }}
+              title="Emergency stop — abort every active agent task"
+            >
+              <OctagonAlert className="w-3.5 h-3.5 mr-1.5" />
+              Stop All ({tasksByColumn.in_progress?.length ?? 0})
+            </Button>
+          )}
           <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
             <Plus className="w-3.5 h-3.5 mr-1.5" />
             New Task
@@ -2302,7 +2376,7 @@ export function OpenClawKanbanPage() {
             </div>
           </div>
 
-          {/* Board with horizontal + vertical scroll + shadows */}
+          {/* Board with horizontal scroll (left/right) + per-column vertical scroll */}
           <div className="flex-1 min-h-0 relative">
             {/* Left scroll shadow */}
             {canScrollLeft && (
@@ -2313,12 +2387,17 @@ export function OpenClawKanbanPage() {
               <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-background to-transparent z-10 pointer-events-none" />
             )}
 
+            {/* Outer wrapper: fills height, scrolls LEFT/RIGHT only */}
             <div
               ref={boardScrollRef}
-              className="h-full overflow-x-auto overflow-y-auto pb-4"
-              style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(120,120,120,0.5) rgba(0,0,0,0.1)' }}
+              className="h-full overflow-x-auto overflow-y-hidden"
+              style={{
+                scrollbarWidth: 'auto',
+                scrollbarColor: 'rgba(120,120,120,0.6) rgba(0,0,0,0.15)',
+              }}
             >
-              <div className="flex gap-3 p-4 min-h-full min-w-max">
+              {/* Inner row: same height as the scroll container, columns fill it */}
+              <div className="flex gap-3 px-4 pt-4 pb-3 h-full min-w-max">
                 {COLUMNS.map((col) => (
                   <KanbanColumn
                     key={col.id}
@@ -2326,6 +2405,7 @@ export function OpenClawKanbanPage() {
                     tasks={tasksByColumn[col.id] ?? []}
                     onMove={handleMove}
                     onDelete={handleDelete}
+                    onStop={handleStop}
                     onSelect={handleSelectTask}
                     collapsed={collapsedColumns.has(col.id)}
                     onToggleCollapse={() => toggleColumnCollapse(col.id)}

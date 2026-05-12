@@ -295,6 +295,8 @@ export const UserSettingsSchema = z.object({
   runtimeMode2: RuntimeMode2Schema.optional(),
   customNodePath: z.string().optional().nullable(),
   isRunning: z.boolean().optional(),
+  /** Auto-start the Hypercore peer layer (Holepunch) on app boot. Default true. */
+  hyperEnabled: z.boolean().optional(),
   lastKnownPerformance: z
     .object({
       timestamp: z.number(),

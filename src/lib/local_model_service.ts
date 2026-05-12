@@ -177,12 +177,15 @@ export class OllamaProvider {
 
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
+        // Skip blob/sha directories — they contain content-addressed hashes,
+        // not real model names
+        if (entry.name === "blobs" || entry.name.startsWith("sha256-")) continue;
         const tags = await fs.promises.readdir(
           path.join(manifestsDir, entry.name),
           { withFileTypes: true },
         );
         for (const tag of tags) {
-          if (tag.isFile()) {
+          if (tag.isFile() && !tag.name.startsWith("sha256-")) {
             names.push(`${entry.name}:${tag.name}`);
           }
         }

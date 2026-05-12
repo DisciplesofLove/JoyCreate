@@ -39,6 +39,12 @@ let running = false;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let activeTasks = new Set<string>();
 
+/**
+ * Per-task AbortController. Used by `cancelTask()` to hard-stop an in-flight
+ * inference (Ollama / peer) immediately, bypassing the normal completion path.
+ */
+const taskControllers = new Map<string, AbortController>();
+
 const POLL_INTERVAL_MS = 5_000;
 const INFERENCE_TIMEOUT_MS = 120_000;
 
@@ -96,6 +102,8 @@ async function executeTask(task: any): Promise<void> {
   const db = getDb();
   const taskId = task.id;
   activeTasks.add(taskId);
+  const controller = new AbortController();
+  taskControllers.set(taskId, controller);
   stats.totalExecuted++;
 
   const startTime = Date.now();
@@ -142,9 +150,9 @@ async function executeTask(task: any): Promise<void> {
     // ── Step 2: Run inference (local, peer, or cloud) ──
     let inferenceResult: InferenceResult;
     if (selection.provider === "peer" && selection.peerId) {
-      inferenceResult = await runPeerInference(prompt, model, selection.peerId, task.agentId);
+      inferenceResult = await runPeerInference(prompt, model, selection.peerId, task.agentId, controller.signal);
     } else {
-      inferenceResult = await runOllamaInference(prompt, model, task.agentId);
+      inferenceResult = await runOllamaInference(prompt, model, task.agentId, controller.signal);
     }
     const durationMs = Date.now() - startTime;
 
@@ -318,18 +326,26 @@ async function executeTask(task: any): Promise<void> {
 
     logger.info(`Task completed: ${task.title} (${taskId}) in ${durationMs}ms`);
   } catch (err: any) {
-    // ── Task failed ──
+    // ── Task failed (or was hard-stopped via cancelTask) ──
     const durationMs = Date.now() - startTime;
-    const errorMessage =
-      err instanceof Error ? err.message : String(err);
+    const aborted = controller.signal.aborted;
+    const errorMessage = aborted
+      ? "Hard-stopped by user"
+      : err instanceof Error
+        ? err.message
+        : String(err);
 
-    logger.error(`Task failed: ${task.title} (${taskId}):`, errorMessage);
+    if (aborted) {
+      logger.warn(`Task hard-stopped: ${task.title} (${taskId})`);
+    } else {
+      logger.error(`Task failed: ${task.title} (${taskId}):`, errorMessage);
+    }
 
     try {
       await db
         .update(openclawKanbanTasks)
         .set({
-          status: "failed",
+          status: aborted ? "cancelled" : "failed",
           errorMessage,
           durationMs,
           completedAt: new Date(),
@@ -341,15 +357,15 @@ async function executeTask(task: any): Promise<void> {
         db,
         taskId,
         "status_changed",
-        "task_executor",
+        aborted ? "user" : "task_executor",
         "in_progress",
-        "failed",
+        aborted ? "cancelled" : "failed",
       );
     } catch (dbErr) {
       logger.error(`Failed to update failed task ${taskId}:`, dbErr);
     }
 
-    stats.totalFailed++;
+    if (!aborted) stats.totalFailed++;
 
     // Record failed outcome for MAB learning
     try {
@@ -368,6 +384,7 @@ async function executeTask(task: any): Promise<void> {
     }
   } finally {
     activeTasks.delete(taskId);
+    taskControllers.delete(taskId);
   }
 }
 
@@ -400,6 +417,7 @@ async function runOllamaInference(
   prompt: string,
   model: string,
   agentId?: string | null,
+  abortSignal?: AbortSignal,
 ): Promise<InferenceResult> {
   const baseUrl = getOllamaApiUrl();
 
@@ -434,7 +452,9 @@ async function runOllamaInference(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model, messages, stream: false }),
-    signal: AbortSignal.timeout(INFERENCE_TIMEOUT_MS),
+    signal: abortSignal
+      ? AbortSignal.any([abortSignal, AbortSignal.timeout(INFERENCE_TIMEOUT_MS)])
+      : AbortSignal.timeout(INFERENCE_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -465,7 +485,12 @@ async function runPeerInference(
   model: string,
   peerId: string,
   agentId?: string | null,
+  abortSignal?: AbortSignal,
 ): Promise<InferenceResult> {
+  // Honor caller's abort up-front (peer protocol may not accept signals)
+  if (abortSignal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
   try {
     const { requestPeerInference } = await import("./p2p_inference_protocol");
     const result = await requestPeerInference(peerId, {
@@ -473,6 +498,9 @@ async function runPeerInference(
       prompt,
       systemPrompt: "You are an AI agent executing tasks autonomously. Complete the task accurately and concisely.",
     });
+    if (abortSignal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
 
     return {
       content: result.content,
@@ -481,9 +509,10 @@ async function runPeerInference(
       totalTokens: result.usage?.totalTokens ?? Math.ceil((prompt.length + result.content.length) / 4),
     };
   } catch (err) {
+    if (abortSignal?.aborted) throw err;
     logger.warn(`Peer inference failed for ${peerId}, falling back to local:`, err);
     // Automatic fallback to local Ollama
-    return runOllamaInference(prompt, model, agentId);
+    return runOllamaInference(prompt, model, agentId, abortSignal);
   }
 }
 
@@ -590,6 +619,87 @@ export function isTaskExecutorRunning(): boolean {
   return running;
 }
 
+/**
+ * Hard-stop a single task. If the task is currently in flight, its inference
+ * is aborted; the DB row is then marked as `cancelled`. If the task is queued
+ * (in_progress with no startedAt) or already completed, it's a no-op DB-wise
+ * beyond the explicit cancel marker.
+ *
+ * Returns `{ aborted: true }` when an in-flight controller was hit.
+ */
+export async function cancelTask(
+  taskId: string,
+  reason = "Hard-stopped by user",
+): Promise<{ aborted: boolean; cancelled: boolean }> {
+  let aborted = false;
+  const controller = taskControllers.get(taskId);
+  if (controller && !controller.signal.aborted) {
+    try {
+      controller.abort(reason);
+      aborted = true;
+      logger.warn(`Hard-stop signal sent to task ${taskId}: ${reason}`);
+    } catch (err) {
+      logger.warn(`Failed to abort task ${taskId}:`, err);
+    }
+  }
+
+  // Always force the DB row to cancelled so the UI reflects the user's intent
+  // even if the task was queued (no controller yet) or the abort race-loses
+  // to a near-complete inference.
+  try {
+    const db = getDb();
+    const now = new Date();
+    const [existing] = await db
+      .select()
+      .from(openclawKanbanTasks)
+      .where(eq(openclawKanbanTasks.id, taskId));
+    if (!existing) {
+      return { aborted, cancelled: false };
+    }
+    if (
+      existing.status === "completed" ||
+      existing.status === "failed" ||
+      existing.status === "cancelled"
+    ) {
+      return { aborted, cancelled: false };
+    }
+    await db
+      .update(openclawKanbanTasks)
+      .set({
+        status: "cancelled",
+        errorMessage: reason,
+        completedAt: now,
+        updatedAt: now,
+        durationMs: existing.startedAt
+          ? now.getTime() - new Date(existing.startedAt).getTime()
+          : existing.durationMs ?? 0,
+      })
+      .where(eq(openclawKanbanTasks.id, taskId));
+    await logActivity(db, taskId, "status_changed", "user", existing.status, "cancelled");
+    return { aborted, cancelled: true };
+  } catch (err) {
+    logger.error(`cancelTask DB update failed for ${taskId}:`, err);
+    return { aborted, cancelled: false };
+  }
+}
+
+/**
+ * Hard-stop every in-flight task. Returns the list of task IDs that received
+ * an abort signal (and were also marked cancelled in the DB).
+ */
+export async function cancelAllTasks(
+  reason = "Emergency stop \u2014 all agents halted by user",
+): Promise<{ stopped: string[] }> {
+  const ids = Array.from(activeTasks);
+  const stopped: string[] = [];
+  for (const id of ids) {
+    const r = await cancelTask(id, reason);
+    if (r.aborted || r.cancelled) stopped.push(id);
+  }
+  logger.warn(`cancelAllTasks: stopped ${stopped.length} active task(s)`);
+  return { stopped };
+}
+
 // =============================================================================
 // IPC HANDLERS
 // =============================================================================
@@ -608,6 +718,21 @@ export function registerTaskExecutorHandlers(): void {
     stopTaskExecutor();
     return getTaskExecutorStatus();
   });
+
+  ipcMain.handle(
+    "openclaw:kanban:tasks:stop",
+    async (_event: IpcMainInvokeEvent, params: { taskId: string; reason?: string }) => {
+      if (!params?.taskId) throw new Error("taskId is required");
+      return cancelTask(params.taskId, params.reason);
+    },
+  );
+
+  ipcMain.handle(
+    "openclaw:kanban:tasks:stop-all",
+    async (_event: IpcMainInvokeEvent, params: { reason?: string } | undefined) => {
+      return cancelAllTasks(params?.reason);
+    },
+  );
 }
 
 // =============================================================================

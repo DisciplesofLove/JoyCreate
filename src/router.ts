@@ -77,6 +77,7 @@ import { adminRoute } from "./routes/admin";
 import { auditLogRoute } from "./routes/audit-log";
 import { backupRoute } from "./routes/backup";
 import { federationRoute } from "./routes/federation";
+import { copilotRoute } from "./routes/copilot";
 import { analyticsRoute } from "./routes/analytics";
 import { teamRoute } from "./routes/team";
 import { imageStudioRoute } from "./routes/image-studio";
@@ -91,6 +92,7 @@ import { joyMarketplaceRoute } from "./routes/joy/marketplace";
 import { joyMyStoresRoute } from "./routes/joy/my-stores";
 import { joyMyAssetsRoute } from "./routes/joy/my-assets";
 import { joyPublishRoute } from "./routes/joy/publish";
+import { joyBlueprintsRoute } from "./routes/joy/blueprints";
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
@@ -173,6 +175,7 @@ const routeTree = rootRoute.addChildren([
   auditLogRoute,
   backupRoute,
   federationRoute,
+  copilotRoute,
   analyticsRoute,
   teamRoute,
   imageStudioRoute,
@@ -187,6 +190,7 @@ const routeTree = rootRoute.addChildren([
   joyMyStoresRoute,
   joyMyAssetsRoute,
   joyPublishRoute,
+  joyBlueprintsRoute,
 ]);
 
 // src/components/NotFoundRedirect.tsx

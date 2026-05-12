@@ -12,6 +12,12 @@ import {
   type RunBlueprintOptions,
 } from "@/lib/blueprint/orchestrator";
 import { getRun, listRuns } from "@/lib/blueprint/run_store";
+import {
+  composeBlueprint,
+  validateBlueprintYaml,
+  rehashBlueprintYaml,
+  listBuiltinAdapters,
+} from "@/lib/blueprint/composer";
 
 const logger = log.scope("blueprint_handlers");
 
@@ -20,6 +26,16 @@ interface RunPayload {
   input?: Record<string, unknown>;
   agentDid?: string;
   dryRun?: boolean;
+}
+
+interface ComposePayload {
+  intent: string;
+  authorDid?: string;
+  modelId?: string;
+  hints?: string;
+  /** When true, immediately run the composed blueprint and return { runId }. */
+  autoRun?: boolean;
+  input?: Record<string, unknown>;
 }
 
 export function registerBlueprintHandlers(): void {
@@ -68,6 +84,58 @@ export function registerBlueprintHandlers(): void {
       return listRuns(limit ?? 100);
     },
   );
+
+  // ── Composer / validator / catalog ──────────────────────────────────────
+  ipcMain.handle(
+    "blueprint:compose",
+    guarded(
+      "blueprint:compose",
+      async (_event: IpcMainInvokeEvent, payload: ComposePayload) => {
+        if (!payload?.intent || typeof payload.intent !== "string") {
+          throw new Error("blueprint:compose requires { intent: string }");
+        }
+        const composed = await composeBlueprint({
+          intent: payload.intent,
+          authorDid: payload.authorDid,
+          modelId: payload.modelId,
+          hints: payload.hints,
+        });
+        if (payload.autoRun) {
+          const runId = await getBlueprintOrchestrator().run({
+            yamlText: composed.yaml,
+            input: payload.input,
+            agentDid: payload.authorDid,
+          });
+          return { yaml: composed.yaml, blueprint: composed.blueprint, runId };
+        }
+        return { yaml: composed.yaml, blueprint: composed.blueprint };
+      },
+    ),
+  );
+
+  ipcMain.handle(
+    "blueprint:validate",
+    async (_event: IpcMainInvokeEvent, payload: { yamlText: string }) => {
+      if (!payload?.yamlText) throw new Error("blueprint:validate requires { yamlText }");
+      return { blueprint: validateBlueprintYaml(payload.yamlText) };
+    },
+  );
+
+  ipcMain.handle(
+    "blueprint:rehash",
+    guarded(
+      "blueprint:rehash",
+      async (_event: IpcMainInvokeEvent, payload: { yamlText: string }) => {
+        if (!payload?.yamlText) throw new Error("blueprint:rehash requires { yamlText }");
+        const yaml = await rehashBlueprintYaml(payload.yamlText);
+        return { yaml };
+      },
+    ),
+  );
+
+  ipcMain.handle("blueprint:list-adapters", async () => {
+    return listBuiltinAdapters();
+  });
 
   // Resume any runs that were left in pending/running/paused state by a
   // previous session. Errors here are non-fatal — the app must still boot.

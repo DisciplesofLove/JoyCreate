@@ -1525,7 +1525,7 @@ export class AgentSwarm extends EventEmitter {
         .run(JSON.stringify(observer.metrics), observer.id);
     }
 
-    this.emitEvent("witness:insight", observer?.swarmId!, witness.observerId, {
+    this.emitEvent("witness:insight", observer?.swarmId, witness.observerId, {
       witness: witnessId,
       insight,
     });
@@ -1547,7 +1547,7 @@ export class AgentSwarm extends EventEmitter {
       .run(witness.status, witness.endedAt, witnessId);
 
     const observer = this.agents.get(witness.observerId);
-    this.emitEvent("witness:ended", observer?.swarmId!, witness.observerId, {
+    this.emitEvent("witness:ended", observer?.swarmId, witness.observerId, {
       witnessId,
       insights: witness.insights.length,
     });

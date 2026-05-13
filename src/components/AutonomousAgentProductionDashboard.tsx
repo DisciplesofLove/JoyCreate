@@ -110,7 +110,7 @@ import {
   useAuditLog,
   useProductionEvents,
   useInitializeProductionSystem,
-} from "@/hooks/useAutonomousAgentProduction";
+} from "@/hooks/useAutonomousAgent";
 import type {
   ResourceThrottle,
   ApprovalRequest,

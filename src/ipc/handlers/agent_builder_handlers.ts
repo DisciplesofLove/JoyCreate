@@ -17,6 +17,8 @@ import {
 import { eq, desc } from "drizzle-orm";
 import log from "electron-log";
 
+import { registerAgentBuilderSystemHandlers } from "./agent_builder_system_handlers";
+
 import type {
   CreateAgentRequest,
   UpdateAgentRequest,
@@ -649,6 +651,12 @@ export function registerAgentBuilderHandlers(): void {
   ipcMain.handle("agent:create-video", handleAgentCreateVideo);
 
   logger.info("Agent builder IPC handlers registered");
+
+  // Agent Builder System (`agent-builder:*` namespace) — sibling file with
+  // execution / session / template / system-prompt channels. Different
+  // namespace from this file's `agent:*` channels, but same domain — chain
+  // it so callers only need a single registration entry point.
+  registerAgentBuilderSystemHandlers();
 }
 
 // ============================================================================

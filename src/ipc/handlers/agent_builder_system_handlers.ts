@@ -864,9 +864,15 @@ async function executeBuiltinTool(tool: AgentTool, input: any): Promise<any> {
 async function executeCustomTool(tool: AgentTool, input: any): Promise<any> {
   const { handler } = tool.config;
   if (!handler) throw new Error("Custom tool handler not defined");
-  
-  const fn = new Function("input", "config", handler);
-  return fn(input, tool.config);
+
+  // Sandbox the handler — it originates from agent definitions which may
+  // have been installed from the marketplace and is therefore untrusted.
+  const { runFunctionSandboxed } = await import("@/lib/sandbox/function_sandbox");
+  return runFunctionSandboxed(
+    `const config = ${JSON.stringify(tool.config)};\n${handler}`,
+    input,
+    { label: `tool:${tool.id}:custom` },
+  );
 }
 
 async function executeMcpTool(tool: AgentTool, input: any): Promise<any> {
@@ -892,12 +898,14 @@ async function executeApiTool(tool: AgentTool, input: any): Promise<any> {
 
 async function executeScriptTool(tool: AgentTool, input: any): Promise<any> {
   const { language, script } = tool.config;
-  
+
   if (language === "javascript") {
-    const fn = new Function("input", script);
-    return fn(input);
+    const { runFunctionSandboxed } = await import("@/lib/sandbox/function_sandbox");
+    return runFunctionSandboxed(script, input, {
+      label: `tool:${tool.id}:script`,
+    });
   }
-  
+
   throw new Error(`Unsupported script language: ${language}`);
 }
 

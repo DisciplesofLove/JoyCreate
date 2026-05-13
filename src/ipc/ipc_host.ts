@@ -65,7 +65,6 @@ import { registerQualityAnalysisHandlers } from "./handlers/quality_analysis_han
 import { registerPolicyEngineHandlers } from "./handlers/policy_engine_handlers";
 import { registerFullTextSearchHandlers } from "./handlers/fulltext_search_handlers";
 import { registerDataGenerationHandlers } from "./handlers/data_generation_handlers";
-import { registerDataScrapingHandlers } from "./handlers/data_scraping_handlers";
 import { registerDataTransformationHandlers } from "./handlers/data_transformation_handlers";
 import { registerAnnotationSystemHandlers } from "./handlers/annotation_system_handlers";
 import { registerVersionControlHandlers } from "./handlers/version_control_handlers";
@@ -74,7 +73,6 @@ import { registerPipelineAutomationHandlers } from "./handlers/pipeline_automati
 import { registerAnalyticsReportingHandlers } from "./handlers/analytics_reporting_handlers";
 import { registerSchemaValidationHandlers } from "./handlers/schema_validation_handlers";
 import { registerOrchestratorCoreHandlers } from "./handlers/orchestrator_core_handlers";
-import { registerAgentBuilderSystemHandlers } from "./handlers/agent_builder_system_handlers";
 import { registerTaskExecutionHandlers } from "./handlers/task_execution_handlers";
 import { registerN8nIntegrationHandlers } from "./handlers/n8n_integration_handlers";
 import { registerJcnHandlers } from "./handlers/jcn_handlers";
@@ -135,6 +133,7 @@ import { registerOpenClawKanbanHandlers } from "./handlers/openclaw_kanban_handl
 import { registerOpenClawActivityHandlers } from "./handlers/openclaw_activity_handlers";
 import { registerFlywheelHandlers } from "./handlers/flywheel_handlers";
 import { registerModelRegistryHandlers } from "./handlers/model_registry_handlers";
+import { registerModelCatalogHandlers } from "./handlers/model_catalog_handlers";
 import { registerSsiHandlers } from "./handlers/ssi_handlers";
 import { registerRadicleHandlers } from "./handlers/radicle_handlers";
 import { registerSovereignModelsHandlers } from "./handlers/sovereign_models_handlers";
@@ -152,7 +151,6 @@ import { registerMarketplaceBrowseHandlers } from "./handlers/marketplace_browse
 import { registerCreatorDashboardHandlers } from "./handlers/creator_dashboard_handlers";
 import { registerAgentMarketplaceHandlers } from "./handlers/agent_marketplace_handlers";
 import { registerWorkflowMarketplaceHandlers } from "./handlers/workflow_marketplace_handlers";
-import { registerMcpServerHandlers } from "./handlers/mcp_server_handlers";
 import { registerJoyAssistantHandlers } from "./handlers/joy_assistant_handlers";
 import { registerAutoDeployHandlers } from "./handlers/auto_deploy_handlers";
 import { registerSubgraphHandlers } from "./handlers/subgraph_handlers";
@@ -166,6 +164,9 @@ import { registerDiscordHandlers } from "./handlers/discord_handlers";
 import { registerDatasetTrainingHandlers } from "./handlers/dataset_training_handlers";
 import { registerOnchainAssetBridgeHandlers } from "./handlers/onchain_asset_bridge_handlers";
 import { registerNlpPipelineHandlers } from "./handlers/nlp_pipeline_handlers";
+import { registerStubHandlers } from "./handlers/stub_handlers";
+import { registerGovernanceHandlers } from "./handlers/governance_handlers";
+import { registerTokenomicsHandlers } from "./handlers/tokenomics_handlers";
 import {
   registerTaskExecutorHandlers,
   registerSystemServicesHandlers,
@@ -251,7 +252,8 @@ export function registerIpcHandlers() {
   registerPolicyEngineHandlers();
   registerFullTextSearchHandlers();
   registerDataGenerationHandlers();
-  registerDataScrapingHandlers();
+  // `scraping:*` channels are registered transitively from
+  // `registerScraperHandlers()` above (same scraping domain).
   registerDataTransformationHandlers();
   
   // Advanced Data Studio handlers (Phase 3-4)
@@ -264,7 +266,8 @@ export function registerIpcHandlers() {
   
   // Orchestrator & Agent System handlers
   registerOrchestratorCoreHandlers();
-  registerAgentBuilderSystemHandlers();
+  // `agent-builder:*` channels are registered transitively from
+  // `registerAgentBuilderHandlers()` above (same agent-builder domain).
   registerTaskExecutionHandlers();
   registerN8nIntegrationHandlers();
   
@@ -448,6 +451,10 @@ export function registerIpcHandlers() {
   // Local → IPFS → Celestia → GossipSub → Peers
   registerModelRegistryHandlers();
 
+  // Cloud Model Catalog — watchdog-driven discovery of new provider models
+  // (Anthropic, OpenAI, Google, xAI, OpenRouter)
+  registerModelCatalogHandlers();
+
   // Self-Sovereign Identity — W3C DIDs, Verifiable Credentials, Celestia anchoring
   registerSsiHandlers();
 
@@ -507,8 +514,8 @@ export function registerIpcHandlers() {
   // Workflow Marketplace Publishing — Publish/unpublish workflows to JoyMarketplace
   registerWorkflowMarketplaceHandlers();
 
-  // MCP Server — Start/stop/status for the Model Context Protocol server
-  registerMcpServerHandlers();
+  // MCP Server (mcp-server:*) channels are registered transitively from
+  // `registerMcpHandlers()` above (same MCP domain).
 
   // Joy Assistant — AI platform assistant with smart routing
   registerJoyAssistantHandlers();
@@ -548,4 +555,18 @@ export function registerIpcHandlers() {
 
   // NLP Pipeline — UIMA/GATE/CoreNLP-inspired text analysis + dataset tagging for marketplace
   registerNlpPipelineHandlers();
+
+  // Agent-to-Agent Protocol channels are registered transitively from
+  // `registerA2aHandlers()` above (same `a2a:` namespace, different domain).
+
+  // Governance — proposals, voting, delegations, treasury, DAO config
+  registerGovernanceHandlers();
+
+  // Tokenomics — token economy: balances, staking, rewards, transfers
+  registerTokenomicsHandlers();
+
+  // Stub handlers — safe no-op responders for channels whose main-side
+  // service has not yet been implemented. MUST be registered LAST so real
+  // handlers always win the ipcMain.handle() registration race.
+  registerStubHandlers();
 }

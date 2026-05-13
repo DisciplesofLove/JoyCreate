@@ -2191,7 +2191,7 @@ export function OpenClawKanbanPage() {
   const totalCount = tasks.length;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full w-full min-w-0">
       {/* Header */}
       <div className="flex-shrink-0 flex items-center justify-between gap-4 p-4 border-b border-border/50">
         <div className="flex items-center gap-3">
@@ -2256,7 +2256,7 @@ export function OpenClawKanbanPage() {
       </div>
 
       {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 min-h-0 flex flex-col">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 min-h-0 min-w-0 flex flex-col">
         <div className="flex-shrink-0 px-4 pt-2 border-b border-border/50 flex items-center gap-4">
           <TabsList className="bg-transparent">
             <TabsTrigger value="board" className="text-xs">
@@ -2336,7 +2336,7 @@ export function OpenClawKanbanPage() {
         </div>
 
         {/* Board Tab */}
-        <TabsContent value="board" className="flex-1 m-0 min-h-0 flex flex-col">
+        <TabsContent value="board" className="flex-1 m-0 min-h-0 min-w-0 flex flex-col">
           {/* Column quick-nav pills */}
           <div className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 border-b border-border/30 overflow-x-auto">
             {COLUMNS.map((col) => {

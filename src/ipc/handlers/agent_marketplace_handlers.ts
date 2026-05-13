@@ -286,6 +286,164 @@ export function registerAgentMarketplaceHandlers(): void {
       return response.json();
     }),
   );
+
+  // Install an agent FROM the marketplace into the local DB. Buyer-side
+  // counterpart to `agent:publish-to-marketplace`. Fetches the published
+  // bundle (JSON pinned to IPFS), validates its shape, and creates new
+  // local rows in agents / agent_tools / agent_knowledge_bases.
+  //
+  // The new agent is inserted with publishStatus="local" so the buyer can
+  // edit/republish under their own listing without overwriting the
+  // upstream one.
+  ipcMain.handle(
+    "agent:install-from-marketplace",
+    guarded("agent:install-from-marketplace", async (
+      _e,
+      input: { contentUrl?: string; tokenId?: string; assetId?: string },
+    ): Promise<{ agentId: number; name: string; toolCount: number; kbCount: number }> => {
+      const bundle = await fetchAgentBundle(input);
+
+      const insertedAgent = await db
+        .insert(agents)
+        .values({
+          name: bundle.name || "Installed Agent",
+          description: typeof bundle.description === "string" ? bundle.description : null,
+          type: typeof bundle.type === "string" ? (bundle.type as never) : "chatbot",
+          status: "draft" as const,
+          systemPrompt: typeof bundle.systemPrompt === "string" ? bundle.systemPrompt : null,
+          modelId: typeof bundle.modelId === "string" ? bundle.modelId : null,
+          temperature:
+            typeof bundle.temperature === "number" ? bundle.temperature : null,
+          maxTokens: typeof bundle.maxTokens === "number" ? bundle.maxTokens : null,
+          configJson: (bundle.configJson ?? null) as never,
+          version: typeof bundle.version === "string" ? bundle.version : "1.0.0",
+          publishStatus: "local" as const,
+        })
+        .returning({ id: agents.id, name: agents.name });
+
+      const agentId = insertedAgent[0].id;
+
+      let toolCount = 0;
+      if (Array.isArray(bundle.tools)) {
+        for (const t of bundle.tools) {
+          if (!t || typeof t.name !== "string") continue;
+          await db.insert(agentTools).values({
+            agentId,
+            name: t.name,
+            description: typeof t.description === "string" ? t.description : "",
+            inputSchema: (t.inputSchema ?? null) as never,
+            implementationCode:
+              typeof t.implementationCode === "string" ? t.implementationCode : null,
+            // Default-true: marketplace-installed tools require approval until
+            // the user explicitly trusts them.
+            requiresApproval: true,
+          });
+          toolCount++;
+        }
+      }
+
+      let kbCount = 0;
+      if (Array.isArray(bundle.knowledgeBases)) {
+        for (const kb of bundle.knowledgeBases) {
+          if (!kb || typeof kb.name !== "string") continue;
+          await db.insert(agentKnowledgeBases).values({
+            agentId,
+            name: kb.name,
+            sourceType: typeof kb.type === "string" ? kb.type : "files",
+            sourceConfigJson: (kb.config ?? null) as never,
+          });
+          kbCount++;
+        }
+      }
+
+      logger.info(
+        `Installed agent #${agentId} "${insertedAgent[0].name}" from marketplace (tools=${toolCount}, kbs=${kbCount})`,
+      );
+      return {
+        agentId,
+        name: insertedAgent[0].name,
+        toolCount,
+        kbCount,
+      };
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Bundle fetching helpers
+// ---------------------------------------------------------------------------
+
+interface InstallableAgentBundle {
+  name?: string;
+  description?: string;
+  type?: string;
+  systemPrompt?: string;
+  modelId?: string;
+  temperature?: number;
+  maxTokens?: number;
+  configJson?: unknown;
+  version?: string;
+  tools?: Array<{
+    name?: string;
+    description?: string;
+    inputSchema?: unknown;
+    implementationCode?: string;
+  }>;
+  knowledgeBases?: Array<{ name?: string; type?: string; config?: unknown }>;
+}
+
+/**
+ * Resolve a marketplace asset reference to its agent bundle JSON.
+ *
+ * The renderer is expected to first look up an asset (e.g. via
+ * `joybridge:get-asset`) and pass us the resulting `contentUrl`.
+ *
+ * `tokenId` / `assetId` are accepted but currently informational — callers
+ * should resolve them to a `contentUrl` first. (Adding an in-process
+ * resolver here would create a circular dependency with joybridge_handlers.)
+ */
+async function fetchAgentBundle(input: {
+  contentUrl?: string;
+  tokenId?: string;
+  assetId?: string;
+}): Promise<InstallableAgentBundle> {
+  let url = input.contentUrl;
+
+  if (!url && (input.tokenId || input.assetId)) {
+    const { resolveAssetContentUrl } = await import("./joybridge_handlers");
+    url = await resolveAssetContentUrl(input.tokenId ?? input.assetId!);
+  }
+
+  if (!url) {
+    throw new Error(
+      "Could not resolve agent bundle URL — provide contentUrl, tokenId, or assetId",
+    );
+  }
+
+  // Normalize ipfs:// → public gateway
+  const normalized = url.startsWith("ipfs://")
+    ? url.replace(/^ipfs:\/\//, "https://ipfs.io/ipfs/")
+    : url;
+
+  const res = await fetch(normalized);
+  if (!res.ok) {
+    throw new Error(
+      `Failed to download agent bundle (${res.status}): ${normalized}`,
+    );
+  }
+  const text = await res.text();
+  let bundle: InstallableAgentBundle;
+  try {
+    bundle = JSON.parse(text) as InstallableAgentBundle;
+  } catch (err) {
+    throw new Error(
+      `Bundle at ${normalized} is not valid JSON: ${(err as Error).message}`,
+    );
+  }
+  if (!bundle || typeof bundle !== "object" || !bundle.name) {
+    throw new Error("Bundle JSON is missing required `name` field");
+  }
+  return bundle;
 }
 
 export default registerAgentMarketplaceHandlers;

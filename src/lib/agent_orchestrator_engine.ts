@@ -26,6 +26,7 @@ import { getAutonomousAgentSystem } from "@/lib/autonomous_agent";
 import { getOpenClawCNS } from "@/lib/openclaw_cns";
 import { getOpenClawOllamaBridge } from "@/lib/openclaw_ollama_bridge";
 import { voiceAssistant } from "@/lib/voice_assistant";
+import { reflectOnTaskOutput } from "@/lib/agent_reflection_engine";
 
 import {
   AGENT_TEMPLATES,
@@ -928,22 +929,69 @@ Respond ONLY with valid JSON, no markdown formatting.`;
     // Build execution prompt
     const taskPrompt = this.buildTaskPrompt(task, depOutputs, plan.objective);
 
-    // Execute via OpenClaw CNS
+    // Execute via OpenClaw CNS — with reflection-driven retry. The reflection
+    // engine evaluates each attempt and either accepts the output, requests a
+    // retry with critique-augmented guidance, or signals that the plan itself
+    // needs to be redone (replan — surfaced upstream).
     const cns = getOpenClawCNS();
     const shouldUseLocal = task.executionMode === "local" ||
       (task.executionMode === "hybrid" && task.complexity !== "expert" && task.complexity !== "complex");
 
-    const response = await cns.chat(taskPrompt, {
-      preferLocal: shouldUseLocal,
-    });
+    if (!task.reflections) task.reflections = [];
+    let content = "";
+    let lastResponse: unknown = null;
+    let augmentedPrompt = taskPrompt;
+    const maxAttempts = Math.max(1, (task.maxRetries ?? 0) + 1);
 
-    const content = typeof response === "string" ? response : (response as any).content || "";
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      lastResponse = await cns.chat(augmentedPrompt, { preferLocal: shouldUseLocal });
+      content = typeof lastResponse === "string"
+        ? lastResponse
+        : (lastResponse as { content?: string }).content || "";
+
+      const reflection = await reflectOnTaskOutput({
+        objective: plan.objective,
+        taskName: task.name,
+        taskDescription: task.description,
+        output: content,
+        retryCount: attempt,
+        maxRetries: task.maxRetries ?? 0,
+      });
+
+      task.reflections.push({
+        attempt,
+        verdict: reflection.verdict,
+        score: reflection.score,
+        critique: reflection.critique,
+        issues: reflection.issues,
+        reflectedAt: new Date().toISOString(),
+        durationMs: reflection.durationMs,
+      });
+
+      this.addTrace(orchestration, "info", "reflector",
+        `Reflection (attempt ${attempt + 1}/${maxAttempts}): ${reflection.verdict} [score=${reflection.score.toFixed(2)}]`,
+        { taskId: task.id, critique: reflection.critique, issues: reflection.issues });
+
+      if (reflection.verdict === "accept") break;
+
+      if (reflection.verdict === "replan") {
+        // Surface to caller — executePlan handles `task.error` to fail the
+        // task and trigger plan-level recovery.
+        throw new Error(`Reflection requested replan: ${reflection.critique}`);
+      }
+
+      // verdict === "retry" — only happens when attempts remain
+      task.retryCount = attempt + 1;
+      augmentedPrompt = `${taskPrompt}\n\n--- PRIOR ATTEMPT WAS REJECTED ---\nCritique: ${reflection.critique}\nIssues: ${reflection.issues.join(", ") || "(none specified)"}\nRequired improvements:\n${reflection.retryGuidance}\n\nProduce a corrected response that addresses every point above.`;
+    }
 
     task.output = { content, completedAt: new Date().toISOString() };
 
     this.addTrace(orchestration, "info", "executor", `Task completed: ${task.name}`, {
       taskId: task.id,
       outputLength: content.length,
+      attempts: task.reflections.length,
+      finalScore: task.reflections.at(-1)?.score,
     });
 
     return task.output;

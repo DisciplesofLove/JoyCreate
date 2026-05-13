@@ -9,6 +9,7 @@ import * as path from "path";
 import log from "electron-log";
 import { db } from "@/db";
 import { guarded } from "@/ipc/utils/guarded_handle";
+import { registerDataScrapingHandlers } from "./data_scraping_handlers";
 import type {
   ScrapingConfig,
   ScrapingJob,
@@ -896,4 +897,9 @@ export function registerScraperHandlers() {
   }));
 
   logger.info("Scraper IPC handlers registered");
+
+  // Dataset-targeted scraping (`scraping:*` namespace) lives in a sibling
+  // file but covers the same scraping domain — chain it so callers only
+  // need a single registration entry point.
+  registerDataScrapingHandlers();
 }

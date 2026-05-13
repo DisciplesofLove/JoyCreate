@@ -66,6 +66,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   // â”€â”€ Anthropic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   "claude-sonnet-4-5":   { inputPer1M: 3.00, outputPer1M: 15.00, tier: 3, minComplexity: 3, maxComplexity: 9, provider: "anthropic" },
   "claude-sonnet-4-5-20250929": { inputPer1M: 3.00, outputPer1M: 15.00, tier: 4, minComplexity: 4, maxComplexity: 10, provider: "anthropic" },
+  "claude-opus-4-7":            { inputPer1M: 15.00, outputPer1M: 75.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "anthropic" },
+  "claude-sonnet-4-6":          { inputPer1M:  3.00, outputPer1M: 15.00, tier: 4, minComplexity: 4, maxComplexity:  9, provider: "anthropic" },
   "claude-opus-4-5":            { inputPer1M: 15.00, outputPer1M: 75.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "anthropic" },
   "claude-opus-4-6":            { inputPer1M: 15.00, outputPer1M: 75.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "anthropic" },
 

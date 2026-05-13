@@ -110,10 +110,34 @@ export const MODEL_OPTIONS: Record<string, ModelOption[]> = {
   // https://docs.anthropic.com/en/docs/about-claude/models/all-models#model-comparison-table
   anthropic: [
     {
+      name: "claude-opus-4-7",
+      displayName: "Claude Opus 4.7",
+      description:
+        "Anthropic's most capable model — best for complex coding & reasoning (very expensive!)",
+      maxOutputTokens: 32_000,
+      contextWindow: 200_000,
+      temperature: 0,
+      dollarSigns: 5,
+      tag: "Latest",
+      tagColor: "green",
+    },
+    {
+      name: "claude-sonnet-4-6",
+      displayName: "Claude Sonnet 4.6",
+      description:
+        "Anthropic's latest Sonnet — fast, smart default for most coding tasks",
+      maxOutputTokens: 32_000,
+      contextWindow: 1_000_000,
+      temperature: 0,
+      dollarSigns: 4,
+      tag: "Latest",
+      tagColor: "green",
+    },
+    {
       name: "claude-opus-4-6",
       displayName: "Claude Opus 4.6",
       description:
-        "Anthropic's most capable model â€” best for complex coding & reasoning (very expensive!)",
+        "Previous flagship Opus (very expensive!)",
       maxOutputTokens: 32_000,
       contextWindow: 200_000,
       temperature: 0,
@@ -133,7 +157,7 @@ export const MODEL_OPTIONS: Record<string, ModelOption[]> = {
       name: "claude-sonnet-4-5-20250929",
       displayName: "Claude Sonnet 4.5",
       description:
-        "Anthropic's best model for coding (note: >200k tokens is very expensive!)",
+        "Previous Sonnet (note: >200k tokens is very expensive!)",
       maxOutputTokens: 32_000,
       contextWindow: 1_000_000,
       temperature: 0,
@@ -428,10 +452,32 @@ export const MODEL_OPTIONS: Record<string, ModelOption[]> = {
   ],
   bedrock: [
     {
+      name: "us.anthropic.claude-opus-4-7-v1:0",
+      displayName: "Claude Opus 4.7",
+      description:
+        "Anthropic's most capable model — best for complex coding & reasoning (very expensive!)",
+      maxOutputTokens: 32_000,
+      contextWindow: 200_000,
+      temperature: 0,
+      tag: "Latest",
+      tagColor: "green",
+    },
+    {
+      name: "us.anthropic.claude-sonnet-4-6-v1:0",
+      displayName: "Claude Sonnet 4.6",
+      description:
+        "Anthropic's latest Sonnet — fast, smart default for most coding tasks",
+      maxOutputTokens: 32_000,
+      contextWindow: 1_000_000,
+      temperature: 0,
+      tag: "Latest",
+      tagColor: "green",
+    },
+    {
       name: "us.anthropic.claude-opus-4-6-v1:0",
       displayName: "Claude Opus 4.6",
       description:
-        "Anthropic's most capable model â€” best for complex coding & reasoning (very expensive!)",
+        "Previous flagship Opus (very expensive!)",
       maxOutputTokens: 32_000,
       contextWindow: 200_000,
       temperature: 0,

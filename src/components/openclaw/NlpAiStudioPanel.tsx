@@ -115,6 +115,8 @@ export function NlpAiStudioPanel() {
   ];
 
   const apiModels = [
+    { provider: "anthropic" as const, modelName: "claude-opus-4-7", displayName: "Claude Opus 4.7 (Anthropic, Latest)" },
+    { provider: "anthropic" as const, modelName: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6 (Anthropic, Latest)" },
     { provider: "anthropic" as const, modelName: "claude-opus-4-6", displayName: "Claude Opus 4.6 (Anthropic)" },
     { provider: "anthropic" as const, modelName: "claude-sonnet-4-5", displayName: "Claude Sonnet 4 (Anthropic)" },
     { provider: "openai" as const, modelName: "gpt-5.1", displayName: "GPT 5.1 (OpenAI)" },

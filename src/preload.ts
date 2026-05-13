@@ -777,6 +777,7 @@ const validInvokeChannels = [
   "agent:publish-to-marketplace",
   "agent:unpublish",
   "agent:update-listing",
+  "agent:install-from-marketplace",
   // Workflow Marketplace Publishing
   "workflow:publish-to-marketplace",
   "workflow:install-from-marketplace",
@@ -2117,6 +2118,8 @@ const validInvokeChannels = [
   "model-registry:download",
   "model-registry:download-status",
   "model-registry:list-downloads",
+  // Cloud Model Catalog Watchdog
+  "models:refresh-catalog",
   // MCP Server
   "mcp-server:start",
   "mcp-server:stop",
@@ -2424,6 +2427,65 @@ const validInvokeChannels = [
   "collab:task:update-status",
   "collab:task:list",
   "collab:activity:recent",
+  // ═══ Stub Channels — see src/ipc/handlers/stub_handlers.ts ═══
+  // Safe no-op responders for renderer callers whose main-side service is not yet implemented.
+  // Remove a channel from this list AND from STUB_CHANNELS once a real handler is wired.
+  // Unified Identity Hub
+  "identity:get-current",
+  "identity:create",
+  "identity:ens:list",
+  "identity:jns:list",
+  "identity:events:list",
+  // OpenClaw Agent Command Center
+  "openclaw:sessions:list",
+  "openclaw:sessions:history",
+  "openclaw:sessions:send",
+  "openclaw:subagents:list",
+  "openclaw:subagents:kill",
+  "openclaw:subagents:steer",
+  "openclaw:cron:list",
+  "openclaw:cron:update",
+  "openclaw:cron:remove",
+  "openclaw:cron:run",
+  "openclaw:celestia:receipts:list",
+  "joycreate:agents:list",
+  "joycreate:agents:update",
+  "joycreate:agents:deploy",
+  // Data Studio Extended — version control
+  "version-control:initialize",
+  "version-control:commit",
+  "version-control:get-history",
+  "version-control:create-branch",
+  "version-control:switch-branch",
+  "version-control:merge",
+  "version-control:get-diff",
+  "version-control:rollback",
+  "version-control:create-tag",
+  "version-control:get-timeline",
+  // Data Studio Extended — lineage helpers
+  "lineage:add-node",
+  "lineage:add-edge",
+  "lineage:get-upstream",
+  "lineage:get-downstream",
+  "lineage:analyze-impact",
+  // Data Studio Extended — pipeline runs
+  "pipeline:get-run-status",
+  "pipeline:cancel-run",
+  "pipeline:get-run-history",
+  // Data Studio Extended — analytics & reports
+  "analytics:dataset-stats",
+  "analytics:global-stats",
+  "report:generate",
+  "report:export",
+  "report:get-history",
+  // Data Studio Extended — dashboards
+  "dashboard:create",
+  "dashboard:update",
+  "dashboard:list",
+  "dashboard:get-data",
+  // Data Studio Extended — generation jobs/templates
+  "generation:list-jobs",
+  "generation:save-template",
 ];
 
 // Add valid receive channels

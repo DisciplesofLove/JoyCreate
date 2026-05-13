@@ -13,6 +13,7 @@ import {
   mcpHubManager,
   type McpServerStatusInfo,
 } from "../utils/mcp_hub_manager";
+import { registerMcpServerHandlers } from "./mcp_server_handlers";
 import { buildMcpToolSet } from "../../lib/mcp_ai_bridge";
 import { CreateMcpServer, McpServerUpdate, McpTool } from "../ipc_types";
 
@@ -353,6 +354,11 @@ export function registerMcpHandlers() {
   handle("mcp:ensure-essentials", async () => {
     return await seedEssentialServers();
   });
+
+  // MCP HTTP server lifecycle (start/stop/status/get-config) lives in a
+  // sibling file but registers under the same `mcp-server:*` namespace —
+  // chain it so callers only need a single registration entry point.
+  registerMcpServerHandlers();
 }
 
 const ESSENTIAL_MCP_SERVERS: CreateMcpServer[] = [

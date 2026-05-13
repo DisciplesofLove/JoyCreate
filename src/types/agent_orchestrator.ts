@@ -214,6 +214,24 @@ export type TaskNodeStatus =
   | "blocked"
   | "retrying";
 
+/**
+ * One reflection verdict produced by the reflection engine after a single
+ * task attempt. See `src/lib/agent_reflection_engine.ts`.
+ */
+export interface TaskReflection {
+  /** Attempt index this reflection corresponds to (0-based). */
+  attempt: number;
+  verdict: "accept" | "retry" | "replan";
+  /** 0..1 quality score from the critic model. */
+  score: number;
+  critique: string;
+  issues: string[];
+  /** ISO timestamp the reflection completed. */
+  reflectedAt: string;
+  /** Wall-clock duration of the reflection call in ms. */
+  durationMs: number;
+}
+
 export interface TaskNode {
   id: TaskNodeId;
   name: string;
@@ -242,6 +260,11 @@ export interface TaskNode {
   /** Retry count */
   retryCount: number;
   maxRetries: number;
+  /**
+   * Reflection verdicts produced by the reflection engine, one per attempt.
+   * Empty/undefined when reflection is disabled (legacy tasks).
+   */
+  reflections?: TaskReflection[];
   /** Execution mode for this specific task */
   executionMode: ExecutionMode;
   /** Timestamps */

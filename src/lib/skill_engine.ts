@@ -308,10 +308,14 @@ async function executeFunctionSkill(
     throw new Error("Function skill has no implementation code");
   }
 
-  // Run in a limited scope — no access to node globals
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const fn = new AsyncFunction("input", skill.implementationCode);
-  const result = await fn(input);
+  // Run untrusted skill code in a worker-thread sandbox so a hang, infinite
+  // loop, or thrown exception cannot crash the main process. The worker is
+  // killed after the timeout regardless of result.
+  const { runFunctionSandboxed } = await import("@/lib/sandbox/function_sandbox");
+  const result = await runFunctionSandboxed(skill.implementationCode, input, {
+    label: `skill:${skill.name}`,
+    timeoutMs: 10_000,
+  });
   return typeof result === "string" ? result : JSON.stringify(result);
 }
 

@@ -1,6 +1,10 @@
 import { app, BrowserWindow, dialog, Menu, session } from "electron";
 import * as path from "node:path";
 import { registerIpcHandlers } from "./ipc/ipc_host";
+import {
+  startModelCatalogWatchdog,
+  stopModelCatalogWatchdog,
+} from "./lib/model_catalog_watchdog";
 import dotenv from "dotenv";
 // @ts-ignore
 import started from "electron-squirrel-startup";
@@ -109,6 +113,13 @@ export async function onReady() {
   void seedEssentialMcpServers().catch((err) =>
     logger.warn("Essential MCP server seeding failed", err),
   );
+
+  // Start the cloud-model catalog watchdog. Polls Anthropic / OpenAI / Google /
+  // xAI / OpenRouter on a schedule and upserts newly-released models into the
+  // language_models table so the builder dropdowns stay current without a
+  // JoyCreate release.
+  startModelCatalogWatchdog();
+  app.on("will-quit", () => stopModelCatalogWatchdog());
 
   // Restore vault config from disk (if vault was previously initialized)
   loadVaultConfigFromDisk();

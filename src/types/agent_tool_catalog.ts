@@ -190,7 +190,7 @@ export const AGENT_TOOL_CATALOG: CatalogTool[] = [
         model: {
           type: "string",
           description: "Model to use",
-          enum: ["gpt-5.1", "gpt-5-mini", "claude-opus-4-6", "claude-sonnet-4-5", "gemini-3-flash-preview", "llama3.2"],
+          enum: ["gpt-5.1", "gpt-5-mini", "claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6", "claude-sonnet-4-5", "gemini-3-flash-preview", "llama3.2"],
           default: "gpt-5-mini",
         },
         temperature: { type: "number", description: "Sampling temperature (0-2)", default: 0.7 },

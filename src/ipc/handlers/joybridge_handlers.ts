@@ -268,6 +268,22 @@ function ensureClient(forceReload = false): JoyBridgeClient {
   return client;
 }
 
+/**
+ * Public helper for sibling main-process handlers (e.g. agent install) that
+ * need to look up an asset's IPFS / HTTPS content URL given a tokenId or
+ * marketplace asset id. Keeps `ensureClient`/`loadConfig` private while
+ * giving cross-handler code a stable, narrow API.
+ */
+export async function resolveAssetContentUrl(
+  idOrToken: string,
+): Promise<string | undefined> {
+  await loadConfig();
+  const asset = (await ensureClient().getAsset(idOrToken)) as
+    | { contentUrl?: string; data?: { contentUrl?: string } }
+    | null;
+  return asset?.contentUrl ?? asset?.data?.contentUrl;
+}
+
 // -- Pure helpers (exported for tests) --------------------------------------
 
 export const __test__ = {

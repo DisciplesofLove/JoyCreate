@@ -39,6 +39,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useMarketplaceBrowse } from "@/hooks/use_marketplace_browse";
+import { useMutation } from "@tanstack/react-query";
+import { IpcClient } from "@/ipc/ipc_client";
+import { showSuccess, showError } from "@/lib/toast";
 import type {
   MarketplaceBrowseParams,
   MarketplaceBrowseItem,
@@ -124,6 +127,26 @@ export default function JoyMarketplacePage() {
     // alongside the chain-native `currency` rather than re-scaling.
     return `${(item.price ?? 0).toFixed(4)} ${item.currency}`;
   }
+
+  // Buyer-side install for marketplace agents. Resolves the asset's
+  // contentUrl via JoyBridge inside the handler and inserts a local copy.
+  const installAgent = useMutation({
+    mutationFn: async (item: MarketplaceBrowseItem) => {
+      return IpcClient.getInstance().agentInstallFromMarketplace({
+        assetId: item.id,
+      });
+    },
+    onSuccess: (res) => {
+      showSuccess(
+        `Installed agent "${res.name}" (${res.toolCount} tool${res.toolCount === 1 ? "" : "s"})`,
+      );
+    },
+    onError: (err) => {
+      showError(
+        err instanceof Error ? err.message : "Failed to install agent",
+      );
+    },
+  });
 
   return (
     <div className="container mx-auto p-6 space-y-6">
@@ -243,6 +266,23 @@ export default function JoyMarketplacePage() {
                   <span>{priceLabel(a)}</span>
                   <Badge variant="outline">published</Badge>
                 </div>
+                {a.assetType === "agent" && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="w-full mt-2"
+                    disabled={
+                      installAgent.isPending &&
+                      installAgent.variables?.id === a.id
+                    }
+                    onClick={() => installAgent.mutate(a)}
+                  >
+                    {installAgent.isPending &&
+                    installAgent.variables?.id === a.id
+                      ? "Installing…"
+                      : "Install Agent"}
+                  </Button>
+                )}
               </CardContent>
             </Card>
           ))}

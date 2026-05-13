@@ -1023,6 +1023,12 @@ export default function AgentEditorPage() {
                           <SelectItem value="gpt-5-mini">
                             GPT 5 Mini
                           </SelectItem>
+                          <SelectItem value="claude-opus-4-7">
+                            Claude Opus 4.7 (Latest)
+                          </SelectItem>
+                          <SelectItem value="claude-sonnet-4-6">
+                            Claude Sonnet 4.6 (Latest)
+                          </SelectItem>
                           <SelectItem value="claude-opus-4-6">
                             Claude Opus 4.6
                           </SelectItem>

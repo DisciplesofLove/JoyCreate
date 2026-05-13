@@ -372,3 +372,8 @@ export function useAutonomousAgentManager() {
     refetchAgents: agents.refetch,
   };
 }
+
+// Re-export production-grade hooks (PRODUCTION_KEYS, schedules, approvals,
+// templates, notifications, audit, knowledge graph, metrics, backups) so a
+// single import covers the whole autonomous-agent surface.
+export * from "./useAutonomousAgentProduction";

@@ -4986,6 +4986,14 @@ export class IpcClient {
     return this.ipcRenderer.invoke("agent:update-listing", params);
   }
 
+  public async agentInstallFromMarketplace(input: {
+    contentUrl?: string;
+    tokenId?: string;
+    assetId?: string;
+  }): Promise<{ agentId: number; name: string; toolCount: number; kbCount: number }> {
+    return this.ipcRenderer.invoke("agent:install-from-marketplace", input);
+  }
+
   // ── Workflow Marketplace ───────────────────────────────────────────────
 
   public async workflowPublishToMarketplace(payload: UnifiedPublishPayload): Promise<PublishResult> {
@@ -5002,6 +5010,33 @@ export class IpcClient {
 
   public async workflowListPublished(): Promise<unknown[]> {
     return this.ipcRenderer.invoke("workflow:list-published");
+  }
+
+  // ── Agent Orchestrator (trace replay) ─────────────────────────
+
+  public async orchestratorGet(orchestrationId: string): Promise<unknown> {
+    return this.ipcRenderer.invoke("orchestrator:get", orchestrationId);
+  }
+
+  public async orchestratorList(filter?: {
+    status?: string;
+    limit?: number;
+  }): Promise<unknown[]> {
+    return this.ipcRenderer.invoke("orchestrator:list", filter);
+  }
+
+  // ── Cloud Model Catalog Watchdog ──────────────────────────────
+
+  public async refreshModelCatalog(): Promise<
+    Array<{
+      providerId: string;
+      discovered: number;
+      added: number;
+      skipped: number;
+      error?: string;
+    }>
+  > {
+    return this.ipcRenderer.invoke("models:refresh-catalog");
   }
 
   // ── MCP Server ─────────────────────────────────────────────────

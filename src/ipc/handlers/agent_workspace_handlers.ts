@@ -580,9 +580,15 @@ async function runCodeExecutionTask(
 
   if (language === "javascript") {
     try {
-      // Safe execution in a limited scope
-      const fn = new Function("input", `"use strict";\n${code}`);
-      const result = fn(task.input.inputs || {});
+      // Sandbox via worker thread \u2014 untrusted script must not run in main proc.
+      const { runFunctionSandboxed } = await import(
+        "@/lib/sandbox/function_sandbox"
+      );
+      const result = await runFunctionSandboxed(
+        `"use strict";\n${code}`,
+        task.input.inputs || {},
+        { label: `agent-workspace:${task.id}` },
+      );
       return { language, success: true, result };
     } catch (err: any) {
       return { language, success: false, error: err.message };

@@ -769,8 +769,10 @@ export function CreateBotDialog({ open, onOpenChange, onCreate }: CreateBotDialo
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="anthropic/claude-opus-4-7">Claude Opus 4.7 (Latest)</SelectItem>
+                    <SelectItem value="anthropic/claude-sonnet-4-6">Claude Sonnet 4.6 (Latest)</SelectItem>
                     <SelectItem value="anthropic/claude-sonnet-4-5">Claude Sonnet 4</SelectItem>
-                    <SelectItem value="anthropic/claude-opus-4-6">Claude Opus 4</SelectItem>
+                    <SelectItem value="anthropic/claude-opus-4-6">Claude Opus 4.6</SelectItem>
                     <SelectItem value="google/gemini-2.5-pro">Gemini 2.5 Pro</SelectItem>
                     <SelectItem value="deepseek/deepseek-chat">DeepSeek Chat</SelectItem>
                     <SelectItem value="local/llama-3.2">Llama 3.2 (Local)</SelectItem>

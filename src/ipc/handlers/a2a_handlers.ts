@@ -19,6 +19,7 @@
 
 import log from "electron-log";
 import { createLoggedHandler } from "./safe_handle";
+import { registerA2AProtocolHandlers } from "./a2a_protocol_handlers";
 
 import {
   acceptQuote,
@@ -246,4 +247,10 @@ export function registerA2aHandlers(): void {
   });
 
   logger.info("A2A economy handlers registered (16 channels)");
+
+  // Protocol layer (capability registry, task lifecycle, messaging, network
+  // stats) — separate file/domain but sharing the `a2a:` namespace, so we
+  // register both from a single entry point. ipc_host.ts only needs to call
+  // `registerA2aHandlers()`.
+  registerA2AProtocolHandlers();
 }

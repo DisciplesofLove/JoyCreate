@@ -1,4 +1,4 @@
-import { StrictMode, useEffect } from "react";
+import { StrictMode, useEffect, Component, type ErrorInfo, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { router } from "./router";
 import { RouterProvider } from "@tanstack/react-router";
@@ -19,6 +19,108 @@ import { JoyWalletProviders } from "./config/joy-wallet-providers";
 
 // @ts-ignore
 console.log("Running in mode:", import.meta.env.MODE);
+
+// Top-level boundary so a single provider/page failure doesn't blank the
+// entire window. Logs to console (forwarded to main.log via webContents
+// console-message hook) and shows a recovery UI.
+class RendererErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "[renderer] Unhandled render error:",
+      error,
+      info.componentStack,
+    );
+  }
+
+  render() {
+    if (this.state.error) {
+      const message = this.state.error.message || String(this.state.error);
+      const stack = this.state.error.stack || "";
+      return (
+        <div
+          style={{
+            fontFamily:
+              "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+            padding: 24,
+            maxWidth: 900,
+            margin: "40px auto",
+            color: "#111",
+            background: "#fff",
+            border: "1px solid #e2e2e2",
+            borderRadius: 12,
+            boxShadow: "0 4px 24px rgba(0,0,0,0.08)",
+          }}
+        >
+          <h1 style={{ marginTop: 0, fontSize: 22 }}>
+            JoyCreate hit a render error
+          </h1>
+          <p style={{ color: "#444" }}>
+            The renderer crashed before the app could mount. Reload to try
+            again — the underlying error is below.
+          </p>
+          <pre
+            style={{
+              background: "#fafafa",
+              border: "1px solid #eee",
+              borderRadius: 8,
+              padding: 12,
+              fontSize: 12,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              maxHeight: 360,
+              overflow: "auto",
+            }}
+          >
+            {message}
+            {"\n\n"}
+            {stack}
+          </pre>
+          <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              style={{
+                padding: "8px 14px",
+                borderRadius: 6,
+                border: "1px solid #7c3aed",
+                background: "#7c3aed",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              Reload window
+            </button>
+            <button
+              type="button"
+              onClick={() => this.setState({ error: null })}
+              style={{
+                padding: "8px 14px",
+                borderRadius: 6,
+                border: "1px solid #ddd",
+                background: "#fff",
+                color: "#333",
+                cursor: "pointer",
+              }}
+            >
+              Dismiss & try again
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface MyMeta extends Record<string, unknown> {
   showErrorToast: boolean;
@@ -173,15 +275,17 @@ function App() {
 }
 
 createRoot(document.getElementById("root")!).render(
-  <QueryClientProvider client={queryClient}>
-    <JoyWalletProviders>
-      {posthogClient ? (
-        <PostHogProvider client={posthogClient}>
+  <RendererErrorBoundary>
+    <QueryClientProvider client={queryClient}>
+      <JoyWalletProviders>
+        {posthogClient ? (
+          <PostHogProvider client={posthogClient}>
+            <App />
+          </PostHogProvider>
+        ) : (
           <App />
-        </PostHogProvider>
-      ) : (
-        <App />
-      )}
-    </JoyWalletProviders>
-  </QueryClientProvider>,
+        )}
+      </JoyWalletProviders>
+    </QueryClientProvider>
+  </RendererErrorBoundary>,
 );

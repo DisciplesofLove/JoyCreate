@@ -83,6 +83,8 @@ import { registerPluginHandlers } from "./handlers/plugin_handlers";
 import { registerBenchmarkHandlers } from "./handlers/benchmark_handlers";
 import { registerCodingAgentHandlers } from "./handlers/coding_agent_handlers";
 import { registerCodeStudioHandlers } from "./handlers/code_studio_handlers";
+import { registerCodeStudioAgentHandlers } from "./handlers/code_studio_agent_handlers";
+import { registerAppClarificationAgentHandlers } from "./handlers/app_clarification_agent_handlers";
 import { registerDesignSystemHandlers } from "./handlers/design_system_handlers";
 import { registerSecretsVaultHandlers } from "./handlers/secrets_vault_handlers";
 import { registerOfflineDocsHandlers } from "./handlers/offline_docs_handlers";
@@ -294,6 +296,8 @@ export function registerIpcHandlers() {
   
   // Code Studio - In-app code editor with Monaco + AI agent integration
   registerCodeStudioHandlers();
+  registerCodeStudioAgentHandlers();
+  registerAppClarificationAgentHandlers();
   
   // Design System Generator - Auto-generate component libraries
   registerDesignSystemHandlers();

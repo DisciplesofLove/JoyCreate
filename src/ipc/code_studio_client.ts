@@ -140,8 +140,83 @@ class CodeStudioClient {
   }): Promise<CodeStudioProject> {
     return ipc().invoke("code-studio:clone-repo", args) as Promise<CodeStudioProject>;
   }
+
+  // -- AI Agent ------------------------------------------------------------
+
+  async agentRun(opts: {
+    intent: string;
+    openFile?: string | null;
+    autoApprove?: boolean;
+    model?: string;
+    provider?: string;
+  }): Promise<AgentRunResult> {
+    return ipc().invoke("code-studio:agent:run", opts) as Promise<AgentRunResult>;
+  }
+
+  async agentCancel(runId: string): Promise<void> {
+    await ipc().invoke("code-studio:agent:cancel", runId);
+  }
+
+  /** Subscribe to streaming events from the active agent run. */
+  onAgentEvent(callback: (event: AgentRunEvent) => void): () => void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const electron = (window as any).electron;
+    if (!electron?.ipcRenderer) {
+      throw new Error("Code Studio agent IPC not available — preload not loaded");
+    }
+    const handler = (_evt: unknown, payload: AgentRunEvent) => callback(payload);
+    electron.ipcRenderer.on("code-studio:agent:event", handler);
+    return () => {
+      electron.ipcRenderer.removeListener?.(
+        "code-studio:agent:event",
+        handler,
+      );
+    };
+  }
 }
 
 export const codeStudioClient = CodeStudioClient.getInstance();
 
-export type { FsEntry, OpenFileResult, WriteFilePatch, PatchPreview, CodeStudioProject };
+export type {
+  FsEntry,
+  OpenFileResult,
+  WriteFilePatch,
+  PatchPreview,
+  CodeStudioProject,
+};
+
+// Agent shapes (kept here so the renderer doesn't import from main-process
+// handler modules — the handler module pulls in `electron`).
+export interface AgentFileChange {
+  path: string;
+  type: "created" | "modified" | "deleted";
+  linesAdded?: number;
+  linesRemoved?: number;
+}
+
+export interface AgentRunResult {
+  runId: string;
+  summary: string;
+  changes: AgentFileChange[];
+  finished: boolean;
+}
+
+export interface AgentRunEvent {
+  runId: string;
+  kind:
+    | "started"
+    | "thinking"
+    | "tool"
+    | "text"
+    | "applied"
+    | "rejected"
+    | "error"
+    | "done";
+  message?: string;
+  toolName?: string;
+  toolInput?: unknown;
+  toolOutput?: unknown;
+  textDelta?: string;
+  change?: AgentFileChange;
+  error?: string;
+}

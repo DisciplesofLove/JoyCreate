@@ -74,6 +74,11 @@ export interface CodeStudioProject {
 
 let workspaceRoot: string | null = null;
 
+/** Read the active workspace root selected in Code Studio (or `null`). */
+export function getCodeStudioWorkspaceRoot(): string | null {
+  return workspaceRoot;
+}
+
 const IGNORED_DIRS = new Set([
   "node_modules",
   ".git",
@@ -86,6 +91,11 @@ const IGNORED_DIRS = new Set([
   ".vite",
   ".vscode-test",
 ]);
+
+/** Directory names ignored when listing / searching the workspace. */
+export function getCodeStudioIgnoredDirs(): ReadonlySet<string> {
+  return IGNORED_DIRS;
+}
 
 const LANG_BY_EXT: Record<string, string> = {
   ts: "typescript", tsx: "typescript",

@@ -214,6 +214,12 @@ const validInvokeChannels = [
   "code-studio:remove-project",
   "code-studio:switch-project",
   "code-studio:clone-repo",
+  "code-studio:agent:run",
+  "code-studio:agent:cancel",
+  // App Clarification Agent (Quick Start scoping)
+  "app-clarification:run",
+  "app-clarification:answer",
+  "app-clarification:cancel",
   // Design System Generator
   "design-system:initialize",
   "design-system:create",
@@ -2535,6 +2541,10 @@ const validReceiveChannels = [
   "benchmark:event",
   // AI Coding Agent events
   "coding-agent:event",
+  // Code Studio agent events
+  "code-studio:agent:event",
+  // App Clarification agent events
+  "app-clarification:event",
   // Design System Generator events
   "design-system:event",
   // Secrets Vault events

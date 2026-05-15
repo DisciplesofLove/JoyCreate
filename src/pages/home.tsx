@@ -34,6 +34,13 @@ import type { FileAttachment } from "@/ipc/ipc_types";
 import { NEON_TEMPLATE_IDS } from "@/shared/templates";
 import { neonTemplateHook } from "@/client_logic/template_hook";
 import { ProBanner } from "@/components/ProBanner";
+import { useAtomValue } from "jotai";
+import {
+  quickStartConfigAtom,
+  lastBuildBriefAtom,
+} from "@/atoms/quickStartAtoms";
+import { useAppClarificationAgent } from "@/hooks/useAppClarificationAgent";
+import { QuickStartCockpit } from "@/components/app-builder/QuickStartCockpit";
 
 // Adding an export for attachments
 export interface HomeSubmitOptions {
@@ -58,6 +65,9 @@ export default function HomePage() {
   const [releaseUrl, setReleaseUrl] = useState("");
   const { theme } = useTheme();
   const queryClient = useQueryClient();
+  const quickStartConfig = useAtomValue(quickStartConfigAtom);
+  const setLastBuildBrief = useSetAtom(lastBuildBriefAtom);
+  const clarification = useAppClarificationAgent();
 
   // Listen for force-close events
   useEffect(() => {
@@ -138,10 +148,32 @@ export default function HomePage() {
     if (!inputValue.trim() && attachments.length === 0) return;
 
     try {
+      // Run the App Clarification agent first. It returns a refined brief
+      // (asking 1–4 questions inline if needed). The agent uses
+      // `quickStartConfig` chips/advanced fields as known facts.
+      let refinedPrompt = inputValue;
+      let appName = generateCuteAppName();
+
+      try {
+        posthog.capture("home:clarify-start");
+        const result = await clarification.start({
+          prompt: inputValue,
+          config: quickStartConfig,
+        });
+        if (result.brief) {
+          refinedPrompt = result.brief.refinedPrompt || inputValue;
+          appName = result.brief.title?.trim() || appName;
+          setLastBuildBrief(result.brief);
+          posthog.capture("home:clarify-complete");
+        }
+      } catch (clarErr) {
+        // Non-fatal — fall back to the user's raw prompt.
+        console.warn("Clarification agent failed; using raw prompt", clarErr);
+      }
+
       setIsLoading(true);
-      // Create the chat and navigate
       const result = await IpcClient.getInstance().createApp({
-        name: generateCuteAppName(),
+        name: appName,
       });
       if (
         settings?.selectedTemplateId &&
@@ -153,9 +185,9 @@ export default function HomePage() {
         });
       }
 
-      // Stream the message with attachments
+      // Stream the refined message with attachments
       streamMessage({
-        prompt: inputValue,
+        prompt: refinedPrompt,
         chatId: result.chatId,
         attachments,
       });
@@ -166,16 +198,15 @@ export default function HomePage() {
       setInputValue("");
       setSelectedAppId(result.app.id);
       setIsPreviewOpen(false);
-      await refreshApps(); // Ensure refreshApps is awaited if it's async
+      await refreshApps();
       await invalidateAppQuery(queryClient, { appId: result.app.id });
       posthog.capture("home:chat-submit");
       navigate({ to: "/chat", search: { id: result.chatId } });
     } catch (error) {
       console.error("Failed to create chat:", error);
       showError("Failed to create app. " + (error as any).toString());
-      setIsLoading(false); // Ensure loading state is reset on error
+      setIsLoading(false);
     }
-    // No finally block needed for setIsLoading(false) here if navigation happens on success
   };
 
   // Loading overlay for app creation
@@ -206,27 +237,41 @@ export default function HomePage() {
 
   // Main Home Page Content
   return (
-    <div className="flex flex-col items-center justify-center max-w-7xl w-full m-auto p-8">
+    <div className="flex flex-col w-full h-full">
       <ForceCloseDialog
         isOpen={forceCloseDialogOpen}
         onClose={() => setForceCloseDialogOpen(false)}
         performanceData={performanceData}
       />
-      <SetupBanner />
 
-      <div className="w-full">
-        {/* Hero Section */}
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-foreground via-foreground/90 to-foreground/70 bg-clip-text text-transparent">
-            What would you like to build?
-          </h1>
-          <p className="text-muted-foreground">
-            Describe your idea and watch it come to life
-          </p>
-        </div>
+      <div className="flex-1 overflow-auto">
+        <div className="flex flex-col items-center justify-center max-w-7xl w-full m-auto p-8">
+            <SetupBanner />
 
-        <ImportAppButton />
-        <HomeChatInput onSubmit={handleSubmit} />
+            <div className="w-full">
+              {/* Hero Section */}
+              <div className="text-center mb-8">
+                <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-foreground via-foreground/90 to-foreground/70 bg-clip-text text-transparent">
+                  What would you like to build?
+                </h1>
+                <p className="text-muted-foreground">
+                  Describe your idea and watch it come to life
+                </p>
+              </div>
+
+              <ImportAppButton />
+              <QuickStartCockpit
+                clarification={clarification.state}
+                onAnswer={(text) => {
+                  posthog.capture("home:clarify-answer");
+                  void clarification.answer(text);
+                }}
+                onCancel={() => {
+                  posthog.capture("home:clarify-skip");
+                  void clarification.cancel();
+                }}
+              />
+              <HomeChatInput onSubmit={handleSubmit} />
 
         <div className="flex flex-col gap-4 mt-6">
           <div className="flex flex-wrap gap-3 justify-center">
@@ -270,9 +315,11 @@ export default function HomePage() {
             </span>
           </button>
         </div>
-        <ProBanner />
-      </div>
-      <PrivacyBanner />
+              <ProBanner />
+            </div>
+            <PrivacyBanner />
+          </div>
+        </div>
 
       {/* Release Notes Dialog */}
       <Dialog open={releaseNotesOpen} onOpenChange={setReleaseNotesOpen}>

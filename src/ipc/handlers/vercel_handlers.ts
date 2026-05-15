@@ -42,6 +42,27 @@ function createVercelClient(token: string): Vercel {
   });
 }
 
+/**
+ * Sanitize a string into a valid Vercel project name.
+ * Vercel rules: lowercase letters, digits, '.', '_', '-'; max 100 chars;
+ * cannot contain the sequence '---'; must not start/end with separator.
+ * See https://vercel.com/docs/projects/overview#project-name
+ */
+export function sanitizeVercelProjectName(input: string): string {
+  let name = (input ?? "").toLowerCase().trim();
+  // Replace whitespace and any disallowed chars with '-'.
+  name = name.replace(/[^a-z0-9._-]+/g, "-");
+  // Collapse runs of '-' so we never produce the forbidden '---' sequence.
+  name = name.replace(/-{2,}/g, "-");
+  // Strip leading/trailing separators.
+  name = name.replace(/^[._-]+|[._-]+$/g, "");
+  // Cap at 100 chars (Vercel limit).
+  if (name.length > 100) name = name.slice(0, 100).replace(/[._-]+$/g, "");
+  // Final fallback if everything got stripped.
+  if (!name) name = `app-${Date.now().toString(36)}`;
+  return name;
+}
+
 interface VercelProjectResponse {
   id: string;
   name: string;
@@ -254,6 +275,7 @@ async function handleIsProjectAvailable(
   event: IpcMainInvokeEvent,
   { name }: IsVercelProjectAvailableParams,
 ): Promise<{ available: boolean; error?: string }> {
+  const sanitized = sanitizeVercelProjectName(name);
   try {
     const settings = readSettings();
     const accessToken = settings.vercelAccessToken?.value;
@@ -262,7 +284,7 @@ async function handleIsProjectAvailable(
     }
 
     // Check if project name is available by searching for projects with that name
-    const response = await getVercelProjects(accessToken, { search: name });
+    const response = await getVercelProjects(accessToken, { search: sanitized });
 
     if (!response.projects) {
       return {
@@ -272,7 +294,7 @@ async function handleIsProjectAvailable(
     }
 
     const projectExists = response.projects.some(
-      (project) => project.name === name,
+      (project) => project.name === sanitized,
     );
 
     return {
@@ -295,8 +317,15 @@ async function handleCreateProject(
     throw new Error("Not authenticated with Vercel.");
   }
 
+  const sanitizedName = sanitizeVercelProjectName(name);
+  if (sanitizedName !== name) {
+    logger.info(
+      `Sanitized Vercel project name '${name}' → '${sanitizedName}'`,
+    );
+  }
+
   try {
-    logger.info(`Creating Vercel project: ${name} for app ${appId}`);
+    logger.info(`Creating Vercel project: ${sanitizedName} for app ${appId}`);
 
     // Get app details to determine the framework
     const app = await db.query.apps.findFirst({ where: eq(apps.id, appId) });
@@ -322,7 +351,7 @@ async function handleCreateProject(
 
     const projectData = await vercel.projects.createProject({
       requestBody: {
-        name: name,
+        name: sanitizedName,
         gitRepository: {
           type: "github",
           repo: `${app.githubOrg}/${app.githubRepo}`,

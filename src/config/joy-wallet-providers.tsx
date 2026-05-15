@@ -27,12 +27,20 @@ import { polygonAmoy } from "wagmi/chains";
 import { JoyPrivyBridge } from "../components/wallet/JoyPrivyBridge";
 import { initWalletRegistry } from "../lib/wallet/registry";
 
+const RAW_PRIVY_APP_ID = (import.meta.env.VITE_PRIVY_APP_ID as
+  | string
+  | undefined)?.trim();
+
+// Privy refuses to load its iframe and floods the console with
+// "Exceeded max attempts before resolving function" when the appId is a
+// placeholder. That repeated failure can starve the React tree on slow
+// machines and surface as a white screen. Treat any non-real-looking ID
+// as "Privy disabled" and skip the provider entirely.
 const PRIVY_APP_ID =
-  (import.meta.env.VITE_PRIVY_APP_ID as string | undefined) ??
-  // Stub ID — Privy login will surface a configuration error if used
-  // before the integrator sets a real ID. The provider itself is safe
-  // to mount with a placeholder.
-  "joycreate-set-VITE_PRIVY_APP_ID";
+  RAW_PRIVY_APP_ID && RAW_PRIVY_APP_ID.length > 0 &&
+  !RAW_PRIVY_APP_ID.startsWith("joycreate-set-")
+    ? RAW_PRIVY_APP_ID
+    : null;
 
 // Single app-wide wagmi config. Thirdweb manages its own provider tree
 // internally so we just mount <ThirdwebProvider> without explicit config.
@@ -47,6 +55,23 @@ export function JoyWalletProviders({ children }: { children: ReactNode }) {
   useEffect(() => {
     initWalletRegistry();
   }, []);
+
+  const inner = (
+    <WagmiProvider config={wagmiConfig}>
+      <ThirdwebProvider>
+        {PRIVY_APP_ID ? <JoyPrivyBridge /> : null}
+        {children}
+      </ThirdwebProvider>
+    </WagmiProvider>
+  );
+
+  if (!PRIVY_APP_ID) {
+    // No Privy app id configured — skip the provider so the app still
+    // boots. Privy-dependent UIs surface a clear "set VITE_PRIVY_APP_ID"
+    // message instead of bringing the whole window down with a white
+    // screen.
+    return inner;
+  }
 
   return (
     <PrivyProvider
@@ -64,12 +89,7 @@ export function JoyWalletProviders({ children }: { children: ReactNode }) {
         defaultChain: { id: 80002, name: "Polygon Amoy" } as never,
       }}
     >
-      <WagmiProvider config={wagmiConfig}>
-        <ThirdwebProvider>
-          <JoyPrivyBridge />
-          {children}
-        </ThirdwebProvider>
-      </WagmiProvider>
+      {inner}
     </PrivyProvider>
   );
 }

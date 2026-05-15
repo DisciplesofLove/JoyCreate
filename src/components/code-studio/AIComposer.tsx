@@ -1,25 +1,38 @@
 /**
- * AI Composer Panel — surpasses Cursor by integrating with the agentic-OS
- * (Wallet/Policy + Provenance + OS Activities) and JoyCreate's Coding Agent.
+ * AI Composer — in-editor agent panel for Code Studio.
  *
- * Flow:
- *  1. User describes intent (current open file is sent as primary context).
- *  2. The Coding Agent runs the task end-to-end (plans, executes, verifies).
- *  3. Each FileChange is shown with its diff and a "Reload in editor" action.
- *  4. The OS Activity feed + Provenance log capture every change automatically
- *     (Tier 1/4 wiring inside the agent).
+ * Uses the `code-studio:agent:run` IPC channel which talks to a real LLM
+ * with workspace-scoped read / search / write tools. Streams progress
+ * events into the panel and reloads the editor whenever the agent applies
+ * a file change.
  */
 
-import { useEffect, useState } from "react";
-import { Sparkles, Send, Loader2, FilePlus, FileEdit, FileX, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Sparkles,
+  Send,
+  Loader2,
+  FilePlus,
+  FileEdit,
+  FileX,
+  RefreshCw,
+  StopCircle,
+  Wrench,
+  AlertTriangle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
-import { codingAgentClient } from "@/ipc/coding_agent_client";
-import type { AgentSessionId, FileChange } from "@/lib/coding_agent";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import {
+  codeStudioClient,
+  type AgentFileChange,
+  type AgentRunEvent,
+} from "@/ipc/code_studio_client";
 
 interface AIComposerProps {
   openFile: string | null;
@@ -33,81 +46,130 @@ interface RunRecord {
   intent: string;
   summary: string;
   success: boolean;
-  changes: FileChange[];
+  changes: AgentFileChange[];
   durationMs: number;
+  events: AgentRunEvent[];
 }
 
-export function AIComposer({ openFile, openFileContent, onApplied }: AIComposerProps) {
-  const [intent, setIntent] = useState("");
-  const [running, setRunning] = useState(false);
-  const [sessionId, setSessionId] = useState<AgentSessionId | null>(null);
-  const [history, setHistory] = useState<RunRecord[]>([]);
+interface LiveRun {
+  intent: string;
+  startedAt: number;
+  events: AgentRunEvent[];
+  textBuffer: string;
+  changes: Map<string, AgentFileChange>;
+  runId: string | null;
+}
 
+export function AIComposer({
+  openFile,
+  openFileContent: _openFileContent,
+  onApplied,
+}: AIComposerProps) {
+  const [intent, setIntent] = useState("");
+  const [autoApprove, setAutoApprove] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [history, setHistory] = useState<RunRecord[]>([]);
+  const [live, setLive] = useState<LiveRun | null>(null);
+  const liveRef = useRef<LiveRun | null>(null);
+  liveRef.current = live;
+
+  // Subscribe once for streaming events; route by runId.
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const s = await codingAgentClient.createSession({ autoApprove: true, safeMode: true });
-        if (!cancelled) setSessionId(s.id);
-      } catch (err) {
-        console.warn("Could not start coding agent session", err);
+    const unsubscribe = codeStudioClient.onAgentEvent((event) => {
+      const current = liveRef.current;
+      if (!current) return;
+      if (current.runId == null && event.kind === "started") {
+        current.runId = event.runId;
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      if (current.runId && event.runId !== current.runId) return;
+
+      const next: LiveRun = {
+        ...current,
+        events: [...current.events, event],
+      };
+      if (event.kind === "text" && event.textDelta) {
+        next.textBuffer = current.textBuffer + event.textDelta;
+      }
+      if (event.kind === "applied" && event.change) {
+        next.changes = new Map(current.changes);
+        next.changes.set(event.change.path, event.change);
+        onApplied([event.change.path]);
+      }
+      setLive(next);
+    });
+    return unsubscribe;
+  }, [onApplied]);
 
   async function run() {
-    if (!intent.trim() || !sessionId) return;
-    setRunning(true);
-    const startedAt = Date.now();
     const description = intent.trim();
+    if (!description || running) return;
+    setRunning(true);
     setIntent("");
+    const seed: LiveRun = {
+      intent: description,
+      startedAt: Date.now(),
+      events: [],
+      textBuffer: "",
+      changes: new Map(),
+      runId: null,
+    };
+    setLive(seed);
+    liveRef.current = seed;
+
     try {
-      const context =
-        openFile && openFileContent
-          ? {
-              files: [
-                {
-                  path: openFile,
-                  content: openFileContent,
-                  language: openFile.split(".").pop() ?? "text",
-                  relevance: 1,
-                },
-              ],
-              userInstructions: description,
-            }
-          : undefined;
-
-      const task = await codingAgentClient.runTask(sessionId, "code", description, context);
-      const result = task.result;
-      const changes = result?.changes ?? [];
-
-      const record: RunRecord = {
-        id: task.id,
+      const result = await codeStudioClient.agentRun({
         intent: description,
-        summary: result?.summary ?? "Task completed",
-        success: result?.success ?? false,
-        changes,
-        durationMs: Date.now() - startedAt,
+        openFile: openFile ?? null,
+        autoApprove,
+      });
+      const finalChanges = result.changes.length
+        ? result.changes
+        : Array.from(liveRef.current?.changes.values() ?? []);
+      const record: RunRecord = {
+        id: result.runId,
+        intent: description,
+        summary: result.summary,
+        success: result.finished && finalChanges.length > 0,
+        changes: finalChanges,
+        durationMs: Date.now() - seed.startedAt,
+        events: liveRef.current?.events ?? [],
       };
       setHistory((prev) => [record, ...prev].slice(0, 20));
-
-      const touchedPaths = changes.filter((c) => c.type !== "deleted").map((c) => c.path);
-      if (touchedPaths.length > 0) {
-        onApplied(touchedPaths);
-      }
-
-      if (result?.success) {
+      if (finalChanges.length > 0) {
+        onApplied(
+          finalChanges.filter((c) => c.type !== "deleted").map((c) => c.path),
+        );
         toast.success(`Agent: ${result.summary}`);
       } else {
-        toast.warning(`Agent ran but did not succeed: ${result?.summary ?? "unknown"}`);
+        toast.message(result.summary);
       }
     } catch (err) {
       toast.error(`Agent error: ${(err as Error).message}`);
+      const failureRecord: RunRecord = {
+        id: liveRef.current?.runId ?? `fail_${Date.now()}`,
+        intent: description,
+        summary: (err as Error).message,
+        success: false,
+        changes: Array.from(liveRef.current?.changes.values() ?? []),
+        durationMs: Date.now() - seed.startedAt,
+        events: liveRef.current?.events ?? [],
+      };
+      setHistory((prev) => [failureRecord, ...prev].slice(0, 20));
     } finally {
       setRunning(false);
+      setLive(null);
+      liveRef.current = null;
+    }
+  }
+
+  async function cancel() {
+    const id = liveRef.current?.runId;
+    if (!id) return;
+    try {
+      await codeStudioClient.agentCancel(id);
+      toast.message("Agent cancelled");
+    } catch (err) {
+      toast.error(`Cancel failed: ${(err as Error).message}`);
     }
   }
 
@@ -116,11 +178,20 @@ export function AIComposer({ openFile, openFileContent, onApplied }: AIComposerP
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-muted/30">
         <Sparkles className="h-4 w-4 text-primary" />
         <span className="text-sm font-medium">AI Composer</span>
-        {sessionId && (
-          <Badge variant="secondary" className="text-[10px] ml-auto font-mono">
-            {sessionId.slice(0, 8)}
-          </Badge>
-        )}
+        <div className="flex items-center gap-1.5 ml-auto">
+          <Switch
+            id="auto-approve"
+            checked={autoApprove}
+            onCheckedChange={setAutoApprove}
+            disabled={running}
+          />
+          <Label
+            htmlFor="auto-approve"
+            className="text-[11px] text-muted-foreground cursor-pointer"
+          >
+            Auto-apply
+          </Label>
+        </div>
       </div>
 
       <div className="p-3 space-y-2 border-b border-border/40">
@@ -140,26 +211,35 @@ export function AIComposer({ openFile, openFileContent, onApplied }: AIComposerP
           }
           rows={3}
           className="text-sm font-mono resize-none"
-          disabled={running || !sessionId}
+          disabled={running}
         />
-        <Button
-          onClick={run}
-          disabled={running || !sessionId || !intent.trim()}
-          size="sm"
-          className="w-full"
-        >
-          {running ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-          ) : (
-            <Send className="h-3.5 w-3.5 mr-2" />
+        <div className="flex gap-2">
+          <Button
+            onClick={run}
+            disabled={running || !intent.trim()}
+            size="sm"
+            className="flex-1"
+          >
+            {running ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
+            ) : (
+              <Send className="h-3.5 w-3.5 mr-2" />
+            )}
+            Run Agent
+          </Button>
+          {running && (
+            <Button onClick={cancel} size="sm" variant="outline">
+              <StopCircle className="h-3.5 w-3.5 mr-1" />
+              Stop
+            </Button>
           )}
-          Run Agent
-        </Button>
+        </div>
       </div>
 
       <ScrollArea className="flex-1">
         <div className="p-2 space-y-3">
-          {history.length === 0 && !running && (
+          {live && <LiveRunCard run={live} />}
+          {!live && history.length === 0 && (
             <div className="text-xs text-muted-foreground p-4 text-center">
               No runs yet. Describe what you want and press <kbd>Ctrl+Enter</kbd>.
             </div>
@@ -169,6 +249,48 @@ export function AIComposer({ openFile, openFileContent, onApplied }: AIComposerP
           ))}
         </div>
       </ScrollArea>
+    </div>
+  );
+}
+
+function LiveRunCard({ run }: { run: LiveRun }) {
+  const tools = run.events.filter((e) => e.kind === "tool");
+  const errors = run.events.filter((e) => e.kind === "error");
+  const changes = Array.from(run.changes.values());
+  return (
+    <div className="rounded-md border border-primary/40 bg-primary/5 p-2 text-xs space-y-2">
+      <div className="flex items-start gap-2">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-primary mt-0.5 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate">{run.intent}</div>
+          <div className="text-[10px] text-muted-foreground">
+            {tools.length} tool calls · {changes.length} files touched
+          </div>
+        </div>
+      </div>
+      {tools.slice(-4).map((e, i) => (
+        <div
+          key={i}
+          className="flex items-center gap-1.5 text-[10px] text-muted-foreground"
+        >
+          <Wrench className="h-2.5 w-2.5 shrink-0" />
+          <span className="font-mono truncate">
+            {e.toolName}
+            {e.error ? ` — ${e.error}` : ""}
+          </span>
+        </div>
+      ))}
+      {run.textBuffer && (
+        <div className="border-t border-border/40 pt-1.5 text-[11px] whitespace-pre-wrap">
+          {run.textBuffer.slice(-600)}
+        </div>
+      )}
+      {errors.length > 0 && (
+        <div className="text-[10px] text-rose-500 flex items-center gap-1">
+          <AlertTriangle className="h-3 w-3" />
+          {errors[errors.length - 1].error}
+        </div>
+      )}
     </div>
   );
 }
@@ -190,12 +312,17 @@ function RunCard({
       )}
     >
       <div className="flex items-start gap-2 mb-1">
-        <Badge variant={record.success ? "default" : "secondary"} className="text-[10px]">
-          {record.success ? "ok" : "partial"}
+        <Badge
+          variant={record.success ? "default" : "secondary"}
+          className="text-[10px]"
+        >
+          {record.success ? "ok" : "noop"}
         </Badge>
         <div className="flex-1 min-w-0">
           <div className="font-medium truncate">{record.intent}</div>
-          <div className="text-muted-foreground text-[11px] truncate">{record.summary}</div>
+          <div className="text-muted-foreground text-[11px] line-clamp-2">
+            {record.summary}
+          </div>
         </div>
         <span className="text-[10px] text-muted-foreground/70 shrink-0">
           {(record.durationMs / 1000).toFixed(1)}s
@@ -216,11 +343,15 @@ function ChangeRow({
   change,
   onReload,
 }: {
-  change: FileChange;
+  change: AgentFileChange;
   onReload: (paths: string[]) => void;
 }) {
   const Icon =
-    change.type === "created" ? FilePlus : change.type === "deleted" ? FileX : FileEdit;
+    change.type === "created"
+      ? FilePlus
+      : change.type === "deleted"
+        ? FileX
+        : FileEdit;
   const color =
     change.type === "created"
       ? "text-emerald-600 dark:text-emerald-400"
@@ -232,10 +363,14 @@ function ChangeRow({
       <Icon className={cn("h-3 w-3 shrink-0", color)} />
       <span className="font-mono text-[11px] truncate flex-1">{change.path}</span>
       {(change.linesAdded ?? 0) > 0 && (
-        <span className="text-emerald-500 text-[10px] font-mono">+{change.linesAdded}</span>
+        <span className="text-emerald-500 text-[10px] font-mono">
+          +{change.linesAdded}
+        </span>
       )}
       {(change.linesRemoved ?? 0) > 0 && (
-        <span className="text-rose-500 text-[10px] font-mono">-{change.linesRemoved}</span>
+        <span className="text-rose-500 text-[10px] font-mono">
+          -{change.linesRemoved}
+        </span>
       )}
       {change.type !== "deleted" && (
         <button

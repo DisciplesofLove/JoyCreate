@@ -274,15 +274,6 @@ const menuCategories = [
     label: "Build",
     items: [
       {
-        title: "App Builder Studio",
-        to: "/app-builder",
-        icon: Hammer,
-        gradient: "from-pink-500 to-violet-600",
-        hoverBg: "hover:bg-pink-500/10",
-        activeBg: "bg-pink-500/15",
-        activeText: "text-pink-600 dark:text-pink-400",
-      },
-      {
         title: "Code Studio",
         to: "/code-studio",
         icon: Code2,

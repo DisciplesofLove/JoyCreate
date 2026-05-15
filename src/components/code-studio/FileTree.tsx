@@ -3,9 +3,18 @@
  */
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from "lucide-react";
-import { codeStudioClient, type FsEntry } from "@/ipc/code_studio_client";
+import {
+  ChevronDown,
+  ChevronRight,
+  File,
+  Folder,
+  FolderOpen,
+  RefreshCw,
+  AlertCircle,
+} from "lucide-react";
+import { type FsEntry } from "@/ipc/code_studio_client";
 import { useDirListing } from "@/hooks/useCodeStudio";
+import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 
 interface FileTreeProps {
@@ -14,9 +23,29 @@ interface FileTreeProps {
 }
 
 export function FileTree({ selected, onSelect }: FileTreeProps) {
+  const qc = useQueryClient();
   return (
     <div className="text-xs font-mono select-none p-1">
-      <FileTreeNode relPath="" depth={0} expandedByDefault selected={selected} onSelect={onSelect} />
+      <div className="flex items-center justify-between px-1.5 py-1">
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          Explorer
+        </span>
+        <button
+          type="button"
+          title="Refresh"
+          className="p-0.5 rounded hover:bg-accent text-muted-foreground"
+          onClick={() => qc.invalidateQueries({ queryKey: ["code-studio"] })}
+        >
+          <RefreshCw className="h-3 w-3" />
+        </button>
+      </div>
+      <FileTreeNode
+        relPath=""
+        depth={0}
+        expandedByDefault
+        selected={selected}
+        onSelect={onSelect}
+      />
     </div>
   );
 }
@@ -29,9 +58,50 @@ interface NodeProps {
   onSelect: (relPath: string) => void;
 }
 
-function FileTreeNode({ relPath, depth, expandedByDefault, selected, onSelect }: NodeProps) {
-  const [expanded, setExpanded] = useState(!!expandedByDefault);
-  const { data: entries, isLoading } = useDirListing(relPath, expanded);
+function FileTreeNode({
+  relPath,
+  depth,
+  expandedByDefault,
+  selected,
+  onSelect,
+}: NodeProps) {
+  const [expanded] = useState(!!expandedByDefault);
+  const { data: entries, isLoading, error } = useDirListing(relPath, expanded);
+
+  if (error) {
+    return (
+      <div
+        style={{ paddingLeft: depth * 12 + 16 }}
+        className="text-rose-500 py-0.5 flex items-center gap-1"
+        title={(error as Error).message}
+      >
+        <AlertCircle className="h-3 w-3 shrink-0" />
+        <span className="truncate">{(error as Error).message}</span>
+      </div>
+    );
+  }
+
+  if (isLoading && expanded) {
+    return (
+      <div
+        style={{ paddingLeft: depth * 12 + 16 }}
+        className="text-muted-foreground py-0.5"
+      >
+        loading…
+      </div>
+    );
+  }
+
+  if (entries && entries.length === 0) {
+    return (
+      <div
+        style={{ paddingLeft: depth * 12 + 16 }}
+        className="text-muted-foreground/60 py-0.5 italic"
+      >
+        (empty)
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -44,11 +114,6 @@ function FileTreeNode({ relPath, depth, expandedByDefault, selected, onSelect }:
           onSelect={onSelect}
         />
       ))}
-      {isLoading && expanded && (
-        <div style={{ paddingLeft: depth * 12 + 16 }} className="text-muted-foreground py-0.5">
-          loading…
-        </div>
-      )}
     </div>
   );
 }

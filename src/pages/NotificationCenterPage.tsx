@@ -15,47 +15,36 @@
  */
 
 import { useState, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from "sonner";
 import {
-  Bell, BellOff, BellRing, Check, CheckCheck, Trash2, Clock,
-  Search, Filter, Bot, Rocket, Package, Users, Settings,
-  AlertTriangle, Info, AlertCircle, Zap, Archive,
-  Workflow, Shield, Mail, MessageSquare, Activity, RefreshCw,
-  Volume2, VolumeX, Eye, EyeOff, ChevronRight, MoreVertical,
+  Bell, BellOff, BellRing, Check, CheckCheck, Trash2,
+  Search, Bot, Rocket, Package, Users, Settings,
+  AlertTriangle, Info, AlertCircle, Zap,
+  Workflow, Shield, ChevronRight,
 } from "lucide-react";
+import {
+  useNotifications,
+  useUnreadNotificationCount,
+  useMarkNotificationRead,
+  useMarkAllNotificationsRead,
+  useDismissNotification,
+} from "@/hooks/useNotifications";
+import type { NotificationRow } from "@/ipc/ipc_client";
 
 // ============================================================================
-// TYPES
+// TYPES (mirror src/db/schema.ts → notifications)
 // ============================================================================
 
 type NotificationPriority = "urgent" | "high" | "medium" | "low" | "info";
 type NotificationCategory = "agents" | "builds" | "deploys" | "marketplace" | "social" | "system" | "security" | "workflows";
-
-interface Notification {
-  id: string;
-  title: string;
-  message: string;
-  priority: NotificationPriority;
-  category: NotificationCategory;
-  read: boolean;
-  dismissed: boolean;
-  createdAt: string;
-  actionUrl?: string;
-  actionLabel?: string;
-  icon?: string;
-  source?: string;
-}
 
 interface NotificationPrefs {
   category: NotificationCategory;
@@ -66,19 +55,8 @@ interface NotificationPrefs {
 }
 
 // ============================================================================
-// MOCK DATA
+// CONFIG
 // ============================================================================
-
-const MOCK_NOTIFICATIONS: Notification[] = [
-  { id: "1", title: "Agent 'CustomerCare Pro' deployed", message: "Successfully deployed to production environment", priority: "medium", category: "agents", read: false, dismissed: false, createdAt: new Date(Date.now() - 300000).toISOString(), actionUrl: "/agents", actionLabel: "View Agent" },
-  { id: "2", title: "Build failed: DataVault Pro", message: "TypeScript error in src/components/vault.tsx line 42", priority: "high", category: "builds", read: false, dismissed: false, createdAt: new Date(Date.now() - 900000).toISOString(), actionUrl: "/app-details", actionLabel: "Fix Build" },
-  { id: "3", title: "New marketplace sale", message: "AI3 Marketplace template purchased by user@example.com", priority: "medium", category: "marketplace", read: false, dismissed: false, createdAt: new Date(Date.now() - 1800000).toISOString(), actionUrl: "/nft-marketplace", actionLabel: "View Sale" },
-  { id: "4", title: "Security alert: New login from unknown device", message: "A new device logged in from 192.168.1.50 at 10:32 AM", priority: "urgent", category: "security", read: false, dismissed: false, createdAt: new Date(Date.now() - 3600000).toISOString(), actionUrl: "/secrets-vault" },
-  { id: "5", title: "Workflow 'Email Triage' completed", message: "Processed 47 emails, 3 flagged as urgent", priority: "low", category: "workflows", read: true, dismissed: false, createdAt: new Date(Date.now() - 7200000).toISOString(), actionUrl: "/workflows" },
-  { id: "6", title: "Agent Swarm evolved: Gen 5 complete", message: "Best fitness improved from 0.82 to 0.91", priority: "info", category: "agents", read: true, dismissed: false, createdAt: new Date(Date.now() - 14400000).toISOString(), actionUrl: "/agent-swarm" },
-  { id: "7", title: "Celestia blob anchored", message: "Identity event anchored at height 1,234,567", priority: "info", category: "system", read: true, dismissed: false, createdAt: new Date(Date.now() - 28800000).toISOString() },
-  { id: "8", title: "Deploy succeeded: CloudSync Landing", message: "Live at cloudsync.joycreate.app", priority: "medium", category: "deploys", read: true, dismissed: false, createdAt: new Date(Date.now() - 43200000).toISOString(), actionUrl: "/deploy" },
-];
 
 const PRIORITY_CONFIG: Record<NotificationPriority, { icon: React.ReactNode; color: string; bg: string }> = {
   urgent: { icon: <AlertCircle className="w-4 h-4" />, color: "text-red-500", bg: "bg-red-500/10 border-red-500/20" },
@@ -112,23 +90,24 @@ function timeAgo(dateStr: string): string {
 // ============================================================================
 
 function NotificationItem({ notif, onMarkRead, onDismiss }: {
-  notif: Notification;
-  onMarkRead: (id: string) => void;
-  onDismiss: (id: string) => void;
+  notif: NotificationRow;
+  onMarkRead: (id: number) => void;
+  onDismiss: (id: number) => void;
 }) {
   const priority = PRIORITY_CONFIG[notif.priority];
   const category = CATEGORY_CONFIG[notif.category];
+  const isRead = notif.readAt !== null;
 
   return (
-    <div className={`p-3 rounded-lg border transition-colors cursor-pointer ${notif.read ? "bg-muted/5 border-border/20 opacity-70" : priority.bg} hover:opacity-100`}>
+    <div className={`p-3 rounded-lg border transition-colors cursor-pointer ${isRead ? "bg-muted/5 border-border/20 opacity-70" : priority.bg} hover:opacity-100`}>
       <div className="flex items-start gap-3">
         <div className={`mt-0.5 ${priority.color}`}>{priority.icon}</div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
-            <h4 className={`text-sm font-medium truncate ${notif.read ? "text-muted-foreground" : ""}`}>{notif.title}</h4>
-            {!notif.read && <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />}
+            <h4 className={`text-sm font-medium truncate ${isRead ? "text-muted-foreground" : ""}`}>{notif.title}</h4>
+            {!isRead && <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />}
           </div>
-          <p className="text-xs text-muted-foreground/70 line-clamp-1">{notif.message}</p>
+          <p className="text-xs text-muted-foreground/70 line-clamp-1">{notif.body}</p>
           <div className="flex items-center gap-2 mt-1.5">
             <Badge variant="outline" className={`text-[9px] px-1.5 py-0 ${category.color}`}>
               <span className="mr-0.5">{category.icon}</span> {category.label}
@@ -142,7 +121,7 @@ function NotificationItem({ notif, onMarkRead, onDismiss }: {
               {notif.actionLabel || "View"} <ChevronRight className="w-3 h-3 ml-0.5" />
             </Button>
           )}
-          {!notif.read && (
+          {!isRead && (
             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => onMarkRead(notif.id)}>
               <Check className="w-3.5 h-3.5" />
             </Button>
@@ -208,40 +187,35 @@ function NotificationPreferencesTab() {
 // ============================================================================
 
 export default function NotificationCenterPage() {
-  const [notifications, setNotifications] = useState(MOCK_NOTIFICATIONS);
   const [filter, setFilter] = useState<"all" | "unread" | "urgent">("all");
   const [categoryFilter, setCategoryFilter] = useState<NotificationCategory | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("notifications");
 
+  const notificationsQ = useNotifications({ limit: 200 });
+  const unreadQ = useUnreadNotificationCount();
+  const markReadM = useMarkNotificationRead();
+  const markAllReadM = useMarkAllNotificationsRead();
+  const dismissM = useDismissNotification();
+
+  const notifications = notificationsQ.data ?? [];
+  const unreadCount = unreadQ.data ?? 0;
+
   const filteredNotifications = useMemo(() => {
     return notifications
-      .filter((n) => !n.dismissed)
+      .filter((n) => !n.dismissedAt)
       .filter((n) => {
-        if (filter === "unread") return !n.read;
+        if (filter === "unread") return !n.readAt;
         if (filter === "urgent") return n.priority === "urgent" || n.priority === "high";
         return true;
       })
       .filter((n) => categoryFilter === "all" || n.category === categoryFilter)
-      .filter((n) => !searchQuery || n.title.toLowerCase().includes(searchQuery.toLowerCase()) || n.message.toLowerCase().includes(searchQuery.toLowerCase()));
+      .filter((n) => !searchQuery || n.title.toLowerCase().includes(searchQuery.toLowerCase()) || n.body.toLowerCase().includes(searchQuery.toLowerCase()));
   }, [notifications, filter, categoryFilter, searchQuery]);
 
-  const unreadCount = notifications.filter((n) => !n.read && !n.dismissed).length;
-
-  const handleMarkRead = (id: string) => {
-    setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: true } : n));
-    toast.success("Marked as read");
-  };
-
-  const handleDismiss = (id: string) => {
-    setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, dismissed: true } : n));
-    toast.success("Notification dismissed");
-  };
-
-  const handleMarkAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-    toast.success("All notifications marked as read");
-  };
+  const handleMarkRead = (id: number) => markReadM.mutate(id);
+  const handleDismiss = (id: number) => dismissM.mutate(id);
+  const handleMarkAllRead = () => markAllReadM.mutate();
 
   return (
     <div className="h-full flex flex-col">

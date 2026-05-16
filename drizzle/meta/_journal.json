@@ -421,6 +421,20 @@
       "when": 1778610058507,
       "tag": "0059_small_stardust",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "6",
+      "when": 1778889942985,
+      "tag": "0060_busy_red_skull",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1778946503691,
+      "tag": "0061_great_vin_gonzales",
+      "breakpoints": true
     }
   ]
 }

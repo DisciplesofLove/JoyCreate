@@ -369,6 +369,24 @@ export const UserSettingsSchema = z.object({
   ////////////////////////////////
   isTestMode: z.boolean().optional(),
 
+  /**
+   * DEAI Phase 1A — feature flag. When true, `workflow:publish-to-marketplace`
+   * also publishes the workflow on-chain as an ERC-1155 via the
+   * PublishOrchestrator IN ADDITION to the legacy Supabase publish (dual-write).
+   * Default OFF so existing marketplace items are never lost.
+   */
+  marketplaceWorkflowOnChain: z.boolean().optional(),
+
+  /**
+   * Marketplace network selection. Default `polygonAmoy` matches the existing
+   * production behavior — Arbitrum routes are opt-in, additive, and ignore
+   * `JoyCreatorGate` (.joy ENS) gating. Switching does not migrate or hide
+   * any previously published items.
+   */
+  marketplaceChain: z
+    .enum(["polygonAmoy", "arbitrumSepolia", "arbitrumOne"])
+    .optional(),
+
   ////////////////////////////////
   // DEPRECATED.
   ////////////////////////////////

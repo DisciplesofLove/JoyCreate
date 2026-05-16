@@ -12,6 +12,8 @@ import * as path from "path";
 import type { UnifiedPublishPayload, PublishResult } from "@/types/publish_types";
 import type { PublishAppResponse } from "@/types/marketplace_types";
 import { JOYMARKETPLACE_API } from "@/config/joymarketplace";
+import { readSettings } from "@/main/settings";
+import { publishAndForget } from "@/lib/joymarketplace/publish_orchestrator";
 
 const logger = log.scope("workflow_marketplace");
 
@@ -138,6 +140,42 @@ export function registerWorkflowMarketplaceHandlers() {
       }
 
       logger.info(`Workflow ${workflowId} published as ${result.assetId}`);
+
+      // DEAI Phase 1A — optional dual-write: also publish on-chain via the
+      // PublishOrchestrator. Gated by `marketplaceWorkflowOnChain`. Failure
+      // here MUST NOT fail the legacy Supabase publish above; the on-chain
+      // path is additive ("only enhancing the monetization", existing
+      // marketplace items must never be lost).
+      try {
+        const settings = readSettings();
+        if (settings.marketplaceWorkflowOnChain === true) {
+          const onchainOutcome = await publishAndForget({
+            assetType: "workflow",
+            name: payload.name,
+            description: payload.description,
+            contentBuffer: Buffer.from(JSON.stringify(sanitizedWorkflow), "utf8"),
+            contentMimeType: "application/json",
+            metadata: {
+              workflowId,
+              marketplaceAssetId: result.assetId,
+              nodeCount: nodes.length,
+              triggerType: triggerNode?.type ?? "manual",
+              category: payload.category || "ai-workflow",
+            },
+            priceUsdc: typeof payload.price === "number" ? payload.price * 10_000 : 0,
+            royaltyBps: 250,
+          });
+          logger.info(
+            `Workflow ${workflowId} on-chain dual-write ok=${onchainOutcome.ok}`,
+            onchainOutcome,
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          `Workflow ${workflowId} on-chain dual-write failed (legacy publish unaffected)`,
+          err,
+        );
+      }
 
       return {
         assetId: result.assetId,

@@ -45,6 +45,7 @@ import { registerMarketplaceHandlers } from "./handlers/marketplace_handlers";
 import { registerMarketplaceSyncHandlers } from "./handlers/marketplace_sync_handlers";
 import { registerJoyBridgeHandlers } from "./handlers/joybridge_handlers";
 import { registerMarketplaceInboundHandlers } from "./handlers/marketplace_inbound_handlers";
+import { registerDataMarketHandlers } from "./handlers/data_market_handlers";
 import { registerScraperHandlers } from "./handlers/scraper_handlers";
 import { registerAssetStudioHandlers } from "./handlers/asset_studio_handlers";
 import { registerNFTHandlers } from "./handlers/nft_handlers";
@@ -153,6 +154,7 @@ import { registerMarketplaceBrowseHandlers } from "./handlers/marketplace_browse
 import { registerCreatorDashboardHandlers } from "./handlers/creator_dashboard_handlers";
 import { registerAgentMarketplaceHandlers } from "./handlers/agent_marketplace_handlers";
 import { registerWorkflowMarketplaceHandlers } from "./handlers/workflow_marketplace_handlers";
+import { registerBlueprintMarketplaceHandlers } from "./handlers/blueprint_marketplace_handlers";
 import { registerJoyAssistantHandlers } from "./handlers/joy_assistant_handlers";
 import { registerAutoDeployHandlers } from "./handlers/auto_deploy_handlers";
 import { registerSubgraphHandlers } from "./handlers/subgraph_handlers";
@@ -167,6 +169,10 @@ import { registerDatasetTrainingHandlers } from "./handlers/dataset_training_han
 import { registerOnchainAssetBridgeHandlers } from "./handlers/onchain_asset_bridge_handlers";
 import { registerNlpPipelineHandlers } from "./handlers/nlp_pipeline_handlers";
 import { registerStubHandlers } from "./handlers/stub_handlers";
+import { registerNotificationHandlers } from "./handlers/notification_handlers";
+import { registerOnchainListenerHandlers } from "./handlers/onchain_listener_handlers";
+import { registerEarningsHandlers } from "./handlers/earnings_handlers";
+import { registerStudioPublishHandlers } from "./handlers/studio_publish_handlers";
 import { registerGovernanceHandlers } from "./handlers/governance_handlers";
 import { registerTokenomicsHandlers } from "./handlers/tokenomics_handlers";
 import {
@@ -232,6 +238,7 @@ export function registerIpcHandlers() {
   // namespaces; the old ones stay registered as compatibility shims.)
   registerJoyBridgeHandlers();
   registerMarketplaceInboundHandlers(); // Inbound: Joy Marketplace → JoyCreate webhook handler
+  registerDataMarketHandlers(); // Arbitrum Stylus: DataProvenance + DataLease
   registerScraperHandlers();
   registerAssetStudioHandlers();
   registerNFTHandlers();
@@ -518,6 +525,9 @@ export function registerIpcHandlers() {
   // Workflow Marketplace Publishing — Publish/unpublish workflows to JoyMarketplace
   registerWorkflowMarketplaceHandlers();
 
+  // Blueprint Marketplace Publishing — Publish YAML blueprints via on-chain orchestrator
+  registerBlueprintMarketplaceHandlers();
+
   // MCP Server (mcp-server:*) channels are registered transitively from
   // `registerMcpHandlers()` above (same MCP domain).
 
@@ -568,6 +578,18 @@ export function registerIpcHandlers() {
 
   // Tokenomics — token economy: balances, staking, rewards, transfers
   registerTokenomicsHandlers();
+
+  // DEAI Phase 0 — Notification center (subscribes to domain event bus).
+  registerNotificationHandlers();
+
+  // DEAI Phase 0 — DropERC1155 on-chain listener (publishes asset.claimed).
+  registerOnchainListenerHandlers();
+
+  // DEAI Phase 1B — Earnings ledger reads.
+  registerEarningsHandlers();
+
+  // DEAI Phase 1C — Studio publish (image/video → publishAndForget).
+  registerStudioPublishHandlers();
 
   // Stub handlers — safe no-op responders for channels whose main-side
   // service has not yet been implemented. MUST be registered LAST so real

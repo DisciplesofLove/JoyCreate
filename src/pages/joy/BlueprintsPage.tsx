@@ -30,7 +30,11 @@ import {
   Clock,
   AlertTriangle,
   Sparkles,
+  Rocket,
 } from "lucide-react";
+import { PublishWizard } from "@/components/marketplace/PublishWizard";
+import { usePublishBlueprint } from "@/hooks/use_publish_blueprint";
+import { showSuccess } from "@/lib/toast";
 
 // ---------------------------------------------------------------------------
 // types (renderer-side mirror of @/lib/blueprint/run_store BlueprintRunRecord)
@@ -81,6 +85,8 @@ export default function BlueprintsPage() {
   const [hints, setHints] = useState("");
   const [yaml, setYaml] = useState("");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const publishMut = usePublishBlueprint();
 
   // Auto-refresh runs every 2s while any run is non-terminal.
   const runsQuery = useQuery<RunSummary[]>({
@@ -293,6 +299,19 @@ export default function BlueprintsPage() {
                 >
                   Re-hash intents
                 </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => setPublishOpen(true)}
+                  disabled={!yaml.trim() || publishMut.isPending}
+                  title="Publish this blueprint as a DropERC1155 NFT on JoyMarketplace"
+                >
+                  {publishMut.isPending ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Rocket className="h-4 w-4 mr-2" />
+                  )}
+                  Publish to Marketplace
+                </Button>
               </div>
               {validateMut.data && (
                 <div className="text-sm text-emerald-600">
@@ -404,6 +423,39 @@ export default function BlueprintsPage() {
           </div>
         </TabsContent>
       </Tabs>
+
+      <PublishWizard
+        open={publishOpen}
+        onOpenChange={setPublishOpen}
+        assetType="blueprint"
+        sourceId={`bp-${Date.now()}`}
+        defaultName="My Sovereign Blueprint"
+        defaultDescription="A multi-step automation blueprint composed in JoyCreate."
+        defaultCategory="ai-workflow"
+        isPublishing={publishMut.isPending}
+        onPublish={(payload) =>
+          publishMut.mutate(
+            {
+              ...payload,
+              metadata: {
+                ...(payload.metadata ?? {}),
+                yamlText: yaml,
+                kind: "blueprint",
+              },
+            },
+            {
+              onSuccess: (res) => {
+                setPublishOpen(false);
+                showSuccess(
+                  res.assetId
+                    ? `Blueprint published — token #${res.assetId}`
+                    : "Blueprint publish queued",
+                );
+              },
+            },
+          )
+        }
+      />
     </div>
   );
 }

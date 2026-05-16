@@ -14,7 +14,8 @@ export type PublishableAssetType =
   | "model"
   | "template"
   | "component"
-  | "plugin";
+  | "plugin"
+  | "blueprint";
 
 // Extended category taxonomy
 export type UnifiedCategory = AssetCategory | "ai-workflow" | "automation" | "connector";
@@ -301,4 +302,28 @@ export interface MyClaimsParams {
 export interface OwnershipParams {
   tokenId: string | number;
   wallet: string;
+}
+
+/**
+ * Per-token revenue summary for a creator, derived from the DropERC1155
+ * subgraph: `revenueWei = supplyClaimed * pricePerToken` (no extra
+ * subgraph round-trips beyond `marketplace:my-drops`).
+ */
+export interface CreatorRevenueRow {
+  tokenId: string;
+  name: string;
+  unitsSold: string;
+  pricePerTokenWei: string | null;
+  /** Decimal string in wei (18-decimals). */
+  revenueWei: string;
+  /** Lowercase hex address of the ERC20 currency, or null for native. */
+  currency: string | null;
+}
+
+export interface CreatorRevenueSummary {
+  wallet: string;
+  rows: CreatorRevenueRow[];
+  /** Sum of revenueWei across rows that share each currency. Keyed by lowercased currency address (or "native"). */
+  totalsByCurrency: Record<string, string>;
+  totalUnitsSold: string;
 }

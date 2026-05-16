@@ -158,33 +158,12 @@ const menuCategories = [
         activeBg: "bg-violet-500/15",
         activeText: "text-violet-600 dark:text-violet-400",
       },
-      {
-        title: "Agent Swarm",
-        to: "/agent-swarm",
-        icon: Network,
-        gradient: "from-fuchsia-500 to-violet-500",
-        hoverBg: "hover:bg-fuchsia-500/10",
-        activeBg: "bg-fuchsia-500/15",
-        activeText: "text-fuchsia-600 dark:text-fuchsia-400",
-      },
-      {
-        title: "Agent Orchestrator",
-        to: "/agent-orchestrator",
-        icon: Orbit,
-        gradient: "from-rose-500 to-pink-500",
-        hoverBg: "hover:bg-rose-500/10",
-        activeBg: "bg-rose-500/15",
-        activeText: "text-rose-600 dark:text-rose-400",
-      },
-      {
-        title: "Automation Orchestrator",
-        to: "/automation-orchestrator",
-        icon: Zap,
-        gradient: "from-amber-500 to-orange-500",
-        hoverBg: "hover:bg-amber-500/10",
-        activeBg: "bg-amber-500/15",
-        activeText: "text-amber-600 dark:text-amber-400",
-      },
+      // Phase 2 consolidation: the canonical /agents page now exposes a
+      // surfaces nav strip with links to /coding-agent, /agent-swarm,
+      // /agent-orchestrator, /automation-orchestrator, /autonomous-agent
+      // and /autonomous-agent-production. Routes + IPC handlers are
+      // unchanged; only the duplicate sidebar entries are hidden.
+      // See briefs/nav-consolidation-audit.md (Phase 2).
       {
         title: "Collaboration Hub",
         to: "/collaboration",
@@ -196,33 +175,6 @@ const menuCategories = [
       },
       // Phase 1 consolidation: /collaboration/activity reachable via tab
       // inside the Collaboration Hub. See briefs/nav-consolidation-audit.md.
-      {
-        title: "Autonomous Agent",
-        to: "/autonomous-agent",
-        icon: BrainCircuit,
-        gradient: "from-purple-500 to-indigo-500",
-        hoverBg: "hover:bg-purple-500/10",
-        activeBg: "bg-purple-500/15",
-        activeText: "text-purple-600 dark:text-purple-400",
-      },
-      {
-        title: "Agent Production",
-        to: "/autonomous-agent-production",
-        icon: Activity,
-        gradient: "from-emerald-500 to-green-500",
-        hoverBg: "hover:bg-emerald-500/10",
-        activeBg: "bg-emerald-500/15",
-        activeText: "text-emerald-600 dark:text-emerald-400",
-      },
-      {
-        title: "Coding Agent",
-        to: "/coding-agent",
-        icon: Code2,
-        gradient: "from-green-500 to-emerald-500",
-        hoverBg: "hover:bg-green-500/10",
-        activeBg: "bg-green-500/15",
-        activeText: "text-green-600 dark:text-green-400",
-      },
       {
         title: "Skills",
         to: "/skills",
@@ -250,15 +202,8 @@ const menuCategories = [
         activeBg: "bg-violet-500/15",
         activeText: "text-violet-600 dark:text-violet-400",
       },
-      {
-        title: "AI Learning",
-        to: "/ai-learning",
-        icon: FlaskConical,
-        gradient: "from-cyan-500 to-blue-500",
-        hoverBg: "hover:bg-cyan-500/10",
-        activeBg: "bg-cyan-500/15",
-        activeText: "text-cyan-600 dark:text-cyan-400",
-      },
+      // Phase 2 consolidation: /ai-learning surfaced as a tab inside
+      // /memory. Route + handlers preserved.
       {
         title: "NLP Studio",
         to: "/nlp-studio",
@@ -602,6 +547,16 @@ const menuCategories = [
         hoverBg: "hover:bg-violet-500/10",
         activeBg: "bg-violet-500/15",
         activeText: "text-violet-600 dark:text-violet-400",
+      },
+      // Phase 5 (M1) Monetization: unified earnings dashboard.
+      {
+        title: "Earnings",
+        to: "/earnings",
+        icon: CircleDollarSign,
+        gradient: "from-amber-500 to-orange-500",
+        hoverBg: "hover:bg-amber-500/10",
+        activeBg: "bg-amber-500/15",
+        activeText: "text-amber-600 dark:text-amber-400",
       },
     ],
   },

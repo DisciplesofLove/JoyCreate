@@ -575,6 +575,80 @@ export function parseUSDC(amount: number): bigint {
   return BigInt(Math.round(amount * 1_000_000));
 }
 
+// =============================================================================
+// ARBITRUM (Stylus) — additive, opt-in via Settings → Marketplace network
+// =============================================================================
+// Activated only when `marketplaceChain === "arbitrumSepolia" | "arbitrumOne"`.
+// Default remains POLYGON_AMOY so existing items / listeners are untouched.
+
+export const ARBITRUM_SEPOLIA = {
+  chainId: 421614,
+  chainIdHex: "0x66eee",
+  name: "Arbitrum Sepolia",
+  rpcUrl: "https://sepolia-rollup.arbitrum.io/rpc",
+  blockExplorer: "https://sepolia.arbiscan.io",
+  nativeCurrency: {
+    name: "Sepolia Ether",
+    symbol: "ETH",
+    decimals: 18,
+  },
+} as const;
+
+export const ARBITRUM_ONE = {
+  chainId: 42161,
+  chainIdHex: "0xa4b1",
+  name: "Arbitrum One",
+  rpcUrl: "https://arb1.arbitrum.io/rpc",
+  blockExplorer: "https://arbiscan.io",
+  nativeCurrency: {
+    name: "Ether",
+    symbol: "ETH",
+    decimals: 18,
+  },
+} as const;
+
+/**
+ * Stylus DropEdition contract addresses.
+ * Sepolia: filled in after Phase E deploy. Until then the renderer/listener
+ * will refuse to switch to Arbitrum (chain_registry guards against zero addr).
+ */
+export const ARBITRUM_SEPOLIA_STYLUS_CONTRACTS = {
+  dropEdition: "0x2bd4bb9c5a91653e06114511cdb265728f738aa5" as const,
+} as const;
+
+export const ARBITRUM_ONE_STYLUS_CONTRACTS = {
+  dropEdition: "0x0000000000000000000000000000000000000000" as const,
+} as const;
+
+/**
+ * ABI surface emitted by contracts/drop_edition_stylus.
+ * Note: OpenZeppelin Stylus Erc1155 emits ONLY TransferSingle/TransferBatch/
+ * ApprovalForAll — there is no TokensLazyMinted / TokensClaimed equivalent.
+ * The drop event listener treats `TransferSingle(from = 0x0)` as the mint signal.
+ */
+export const STYLUS_DROP_ABI = [
+  "function initialize(address owner, uint256 mintPrice)",
+  "function owner() view returns (address)",
+  "function mintPrice() view returns (uint256)",
+  "function mintActive() view returns (bool)",
+  "function set_mint_state(bool active)",
+  "function set_mint_price(uint256 newPrice)",
+  "function mint_edition(address to, uint256 id, uint256 amount) payable",
+  "function withdraw(address to)",
+  "function balanceOf(address account, uint256 id) view returns (uint256)",
+  "function setMintState(bool active)",
+  "function setMintPrice(uint256 newPrice)",
+  "function mintEdition(address to, uint256 id, uint256 amount) payable",
+  "function supportsInterface(bytes4 interfaceId) view returns (bool)",
+  "event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)",
+  "event TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)",
+  "event ApprovalForAll(address indexed account, address indexed operator, bool approved)",
+  "event Initialized(address indexed owner, uint256 mintPrice)",
+  "event MintActiveChanged(bool active)",
+  "event PriceChanged(uint256 newPrice)",
+  "event Withdrawn(address indexed to, uint256 amount)",
+] as const;
+
 export default {
   POLYGON_MAINNET,
   CONTRACT_ADDRESSES,

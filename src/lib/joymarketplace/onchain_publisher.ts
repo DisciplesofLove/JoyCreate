@@ -23,7 +23,9 @@ import {
   CONTRACT_ABIS,
   CONTRACT_ADDRESSES,
   POLYGON_AMOY,
+  STYLUS_DROP_ABI,
 } from "@/config/joymarketplace";
+import type { MarketplaceChainConfig } from "@/lib/onchain/chain_registry";
 
 const logger = log.scope("onchain_publisher");
 
@@ -51,6 +53,17 @@ export interface MintResult {
   dryRun?: boolean;
   to?: string;
   data?: string;
+}
+
+export interface StylusMintInput {
+  /** Token id to mint. Caller is responsible for picking the next id. */
+  tokenId: string | bigint;
+  /** Quantity of editions. Default 1. */
+  quantity?: number;
+  /** Per-edition price in wei (charged via msg.value). */
+  priceWei: bigint;
+  /** Recipient — defaults to the publisher signer. */
+  recipient?: string;
 }
 
 export interface ListingResult {
@@ -88,9 +101,15 @@ export class OnchainPublisher {
   private wallet: ethers.Wallet;
   private chain: ChainConfig;
   private provider: ethers.JsonRpcProvider;
+  private marketplaceChain: MarketplaceChainConfig | null;
 
-  constructor(wallet: ethers.Wallet, chain: ChainConfig = POLYGON_AMOY) {
+  constructor(
+    wallet: ethers.Wallet,
+    chain: ChainConfig = POLYGON_AMOY,
+    marketplaceChain: MarketplaceChainConfig | null = null,
+  ) {
     this.chain = chain;
+    this.marketplaceChain = marketplaceChain;
     // If the wallet was constructed without a provider, attach one for our chain.
     const provider =
       wallet.provider instanceof ethers.JsonRpcProvider
@@ -102,6 +121,11 @@ export class OnchainPublisher {
 
   get signerAddress(): string {
     return this.wallet.address;
+  }
+
+  /** Returns the resolved marketplace chain id, or "polygonAmoy" by default. */
+  get marketplaceChainId(): string {
+    return this.marketplaceChain?.id ?? "polygonAmoy";
   }
 
   // -- gate -----------------------------------------------------------------
@@ -210,6 +234,74 @@ export class OnchainPublisher {
     const receipt = await tx.wait();
     return {
       tokenId: nextTokenId.toString(),
+      txHash: receipt?.hash ?? tx.hash,
+      gasEstimate,
+    };
+  }
+
+  // -- Stylus mint (Arbitrum) ----------------------------------------------
+
+  /**
+   * Mint editions via the OpenZeppelin Stylus DropEdition contract on
+   * Arbitrum. Pays `priceWei * quantity` from the signer wallet (ETH on
+   * Arbitrum). Caller is responsible for picking the next free `tokenId`
+   * (count from `on_chain_drop_events` to derive it).
+   *
+   * Requires the publisher to have been constructed with a `marketplaceChain`
+   * whose `currency === "ETH"` (i.e. Arbitrum Sepolia / One). Throws otherwise
+   * — the orchestrator branches on currency before calling this.
+   */
+  async mintEditionStylus(
+    input: StylusMintInput,
+    opts: { dryRun?: boolean } = {},
+  ): Promise<MintResult> {
+    if (!this.marketplaceChain) {
+      throw new Error("mintEditionStylus requires a marketplaceChain on the publisher");
+    }
+    if (this.marketplaceChain.currency !== "ETH") {
+      throw new Error(
+        `mintEditionStylus called on non-ETH chain ${this.marketplaceChain.id}`,
+      );
+    }
+    const dropAddr = this.marketplaceChain.contracts.dropEdition;
+    const quantity = BigInt(Math.max(1, input.quantity ?? 1));
+    const tokenIdBig = BigInt(input.tokenId);
+    const recipient = input.recipient ?? this.wallet.address;
+    const value = input.priceWei * quantity;
+
+    const drop = new ethers.Contract(dropAddr, [...STYLUS_DROP_ABI], this.wallet);
+    const calldata = drop.interface.encodeFunctionData("mintEdition", [
+      recipient,
+      tokenIdBig,
+      quantity,
+    ]);
+
+    let gasEstimate: bigint = 0n;
+    try {
+      gasEstimate = await this.provider.estimateGas({
+        from: this.wallet.address,
+        to: dropAddr,
+        data: calldata,
+        value,
+      });
+    } catch (err) {
+      logger.warn(`stylus mint gas estimate failed: ${(err as Error).message}`);
+    }
+
+    if (opts.dryRun) {
+      return {
+        tokenId: tokenIdBig.toString(),
+        gasEstimate,
+        dryRun: true,
+        to: dropAddr,
+        data: calldata,
+      };
+    }
+
+    const tx = await drop.mintEdition(recipient, tokenIdBig, quantity, { value });
+    const receipt = await tx.wait();
+    return {
+      tokenId: tokenIdBig.toString(),
       txHash: receipt?.hash ?? tx.hash,
       gasEstimate,
     };

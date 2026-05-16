@@ -676,6 +676,17 @@ const validInvokeChannels = [
   // Marketplace inbound (incoming purchases / receipts pushed by remote stores)
   "marketplace-inbound:process",
   "marketplace-inbound:test",
+  // Data Market — Arbitrum Stylus (DataProvenance + DataLease)
+  "data-market:status",
+  "data-provenance:mint",
+  "data-provenance:get",
+  "data-provenance:list",
+  "data-lease:create-listing",
+  "data-lease:get-listing",
+  "data-lease:list-listings",
+  "data-lease:purchase",
+  "data-lease:list-my-grants",
+  "data-lease:has-active",
   // JoyBridge — single canonical namespace (Joy Unification PR).
   // Each channel below is also registered in joybridge_handlers.ts. If you
   // add a new joybridge:* channel, you MUST add it here too — see Collab
@@ -731,6 +742,7 @@ const validInvokeChannels = [
   "marketplace:my-claims",
   "marketplace:ownership",
   "marketplace:my-stores",
+  "marketplace:my-revenue",
   // Subgraph — On-chain marketplace data (Goldsky)
   "subgraph:my-assets",
   "subgraph:tokens",
@@ -789,6 +801,8 @@ const validInvokeChannels = [
   "workflow:install-from-marketplace",
   "workflow:unpublish",
   "workflow:list-published",
+  // Blueprint Marketplace Publishing (on-chain via PublishOrchestrator)
+  "blueprint:publish-to-marketplace",
   // Web Scraper & Dataset Management
   "scraper:status",
   "scraper:config:list",
@@ -2319,6 +2333,26 @@ const validInvokeChannels = [
   "tokenomics:get-fee-schedule",
   "tokenomics:update-fee-schedule",
   "tokenomics:get-reward-rules",
+  // ═══ DEAI Phase 0: Notification Center ═══
+  "notifications:list",
+  "notifications:unread-count",
+  "notifications:mark-read",
+  "notifications:mark-all-read",
+  "notifications:dismiss",
+  // ═══ DEAI Phase 0: On-chain DropERC1155 listener ═══
+  "onchain:listener:start",
+  "onchain:listener:stop",
+  "onchain:listener:status",
+  "onchain:listener:replay-since",
+  // ═══ DEAI Phase 1B: Earnings ledgers ═══
+  "earnings:list-agent-rentals",
+  "earnings:list-subscriptions",
+  "earnings:summary",
+  // ═══ DEAI Phase 1C: Studio publish ═══
+  "studio:publish-image",
+  "studio:publish-video",
+  // ═══ DEAI Phase 1D: Dataset publish ═══
+  "dataset:publish-to-marketplace",
   // ═══ Sovereign AI: A2A Protocol ═══
   "a2a:register-agent",
   "a2a:update-agent",

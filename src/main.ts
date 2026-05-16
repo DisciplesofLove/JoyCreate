@@ -169,6 +169,18 @@ export async function onReady() {
     })();
   }
 
+  // ── Auto-start the DropERC1155 on-chain listener (DEAI Phase 0B). ─────
+  // Best-effort, fire-and-forget. Backoff/reconnect lives inside the listener.
+  void (async () => {
+    try {
+      const { getDropEventListener } = await import("./lib/onchain/drop_event_listener");
+      await getDropEventListener().start();
+      logger.info("DropEventListener auto-started");
+    } catch (err) {
+      logger.warn("DropEventListener auto-start failed", err);
+    }
+  })();
+
   // ── Start OpenClaw gateway immediately (no delay needed) ──
   const openClawLogger = log.scope("openclaw-init");
   const { Socket: NetSocket } = await import("node:net");

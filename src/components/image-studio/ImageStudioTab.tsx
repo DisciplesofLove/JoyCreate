@@ -4,6 +4,8 @@ import { Stage, Layer, Image as KonvaImage, Line } from "react-konva";
 import type Konva from "konva";
 import { IpcClient } from "@/ipc/ipc_client";
 import type { ImageStudioImage, ImageStudioProvider, ImageStudioProviderModel } from "@/ipc/ipc_types";
+import { UnifiedModelPicker } from "@/components/studio/UnifiedModelPicker";
+import { PublishContextMenu } from "@/components/studio/PublishContextMenu";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -140,8 +142,12 @@ function GeneratePanel({
   isGenerating: boolean;
   onReusePrompt?: string;
 }) {
-  const [provider, setProvider] = useState("");
-  const [model, setModel] = useState("");
+  const [provider, setProvider] = useState(
+    () => (typeof window !== "undefined" ? localStorage.getItem("image-studio.lastProvider") ?? "" : ""),
+  );
+  const [model, setModel] = useState(
+    () => (typeof window !== "undefined" ? localStorage.getItem("image-studio.lastModel") ?? "" : ""),
+  );
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [aspectIdx, setAspectIdx] = useState(0);
@@ -181,10 +187,32 @@ function GeneratePanel({
     if (onReusePrompt) setPrompt(onReusePrompt);
   }, [onReusePrompt]);
 
+  // Auto-select first configured provider on first load if nothing remembered
+  useEffect(() => {
+    if (!provider && providers.length > 0) {
+      const firstConfigured = providers.find(
+        (p) => p.configured && !p.comingSoon && p.models.some((m) => !m.comingSoon),
+      );
+      if (firstConfigured) {
+        handleModelPick(firstConfigured.id, firstConfigured.models[0].id);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providers]);
+
   function handleProviderChange(value: string) {
     setProvider(value);
     const models = providers.find((p) => p.id === value)?.models ?? [];
     setModel(models[0]?.id ?? "");
+  }
+
+  function handleModelPick(providerId: string, modelId: string) {
+    setProvider(providerId);
+    setModel(modelId);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("image-studio.lastProvider", providerId);
+      localStorage.setItem("image-studio.lastModel", modelId);
+    }
   }
 
   function handleReferenceImageDrop(e: React.DragEvent) {
@@ -275,50 +303,17 @@ function GeneratePanel({
         Generate Image
       </div>
 
-      {/* Provider */}
-      <div className="flex flex-col gap-1.5">
-        <Label className="text-xs">Provider</Label>
-        {providers.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            No image providers configured. Add API keys in Settings.
-          </p>
-        ) : (
-          <Select value={provider} onValueChange={handleProviderChange}>
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue placeholder="Select provider…" />
-            </SelectTrigger>
-            <SelectContent>
-              {providers.map((p) => (
-                <SelectItem key={p.id} value={p.id} className="text-xs">
-                  {p.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-      </div>
-
-      {/* Model */}
-      {availableModels.length > 1 && (
-        <div className="flex flex-col gap-1.5">
-          <Label className="text-xs">Model</Label>
-          <Select value={model} onValueChange={setModel}>
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue placeholder="Select model…" />
-            </SelectTrigger>
-            <SelectContent>
-              {availableModels.map((m) => (
-                <SelectItem key={m.id} value={m.id} className="text-xs">
-                  <div className="flex items-center gap-2">
-                    <span>{m.label}</span>
-                    {m.supportsImg2Img && (
-                      <Badge variant="outline" className="text-[9px] px-1 py-0">img2img</Badge>
-                    )}
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+      {/* Provider + Model — unified picker */}
+      <UnifiedModelPicker
+        mode="image"
+        providers={providers}
+        selectedProvider={provider}
+        selectedModel={model}
+        onSelect={handleModelPick}
+      />
+      {availableModels.length > 0 && selectedModel?.supportsImg2Img && (
+        <div className="-mt-1 flex">
+          <Badge variant="outline" className="text-[9px] px-1 py-0">img2img supported</Badge>
         </div>
       )}
 
@@ -719,7 +714,15 @@ function Gallery({
                         </Badge>
                       )}
                     </div>
-                    <DropdownMenu>
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <PublishContextMenu
+                        kind="image"
+                        assetId={img.id}
+                        defaultName={img.prompt?.slice(0, 80)}
+                        defaultDescription={img.prompt}
+                        iconOnly
+                      />
+                      <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
                           variant="ghost"
@@ -772,6 +775,7 @@ function Gallery({
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    </div>
                   </div>
                 </div>
               </div>

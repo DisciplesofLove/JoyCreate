@@ -1,0 +1,7 @@
+target/
+**/*.wasm
+**/*.wat
+.deployer-key
+.deployer-key.*
+*.pem
+abi/*.local.sol

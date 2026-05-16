@@ -13,6 +13,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { IpcClient } from "@/ipc/ipc_client";
 import { Package, Plus, Sparkles } from "lucide-react";
 import type { Asset, Result } from "@/lib/joybridge_client";
+import {
+  MonetizeButton,
+  type MonetizationConfig,
+} from "@/components/monetization/MonetizeButton";
+import { showSuccess } from "@/lib/toast";
 
 export default function JoyMyAssetsPage() {
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -128,6 +133,39 @@ export default function JoyMyAssetsPage() {
                 <div className="flex items-center gap-1 pt-2 text-xs text-muted-foreground">
                   <Sparkles className="h-3 w-3" />
                   <span>Created {a.createdAt ?? "recently"}</span>
+                </div>
+                {/*
+                  Phase 5 (M2) Monetization: per-asset monetize action.
+                  Persistence will land with bulk pricing tools (Phase 5
+                  M8); for now the dialog captures intent and toasts.
+                */}
+                <div className="pt-2">
+                  <MonetizeButton
+                    assetLabel={a.name}
+                    initial={
+                      a.priceUsdc != null
+                        ? {
+                            model: a.priceUsdc === 0 ? "free" : "one-time",
+                            price:
+                              a.priceUsdc === 0
+                                ? ""
+                                : (a.priceUsdc / 1_000_000).toFixed(2),
+                            currency: "USD",
+                            royaltyPercent: 0,
+                            billingPeriod: "monthly",
+                          }
+                        : undefined
+                    }
+                    onSubmit={(config: MonetizationConfig) => {
+                      const summary =
+                        config.model === "free"
+                          ? "Free"
+                          : `${config.model} · ${config.price} ${config.currency}`;
+                      showSuccess(
+                        `Monetization saved for "${a.name}": ${summary}.`,
+                      );
+                    }}
+                  />
                 </div>
               </CardContent>
             </Card>

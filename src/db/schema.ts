@@ -2469,6 +2469,8 @@ export const imageStudioImages = sqliteTable("image_studio_images", {
   seed: text("seed"),
   style: text("style"),
   metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  /** Provenance manifest (model, params, training data refs, signer) — see ProvenanceManifest. */
+  provenanceJson: text("provenance_json", { mode: "json" }).$type<Record<string, unknown> | null>(),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -2493,6 +2495,8 @@ export const videoStudioVideos = sqliteTable("video_studio_videos", {
   sourceType: text("source_type").notNull().default("text-to-video"),
   sourceId: integer("source_id"),
   metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  /** Provenance manifest (model, params, training data refs, signer) — see ProvenanceManifest. */
+  provenanceJson: text("provenance_json", { mode: "json" }).$type<Record<string, unknown> | null>(),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -3027,3 +3031,205 @@ export const gauntletAudit = sqliteTable("gauntlet_audit", {
     .default(sql`(unixepoch())`),
 });
 
+
+
+// =============================================================================
+// DEAI Phase 0 — Domain Events, Notifications, Earnings, On-chain Listener
+// =============================================================================
+
+/**
+ * Append-only ledger of every domain event published on the in-process bus.
+ * Used for replay, debugging, and as the source-of-truth for derived
+ * notification rows. Subscribers are expected to be idempotent on `id`.
+ */
+export const domainEvents = sqliteTable("domain_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  type: text("type").notNull(),
+  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  occurredAt: integer("occurred_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  /** Optional on-chain provenance for events sourced from a tx log. */
+  sourceTxHash: text("source_tx_hash"),
+  sourceLogIndex: integer("source_log_index"),
+  /** Schema version of the payload — bump when payload shape changes. */
+  version: integer("version").notNull().default(1),
+});
+
+/**
+ * Per-user persisted notifications. Written by NotificationService as a
+ * subscriber on `domainEvents`. Page reads via `notifications:list`.
+ */
+export const notifications = sqliteTable("notifications", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Optional Verida DID / wallet address scoping. NULL = local user. */
+  userDid: text("user_did"),
+  category: text("category", {
+    enum: ["agents", "builds", "deploys", "marketplace", "social", "system", "security", "workflows"],
+  }).notNull(),
+  priority: text("priority", {
+    enum: ["urgent", "high", "medium", "low", "info"],
+  }).notNull().default("info"),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  actionUrl: text("action_url"),
+  actionLabel: text("action_label"),
+  /** Foreign key into domain_events.id. Allows replaying provenance. */
+  sourceEventId: integer("source_event_id").references(() => domainEvents.id, {
+    onDelete: "set null",
+  }),
+  readAt: integer("read_at", { mode: "timestamp" }),
+  dismissedAt: integer("dismissed_at", { mode: "timestamp" }),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * Per-rental earnings ledger for hosted agents. Drives EarningsPage Agents
+ * tab and rolls up into the Totals card.
+ */
+export const agentRentalEarnings = sqliteTable("agent_rental_earnings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Stable agent identifier (db row id rendered as string, OR on-chain token id). */
+  agentRef: text("agent_ref").notNull(),
+  agentName: text("agent_name").notNull(),
+  renterAddress: text("renter_address"),
+  /** USDC (6-dec) amount as string to avoid bigint JSON pitfalls. */
+  amountUsdc: text("amount_usdc").notNull(),
+  /** Optional on-chain provenance. */
+  txHash: text("tx_hash"),
+  blockNumber: integer("block_number"),
+  earnedAt: integer("earned_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * Subscription earnings ledger (e.g. per-month creator subscriptions).
+ */
+export const subscriptionEarnings = sqliteTable("subscription_earnings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  planRef: text("plan_ref").notNull(),
+  planName: text("plan_name").notNull(),
+  subscriberAddress: text("subscriber_address"),
+  amountUsdc: text("amount_usdc").notNull(),
+  periodStart: integer("period_start", { mode: "timestamp" }),
+  periodEnd: integer("period_end", { mode: "timestamp" }),
+  txHash: text("tx_hash"),
+  earnedAt: integer("earned_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * Idempotent log of consumed on-chain DropERC1155 events. Used by the
+ * listener to avoid double-publishing into the domain bus on reconnect.
+ */
+export const onChainDropEvents = sqliteTable("on_chain_drop_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** TokensClaimed | TokensLazyMinted | RoyaltiesUpdated | etc. */
+  eventName: text("event_name").notNull(),
+  contractAddress: text("contract_address").notNull(),
+  txHash: text("tx_hash").notNull(),
+  logIndex: integer("log_index").notNull(),
+  blockNumber: integer("block_number").notNull(),
+  /** Decoded args, JSON-stringified for replay. */
+  argsJson: text("args_json", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  observedAt: integer("observed_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * Data Provenance Tokens (DPT) — on-chain anchored, off-chain catalog.
+ * One row per `ProvenanceMinted` event observed from the DataProvenance
+ * Stylus contract. The actual encrypted payload lives on Pinata (gated
+ * by Lit Protocol); this table is the local index.
+ */
+export const dataProvenanceTokens = sqliteTable("data_provenance_tokens", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Chain on which the token was minted (e.g. "arbitrumSepolia"). */
+  chainId: text("chain_id").notNull(),
+  /** DataProvenance contract address. */
+  contractAddress: text("contract_address").notNull(),
+  /** On-chain tokenId (uint256 as string). */
+  tokenId: text("token_id").notNull(),
+  /** Creator wallet (the human stamp). */
+  creator: text("creator").notNull(),
+  /** IPLD merkle root of the underlying DAG (0x-prefixed 32 bytes). */
+  merkleRoot: text("merkle_root").notNull(),
+  /** Pinata / lit-encrypted content URI. */
+  contentUri: text("content_uri").notNull(),
+  /** Attestation digest from personhood / device oracle. */
+  humanProof: text("human_proof").notNull(),
+  /** On-chain mint timestamp (unix seconds, as decimal string). */
+  mintedAtChain: text("minted_at_chain").notNull(),
+  /** Mint transaction hash. */
+  txHash: text("tx_hash").notNull(),
+  /** True if the admin has emitted ProvenanceRevoked for this token. */
+  revoked: integer("revoked", { mode: "boolean" }).notNull().default(false),
+  observedAt: integer("observed_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * Smart-lease listings — observed from the DataLease Stylus contract's
+ * `ListingCreated` event (and mutated by `ListingDeactivated` /
+ * `ListingPriceUpdated`).
+ */
+export const dataLeaseListings = sqliteTable("data_lease_listings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  chainId: text("chain_id").notNull(),
+  contractAddress: text("contract_address").notNull(),
+  /** On-chain listingId (uint256 as string). */
+  listingId: text("listing_id").notNull(),
+  /** Provenance tokenId being licensed. */
+  tokenId: text("token_id").notNull(),
+  /** Creator wallet. */
+  creator: text("creator").notNull(),
+  /** Per-lease price in wei (decimal string). */
+  priceWei: text("price_wei").notNull(),
+  /** Lease duration in seconds (decimal string). */
+  durationSecs: text("duration_secs").notNull(),
+  /** Lit Protocol Access Control Conditions digest (0x-prefixed 32 bytes). */
+  accConditionsHash: text("acc_conditions_hash").notNull(),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  createdTxHash: text("created_tx_hash").notNull(),
+  observedAt: integer("observed_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * Granted leases — observed from `LeaseGranted` events. The Lit relayer
+ * keys off the row's `accConditionsHash` to provision time-bound decryption
+ * keys to the lessee until `expiresAt`.
+ */
+export const dataLeaseGrants = sqliteTable("data_lease_grants", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  chainId: text("chain_id").notNull(),
+  contractAddress: text("contract_address").notNull(),
+  /** On-chain leaseId (uint256 as string). */
+  leaseId: text("lease_id").notNull(),
+  /** On-chain listingId (uint256 as string). */
+  listingId: text("listing_id").notNull(),
+  /** Provenance tokenId. */
+  tokenId: text("token_id").notNull(),
+  /** Lab / lessee wallet. */
+  lessee: text("lessee").notNull(),
+  /** Amount paid (wei, decimal string). */
+  paidWei: text("paid_wei").notNull(),
+  /** Lease expiry timestamp (unix seconds, decimal string). */
+  expiresAt: text("expires_at").notNull(),
+  /** ACC digest copied from the listing for relayer convenience. */
+  accConditionsHash: text("acc_conditions_hash").notNull(),
+  /** Lit relayer state: pending | provisioned | failed. */
+  relayerStatus: text("relayer_status").notNull().default("pending"),
+  relayerError: text("relayer_error"),
+  grantedTxHash: text("granted_tx_hash").notNull(),
+  observedAt: integer("observed_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});

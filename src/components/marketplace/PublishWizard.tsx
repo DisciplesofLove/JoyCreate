@@ -93,6 +93,7 @@ const ASSET_TYPE_LABELS: Record<PublishableAssetType, string> = {
   template: "Template",
   component: "Component",
   plugin: "Plugin",
+  blueprint: "Blueprint",
 };
 
 // ---------------------------------------------------------------------------

@@ -1178,6 +1178,7 @@ export interface ImageStudioProviderModel {
   label: string;
   supportsImg2Img?: boolean;
   supportsNegativePrompt?: boolean;
+  comingSoon?: boolean;
 }
 
 export interface ImageStudioProvider {
@@ -1185,6 +1186,18 @@ export interface ImageStudioProvider {
   label: string;
   models: ImageStudioProviderModel[];
   supportsUpscale?: boolean;
+  /** Whether an API key is currently resolvable for this provider. */
+  configured?: boolean;
+  /** "cloud" providers need an API key; "local" providers run on a local port. */
+  kind?: "cloud" | "local";
+  /** For local providers — current health probe result. */
+  health?: "ok" | "unreachable";
+  /** Public site URL where users can obtain an API key. */
+  website?: string;
+  /** Env-var names the provider key may be sourced from (for the "Add API key" dialog hint). */
+  apiKeyEnvVars?: string[];
+  /** When true the provider is shown but not selectable (no public API yet). */
+  comingSoon?: boolean;
 }
 
 // ── Video Studio Types ─────────────────────────────────────────────────────────
@@ -1218,10 +1231,17 @@ export interface VideoStudioProviderModel {
   supportsVideo2Video?: boolean;
   maxDurationSeconds?: number;
   defaultFps?: number;
+  comingSoon?: boolean;
 }
 
 export interface VideoStudioProvider {
   id: string;
   label: string;
   models: VideoStudioProviderModel[];
+  configured?: boolean;
+  kind?: "cloud" | "local";
+  health?: "ok" | "unreachable";
+  website?: string;
+  apiKeyEnvVars?: string[];
+  comingSoon?: boolean;
 }

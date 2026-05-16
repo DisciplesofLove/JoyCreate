@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { IpcClient } from "@/ipc/ipc_client";
 import type { VideoStudioVideo, VideoStudioProvider } from "@/ipc/ipc_types";
+import { UnifiedModelPicker } from "@/components/studio/UnifiedModelPicker";
+import { PublishContextMenu } from "@/components/studio/PublishContextMenu";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -425,8 +427,12 @@ function GeneratePanel({
   isGenerating: boolean;
   onGenerate: (params: Record<string, unknown>) => void;
 }) {
-  const [provider, setProvider] = useState("");
-  const [model, setModel] = useState("");
+  const [provider, setProvider] = useState(
+    () => (typeof window !== "undefined" ? localStorage.getItem("video-studio.lastProvider") ?? "" : ""),
+  );
+  const [model, setModel] = useState(
+    () => (typeof window !== "undefined" ? localStorage.getItem("video-studio.lastModel") ?? "" : ""),
+  );
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [aspectIdx, setAspectIdx] = useState(0);
@@ -465,12 +471,29 @@ function GeneratePanel({
     [providers],
   );
 
-  // Auto-select first provider
+  const handleModelPick = useCallback(
+    (providerId: string, modelId: string) => {
+      setProvider(providerId);
+      setModel(modelId);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("video-studio.lastProvider", providerId);
+        localStorage.setItem("video-studio.lastModel", modelId);
+      }
+    },
+    [],
+  );
+
+  // Auto-select first configured provider on first load if nothing remembered
   useEffect(() => {
-    if (providers.length > 0 && !provider) {
-      handleProviderChange(providers[0].id);
+    if (!provider && providers.length > 0) {
+      const firstConfigured = providers.find(
+        (p) => p.configured && !p.comingSoon && p.models.some((m) => !m.comingSoon),
+      );
+      if (firstConfigured) {
+        handleModelPick(firstConfigured.id, firstConfigured.models[0].id);
+      }
     }
-  }, [providers, provider, handleProviderChange]);
+  }, [providers, provider, handleModelPick]);
 
   const handleEnhancePrompt = useCallback(async () => {
     if (!prompt.trim()) return;
@@ -607,46 +630,14 @@ function GeneratePanel({
         </div>
       )}
 
-      {/* Provider */}
-      {providers.length === 0 ? (
-        <div className="text-xs text-muted-foreground p-2 border border-dashed rounded-md text-center">
-          No video providers configured. Add API keys in Settings.
-        </div>
-      ) : (
-        <Select value={provider} onValueChange={handleProviderChange}>
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue placeholder="Select provider" />
-          </SelectTrigger>
-          <SelectContent>
-            {providers.map((p) => (
-              <SelectItem key={p.id} value={p.id} className="text-xs">
-                {p.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
-
-      {/* Model */}
-      {availableModels.length > 1 && (
-        <Select value={model} onValueChange={setModel}>
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue placeholder="Select model" />
-          </SelectTrigger>
-          <SelectContent>
-            {availableModels.map((m) => (
-              <SelectItem key={m.id} value={m.id} className="text-xs">
-                {m.label}
-                {m.maxDurationSeconds && (
-                  <span className="ml-1 text-muted-foreground">
-                    (up to {m.maxDurationSeconds}s)
-                  </span>
-                )}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+      {/* Provider + Model — unified picker */}
+      <UnifiedModelPicker
+        mode="video"
+        providers={providers}
+        selectedProvider={provider}
+        selectedModel={model}
+        onSelect={handleModelPick}
+      />
 
       {/* Prompt */}
       <div className="flex flex-col gap-1.5">
@@ -1032,7 +1023,15 @@ function Gallery({
                         {vid.provider}
                       </Badge>
                     </div>
-                    <DropdownMenu>
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <PublishContextMenu
+                        kind="video"
+                        assetId={vid.id}
+                        defaultName={vid.prompt?.slice(0, 80)}
+                        defaultDescription={vid.prompt}
+                        iconOnly
+                      />
+                      <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
                           variant="ghost"
@@ -1081,6 +1080,7 @@ function Gallery({
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    </div>
                   </div>
                 </div>
               </div>

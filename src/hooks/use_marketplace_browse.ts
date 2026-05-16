@@ -17,6 +17,7 @@ import type {
   MyDropsParams,
   MyClaimsParams,
   OwnershipParams,
+  CreatorRevenueSummary,
 } from "@/types/publish_types";
 import { showError } from "@/lib/toast";
 
@@ -42,6 +43,8 @@ export const marketplaceKeys = {
     [...marketplaceKeys.all, "ownership", params] as const,
   myStores: (wallet?: string) =>
     [...marketplaceKeys.all, "my-stores", wallet ?? null] as const,
+  myRevenue: (wallet?: string) =>
+    [...marketplaceKeys.all, "my-revenue", wallet ?? null] as const,
 };
 
 // ============================================================================
@@ -157,5 +160,19 @@ export function useMyStores(
     queryFn: () => client.marketplaceMyStores({ wallet: wallet!, first }),
     enabled: !!wallet,
     staleTime: 5 * 60_000,
+  });
+}
+
+/** Per-token revenue summary derived from supplyClaimed * pricePerToken. */
+export function useMyRevenue(
+  wallet: string | null | undefined,
+  pageSize?: number,
+) {
+  return useQuery<CreatorRevenueSummary>({
+    queryKey: marketplaceKeys.myRevenue(wallet ?? undefined),
+    queryFn: () =>
+      client.marketplaceMyRevenue({ wallet: wallet!, pageSize }),
+    enabled: !!wallet,
+    staleTime: 60_000,
   });
 }

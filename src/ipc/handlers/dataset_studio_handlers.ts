@@ -18,6 +18,7 @@ import log from "electron-log";
 import { v4 as uuidv4 } from "uuid";
 import { db } from "@/db";
 import { eq, and, desc, sql, count } from "drizzle-orm";
+import { publishAndForget } from "@/lib/joymarketplace/publish_orchestrator";
 import {
   studioDatasets,
   datasetItems,
@@ -1109,6 +1110,141 @@ export function registerDatasetStudioHandlers() {
       logger.error("Failed to export dataset:", error);
       throw error;
     }
+  });
+
+  /**
+   * Publish dataset to on-chain marketplace via PublishOrchestrator.
+   * Builds a manifest JSON (dataset metadata + item index) and uploads it
+   * as the asset content. Existing local/p2p marketplace flows are unaffected.
+   */
+  ipcMain.handle("dataset:publish-to-marketplace", async (_event, args: {
+    datasetId: string;
+    manifestId?: string;
+    name?: string;
+    description?: string;
+    priceUsdc?: number; // base units (6 decimals)
+    royaltyBps?: number; // default 250
+    dryRun?: boolean;
+  }) => {
+    if (!args?.datasetId) {
+      throw new Error("datasetId is required");
+    }
+
+    const datasetRow = await db
+      .select()
+      .from(studioDatasets)
+      .where(eq(studioDatasets.id, args.datasetId))
+      .limit(1);
+    const dataset = datasetRow[0];
+    if (!dataset) {
+      throw new Error(`Dataset ${args.datasetId} not found`);
+    }
+
+    let manifest: typeof datasetManifests.$inferSelect | undefined;
+    if (args.manifestId) {
+      const m = await db
+        .select()
+        .from(datasetManifests)
+        .where(eq(datasetManifests.id, args.manifestId))
+        .limit(1);
+      manifest = m[0];
+    } else {
+      const m = await db
+        .select()
+        .from(datasetManifests)
+        .where(eq(datasetManifests.datasetId, args.datasetId))
+        .orderBy(desc(datasetManifests.id))
+        .limit(1);
+      manifest = m[0];
+    }
+
+    const items = await db
+      .select({
+        id: datasetItems.id,
+        modality: datasetItems.modality,
+        contentHash: datasetItems.contentHash,
+        byteSize: datasetItems.byteSize,
+        license: datasetItems.license,
+        split: datasetItems.split,
+      })
+      .from(datasetItems)
+      .where(eq(datasetItems.datasetId, args.datasetId));
+
+    const publishManifest = {
+      version: 1 as const,
+      dataset: {
+        id: dataset.id,
+        name: dataset.name,
+        description: dataset.description ?? null,
+        datasetType: dataset.datasetType,
+        supportedModalities: dataset.supportedModalities ?? [],
+        license: dataset.license,
+        licenseUrl: dataset.licenseUrl ?? null,
+        creatorName: dataset.creatorName ?? null,
+        creatorId: dataset.creatorId ?? null,
+        tags: dataset.tags ?? [],
+        itemCount: dataset.itemCount,
+        totalBytes: dataset.totalBytes,
+        schemaJson: dataset.schemaJson ?? null,
+      },
+      manifest: manifest
+        ? {
+            id: manifest.id,
+            version: manifest.version,
+            manifestHash: manifest.manifestHash,
+            merkleRoot: manifest.merkleRoot ?? null,
+            totalItems: manifest.totalItems,
+            totalBytes: manifest.totalBytes,
+            statsJson: manifest.statsJson ?? null,
+          }
+        : null,
+      items,
+      publishedAt: new Date().toISOString(),
+    };
+
+    const contentBuffer = Buffer.from(JSON.stringify(publishManifest, null, 2), "utf8");
+
+    const outcome = await publishAndForget({
+      assetType: "dataset",
+      name: args.name ?? dataset.name,
+      description: args.description ?? dataset.description ?? undefined,
+      contentBuffer,
+      contentMimeType: "application/json",
+      metadata: {
+        datasetId: dataset.id,
+        manifestId: manifest?.id ?? null,
+        itemCount: dataset.itemCount,
+        totalBytes: dataset.totalBytes,
+        datasetType: dataset.datasetType,
+        license: dataset.license,
+        modalities: dataset.supportedModalities ?? [],
+        merkleRoot: manifest?.merkleRoot ?? null,
+        manifestHash: manifest?.manifestHash ?? null,
+      },
+      priceUsdc: typeof args.priceUsdc === "number" ? args.priceUsdc : 0,
+      royaltyBps: typeof args.royaltyBps === "number" ? args.royaltyBps : 250,
+      dryRun: args.dryRun === true,
+    });
+
+    if (outcome.ok && !outcome.dryRun) {
+      try {
+        await db
+          .update(studioDatasets)
+          .set({
+            publishStatus: "marketplace_published",
+            updatedAt: new Date(),
+          })
+          .where(eq(studioDatasets.id, dataset.id));
+      } catch (err) {
+        logger.warn("Failed to update dataset publishStatus after publish:", err);
+      }
+    }
+
+    logger.info(
+      `Dataset ${dataset.id} publish ok=${outcome.ok} dryRun=${outcome.dryRun} tokenId=${outcome.tokenId ?? "n/a"}`,
+    );
+
+    return outcome;
   });
 
   logger.info("Dataset Studio handlers registered");

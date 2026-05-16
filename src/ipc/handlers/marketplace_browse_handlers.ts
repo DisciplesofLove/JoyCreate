@@ -41,6 +41,8 @@ import type {
   PublishableAssetType,
   UnifiedCategory,
   LicenseType,
+  CreatorRevenueRow,
+  CreatorRevenueSummary,
 } from "@/types/publish_types";
 import type { PricingModel, AssetStatus } from "@/types/marketplace_types";
 
@@ -556,6 +558,88 @@ export function registerMarketplaceBrowseHandlers() {
     }
     return Array.from(counts.entries()).map(([category, count]) => ({ category, count }));
   });
+
+  /**
+   * "My revenue" — per-token sales summary for a creator wallet, derived
+   * directly from the drop subgraph (no extra round-trips beyond what
+   * `marketplace:my-drops` already does).
+   *
+   * For each drop authored by `wallet`, revenue is computed as
+   * `supplyClaimed * pricePerToken` (both wei-decimal strings on the
+   * `Token` entity). Totals are bucketed by ERC20 currency address so the
+   * UI can render distinct lines per stablecoin / native token without
+   * needing a price oracle in the main process.
+   */
+  ipcMain.handle(
+    "marketplace:my-revenue",
+    async (
+      _,
+      params: { wallet: string; pageSize?: number },
+    ): Promise<CreatorRevenueSummary> => {
+      if (!params?.wallet) throw new Error("wallet is required");
+      const wallet = params.wallet.toLowerCase();
+      const pageSize = Math.min(Math.max(params.pageSize ?? 100, 1), 200);
+      logger.info(`my-revenue wallet=${wallet} pageSize=${pageSize}`);
+
+      const { items: tokens } = await listDropsByCreator({
+        creator: wallet,
+        page: 1,
+        pageSize,
+        orderBy: "lazyMintedAt",
+        orderDirection: "desc",
+      });
+
+      const enriched = await Promise.all(
+        tokens.map(async (t) => ({
+          token: t,
+          meta: await fetchMetadata(t.baseURI, t.tokenId).catch(() => null),
+        })),
+      );
+
+      const mine = enriched.filter(({ meta }) => isMyDrop(meta, wallet));
+
+      const rows: CreatorRevenueRow[] = mine.map(({ token, meta }) => {
+        let revenueWei = "0";
+        try {
+          const sold = BigInt(token.supplyClaimed ?? "0");
+          const price = BigInt(token.pricePerToken ?? "0");
+          revenueWei = (sold * price).toString();
+        } catch {
+          revenueWei = "0";
+        }
+        return {
+          tokenId: token.tokenId,
+          name: meta?.name ?? `Drop #${token.tokenId}`,
+          unitsSold: token.supplyClaimed ?? "0",
+          pricePerTokenWei: token.pricePerToken,
+          revenueWei,
+          currency: token.currency,
+        };
+      });
+
+      const totalsByCurrency: Record<string, string> = {};
+      let totalUnits = 0n;
+      for (const r of rows) {
+        const key = (r.currency ?? "native").toLowerCase();
+        const prev = totalsByCurrency[key]
+          ? BigInt(totalsByCurrency[key])
+          : 0n;
+        totalsByCurrency[key] = (prev + BigInt(r.revenueWei)).toString();
+        try {
+          totalUnits += BigInt(r.unitsSold);
+        } catch {
+          /* ignore malformed */
+        }
+      }
+
+      return {
+        wallet,
+        rows,
+        totalsByCurrency,
+        totalUnitsSold: totalUnits.toString(),
+      };
+    },
+  );
 }
 
 // Internal exports for unit tests.

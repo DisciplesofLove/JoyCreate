@@ -9,6 +9,8 @@ import path from "node:path";
 import { generateText } from "ai";
 import { getModelClient } from "@/ipc/utils/get_model_client";
 import { recordAICost } from "@/ipc/utils/cost_tracking";
+import { createProvenanceManifest } from "@/types/provenance";
+import { getDomainEventBus } from "@/lib/events/domain_event_bus";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -586,12 +588,25 @@ interface ProviderModel {
   supportsVideo2Video?: boolean;
   maxDurationSeconds?: number;
   defaultFps?: number;
+  comingSoon?: boolean;
 }
 
-function getProviderCatalog(): Record<string, { label: string; models: ProviderModel[] }> {
+interface ProviderCatalogEntry {
+  label: string;
+  models: ProviderModel[];
+  kind?: "cloud" | "local";
+  website?: string;
+  apiKeyEnvVars?: string[];
+  comingSoon?: boolean;
+}
+
+function getProviderCatalog(): Record<string, ProviderCatalogEntry> {
   return {
     runway: {
       label: "Runway",
+      kind: "cloud",
+      website: "https://app.runwayml.com/account",
+      apiKeyEnvVars: ["RUNWAY_API_KEY", "RUNWAYML_API_SECRET"],
       models: [
         { id: "gen3a_turbo", label: "Gen-3 Alpha Turbo", supportsImg2Video: true, maxDurationSeconds: 10, defaultFps: 24 },
         { id: "gen4_turbo", label: "Gen-4 Turbo", supportsImg2Video: true, maxDurationSeconds: 10, defaultFps: 24 },
@@ -599,6 +614,9 @@ function getProviderCatalog(): Record<string, { label: string; models: ProviderM
     },
     fal: {
       label: "Fal.ai",
+      kind: "cloud",
+      website: "https://fal.ai/dashboard/keys",
+      apiKeyEnvVars: ["FAL_KEY", "FAL_API_KEY"],
       models: [
         { id: "fal-ai/kling-video/v2/master/text-to-video", label: "Kling v2 (Text)", maxDurationSeconds: 10, defaultFps: 24 },
         { id: "fal-ai/kling-video/v2/master/image-to-video", label: "Kling v2 (Image)", supportsImg2Video: true, maxDurationSeconds: 10, defaultFps: 24 },
@@ -610,6 +628,9 @@ function getProviderCatalog(): Record<string, { label: string; models: ProviderM
     },
     replicate: {
       label: "Replicate",
+      kind: "cloud",
+      website: "https://replicate.com/account/api-tokens",
+      apiKeyEnvVars: ["REPLICATE_API_TOKEN"],
       models: [
         { id: "cjwbw/cogvideox-5b:latest", label: "CogVideoX 5B", maxDurationSeconds: 6, defaultFps: 16 },
         { id: "stability-ai/stable-video-diffusion:latest", label: "Stable Video Diffusion", supportsImg2Video: true, maxDurationSeconds: 4, defaultFps: 14 },
@@ -618,6 +639,9 @@ function getProviderCatalog(): Record<string, { label: string; models: ProviderM
     },
     luma: {
       label: "Luma AI",
+      kind: "cloud",
+      website: "https://lumalabs.ai/dream-machine/api",
+      apiKeyEnvVars: ["LUMA_API_KEY"],
       models: [
         { id: "ray2", label: "Ray 2", supportsImg2Video: true, supportsVideoExtend: true, maxDurationSeconds: 9, defaultFps: 24 },
         { id: "ray2-flash", label: "Ray 2 Flash", supportsImg2Video: true, supportsVideoExtend: true, maxDurationSeconds: 9, defaultFps: 24 },
@@ -625,6 +649,9 @@ function getProviderCatalog(): Record<string, { label: string; models: ProviderM
     },
     stabilityai: {
       label: "Stability AI",
+      kind: "cloud",
+      website: "https://platform.stability.ai/account/keys",
+      apiKeyEnvVars: ["STABILITY_API_KEY"],
       models: [
         { id: "svd", label: "Stable Video Diffusion", supportsImg2Video: true, maxDurationSeconds: 4, defaultFps: 14 },
         { id: "svd-xt", label: "SVD-XT (Extended)", supportsImg2Video: true, maxDurationSeconds: 4, defaultFps: 14 },
@@ -632,6 +659,9 @@ function getProviderCatalog(): Record<string, { label: string; models: ProviderM
     },
     google: {
       label: "Google Veo",
+      kind: "cloud",
+      website: "https://aistudio.google.com/app/apikey",
+      apiKeyEnvVars: ["GOOGLE_AI_API_KEY", "GEMINI_API_KEY"],
       models: [
         { id: "veo-3.0-generate-001", label: "Veo 3", supportsImg2Video: true, maxDurationSeconds: 8, defaultFps: 24 },
         { id: "veo-3.0-fast-generate-001", label: "Veo 3 Fast", supportsImg2Video: true, maxDurationSeconds: 8, defaultFps: 24 },
@@ -641,8 +671,32 @@ function getProviderCatalog(): Record<string, { label: string; models: ProviderM
     },
     openai: {
       label: "OpenAI Sora",
+      kind: "cloud",
+      website: "https://platform.openai.com/api-keys",
+      apiKeyEnvVars: ["OPENAI_API_KEY"],
+      comingSoon: true,
       models: [
-        { id: "sora", label: "Sora", supportsImg2Video: true, maxDurationSeconds: 20, defaultFps: 24 },
+        { id: "sora", label: "Sora (no public API yet)", supportsImg2Video: true, maxDurationSeconds: 20, defaultFps: 24, comingSoon: true },
+      ],
+    },
+    pika: {
+      label: "Pika Labs",
+      kind: "cloud",
+      website: "https://pika.art",
+      apiKeyEnvVars: ["PIKA_API_KEY"],
+      comingSoon: true,
+      models: [
+        { id: "pika-2.0", label: "Pika 2.0 (waitlist API)", maxDurationSeconds: 5, defaultFps: 24, comingSoon: true },
+      ],
+    },
+    xai: {
+      label: "Grok Video (xAI)",
+      kind: "cloud",
+      website: "https://console.x.ai",
+      apiKeyEnvVars: ["XAI_API_KEY"],
+      comingSoon: true,
+      models: [
+        { id: "grok-video", label: "Grok Video (coming soon)", maxDurationSeconds: 6, defaultFps: 24, comingSoon: true },
       ],
     },
   };
@@ -658,7 +712,27 @@ export function registerVideoStudioHandlers() {
 
     const sourceType = params.sourceType ?? "text-to-video";
 
+    const generationStartedAt = Date.now();
     const { filePath, thumbnailPath } = await dispatchGenerate(params);
+
+    // DEAI Phase 0D — provenance manifest at generation time.
+    const provenance = createProvenanceManifest({
+      model: params.model || "unknown",
+      provider: params.provider,
+      prompt: params.prompt.trim(),
+      negativePrompt: params.negativePrompt?.trim() || undefined,
+      params: {
+        width: params.width,
+        height: params.height,
+        duration: params.duration ?? 5,
+        fps: params.fps ?? 24,
+        seed: params.seed || null,
+        style: params.style || null,
+        sourceType,
+        strength: params.strength,
+        motionAmount: params.motionAmount,
+      },
+    });
 
     const [row] = await db
       .insert(videoStudioVideos)
@@ -683,8 +757,16 @@ export function registerVideoStudioHandlers() {
           motionAmount: params.motionAmount,
           hasReferenceImage: !!params.referenceImageBase64,
         },
+        provenanceJson: provenance,
       })
       .returning();
+
+    // DEAI Phase 0E — emit compute.job.completed for tokenomics/metering.
+    void getDomainEventBus().publish("compute.job.completed", {
+      jobId: `video-studio:${row?.id ?? "unknown"}`,
+      status: "succeeded",
+      durationMs: Date.now() - generationStartedAt,
+    }).catch(() => { /* swallow */ });
 
     return row;
   });
@@ -782,17 +864,33 @@ export function registerVideoStudioHandlers() {
   // ── Available Providers ───────────────────────────────────────────────────
   ipcMain.handle("video-studio:available-providers", async () => {
     const catalog = getProviderCatalog();
-    const result: { id: string; label: string; models: ProviderModel[] }[] = [];
+    const result: Array<{
+      id: string;
+      label: string;
+      models: ProviderModel[];
+      configured?: boolean;
+      kind?: "cloud" | "local";
+      website?: string;
+      apiKeyEnvVars?: string[];
+      comingSoon?: boolean;
+    }> = [];
 
     for (const [providerId, info] of Object.entries(catalog)) {
-      const resolved = await resolveApiKey(providerId);
-      if (resolved) {
-        result.push({
-          id: providerId,
-          label: info.label,
-          models: info.models,
-        });
+      let configured = false;
+      if (!info.comingSoon) {
+        const resolved = await resolveApiKey(providerId);
+        configured = !!resolved;
       }
+      result.push({
+        id: providerId,
+        label: info.label,
+        models: info.models,
+        kind: info.kind ?? "cloud",
+        website: info.website,
+        apiKeyEnvVars: info.apiKeyEnvVars,
+        comingSoon: info.comingSoon,
+        configured,
+      });
     }
 
     return result;

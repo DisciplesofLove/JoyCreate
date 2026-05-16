@@ -94,6 +94,8 @@ import { joyMyStoresRoute } from "./routes/joy/my-stores";
 import { joyMyAssetsRoute } from "./routes/joy/my-assets";
 import { joyPublishRoute } from "./routes/joy/publish";
 import { joyBlueprintsRoute } from "./routes/joy/blueprints";
+// Phase 5 (M1) Monetization: unified Earnings dashboard.
+import { earningsRoute } from "./routes/earnings";
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
@@ -193,6 +195,8 @@ const routeTree = rootRoute.addChildren([
   joyMyAssetsRoute,
   joyPublishRoute,
   joyBlueprintsRoute,
+  // Phase 5 (M1) Monetization: unified earnings dashboard.
+  earningsRoute,
 ]);
 
 // src/components/NotFoundRedirect.tsx

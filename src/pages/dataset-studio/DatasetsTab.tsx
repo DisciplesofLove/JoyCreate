@@ -7,6 +7,8 @@ import {
   Image,
   Music,
   Video,
+  Upload,
+  Loader2,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,6 +20,7 @@ import {
   useIndexDataset,
 } from "@/hooks/useDataStudioExtended";
 import { useStudioDatasets, type StudioDataset } from "@/hooks/useDatasetStudio";
+import { usePublishDataset } from "@/hooks/use_publish_dataset";
 
 type Dataset = StudioDataset;
 
@@ -100,6 +103,7 @@ function DatasetList({ onSelect }: { onSelect: (id: string) => void }) {
 function DatasetDetailPanel({ datasetId }: { datasetId: string }) {
   const { data: stats, isLoading } = useDatasetStatistics(datasetId);
   const indexDataset = useIndexDataset();
+  const publishDataset = usePublishDataset();
 
   if (isLoading) {
     return (
@@ -180,6 +184,18 @@ function DatasetDetailPanel({ datasetId }: { datasetId: string }) {
               <Button variant="outline">
                 <Download className="h-4 w-4 mr-2" />
                 Export
+              </Button>
+              <Button
+                variant="default"
+                onClick={() => publishDataset.mutate({ datasetId })}
+                disabled={publishDataset.isPending}
+              >
+                {publishDataset.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4 mr-2" />
+                )}
+                Publish to Marketplace
               </Button>
             </div>
           </>

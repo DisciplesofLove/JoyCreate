@@ -71,6 +71,14 @@ import { agentBuilderClient } from "@/ipc/agent_builder_client";
 import { IpcClient } from "@/ipc/ipc_client";
 import { AGENT_TEMPLATES, TEMPLATE_CATEGORIES } from "@/constants/agent_templates";
 import { showError, showSuccess } from "@/lib/toast";
+import { AgentSurfacesNav } from "@/components/agent/AgentSurfacesNav";
+import {
+  MonetizeButton,
+  type MonetizationConfig,
+} from "@/components/monetization/MonetizeButton";
+import { PublishWizard } from "@/components/marketplace/PublishWizard";
+import { usePublishAgent } from "@/hooks/use_publish_agent";
+import { Rocket } from "lucide-react";
 
 import type { Agent, AgentType, AgentStatus, CreateAgentRequest } from "@/types/agent_builder";
 
@@ -333,9 +341,35 @@ export default function AgentBuilderPage() {
           </Badge>
         </div>
       </CardContent>
-      <CardFooter className="relative pt-0">
+      <CardFooter className="relative flex items-center justify-between gap-2 pt-0">
         <div className="text-xs text-muted-foreground">
           Updated {new Date(agent.updatedAt).toLocaleDateString()}
+        </div>
+        <div className="flex items-center gap-2">
+          {/*
+            Phase 5 (M2) Monetization: quick-set price model. Persistence
+            lands alongside the agent billing meter (Phase 5 M3); the dialog
+            captures intent today and surfaces it via toast.
+          */}
+          <MonetizeButton
+            assetLabel={agent.name}
+            onSubmit={(config: MonetizationConfig) => {
+              const summary =
+                config.model === "free"
+                  ? "Free"
+                  : `${config.model} · ${config.price} ${config.currency}`;
+              showSuccess(
+                `Monetization saved for "${agent.name}": ${summary}.`,
+              );
+            }}
+          />
+          {/*
+            Real on-chain publish: routes through the DropERC1155
+            orchestrator (lazy mint → claim conditions → IPFS pin →
+            Goldsky drop subgraph). Read-back lands on /joy/marketplace
+            and /joy/my-assets via the drop-subgraph hooks.
+          */}
+          <PublishAgentInlineButton agent={agent} />
         </div>
       </CardFooter>
     </Card>
@@ -345,6 +379,9 @@ export default function AgentBuilderPage() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="border-b border-border/50 p-6 bg-gradient-to-r from-violet-500/5 via-purple-500/5 to-pink-500/5">
+        <div className="mb-4">
+          <AgentSurfacesNav />
+        </div>
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-3">
@@ -621,5 +658,51 @@ export default function AgentBuilderPage() {
         )}
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inline Publish Agent Button — opens PublishWizard wired to the on-chain
+// DropERC1155 orchestrator. Mirrors the action in agent-editor.tsx so the
+// listing page also exposes the publish flow without forcing a detour
+// through the editor.
+// ---------------------------------------------------------------------------
+function PublishAgentInlineButton({ agent }: { agent: Agent }) {
+  const [open, setOpen] = useState(false);
+  const publish = usePublishAgent();
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
+      >
+        <Rocket className="h-3 w-3 mr-1" />
+        Publish
+      </Button>
+      <PublishWizard
+        open={open}
+        onOpenChange={setOpen}
+        assetType="agent"
+        sourceId={agent.id}
+        defaultName={agent.name}
+        defaultDescription={agent.description ?? ""}
+        defaultCategory="ai-agent"
+        isPublishing={publish.isPending}
+        onPublish={(payload) => {
+          publish.mutate(payload, {
+            onSuccess: (result) => {
+              setOpen(false);
+              showSuccess(
+                `Agent "${agent.name}" published${result.assetId ? ` (token ${result.assetId})` : ""}.`,
+              );
+            },
+          });
+        }}
+      />
+    </>
   );
 }

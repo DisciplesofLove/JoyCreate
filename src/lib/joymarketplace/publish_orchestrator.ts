@@ -18,16 +18,24 @@
 
 import log from "electron-log";
 import { ethers } from "ethers";
-import { eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { publishBundles, jcnPublishRecords, jcnChainTransactions } from "@/db/schema";
+import { publishBundles, jcnPublishRecords, jcnChainTransactions, onChainDropEvents } from "@/db/schema";
 import {
   CONTRACT_ADDRESSES,
-  POLYGON_AMOY,
   parseUSDC,
 } from "@/config/joymarketplace";
 import { jcnKeyManager } from "@/lib/jcn_key_manager";
+import {
+  DEFAULT_MARKETPLACE_CHAIN,
+  getMarketplaceChain,
+  isMarketplaceChainId,
+  isMarketplaceChainReady,
+  type MarketplaceChainConfig,
+  type MarketplaceChainId,
+} from "@/lib/onchain/chain_registry";
+import { readSettings } from "@/main/settings";
 
 import { IpfsPinner, loadPinnerKeysFromSettings } from "./ipfs_pinner";
 import { OnchainPublisher, buildWallet } from "./onchain_publisher";
@@ -38,7 +46,7 @@ const logger = log.scope("publish_orchestrator");
 // Types
 // ---------------------------------------------------------------------------
 
-export type AssetType = "agent" | "document" | "image" | "video" | "model";
+export type AssetType = "agent" | "document" | "image" | "video" | "model" | "blueprint" | "workflow" | "dataset";
 
 export interface PublishInput {
   assetType: AssetType;
@@ -49,8 +57,14 @@ export interface PublishInput {
   contentMimeType?: string;
   /** Extra props merged into metadata.properties. */
   metadata?: Record<string, unknown>;
-  /** USDC base units (6 decimals); 0 = free. */
+  /** USDC base units (6 decimals); 0 = free. Used on Polygon Amoy. */
   priceUsdc?: number;
+  /**
+   * Per-edition price in wei (string for safe IPC transport).
+   * Required when the active marketplace chain pays in native ETH
+   * (Arbitrum Sepolia / Arbitrum One). Ignored on Polygon Amoy.
+   */
+  priceWei?: string;
   /** ERC-1155 quantity to mint. Default 1. */
   quantity?: number;
   /** EIP-2981 royalty in basis points. Default 250 (2.5%). */
@@ -181,27 +195,57 @@ export class PublishOrchestrator {
     }
 
     // 4. Verify creator gate
-    const publisher = new OnchainPublisher(wallet, POLYGON_AMOY);
-    try {
-      const gate = await publisher.verifyCreatorGate(wallet.address);
-      if (!gate.canMint) {
-        outcome.errors!.push(`gate: ${gate.reason ?? "canMint=false"}`);
+    const marketplaceChain = this.resolveMarketplaceChain();
+    const publisher = new OnchainPublisher(wallet, marketplaceChain.chain, marketplaceChain);
+
+    if (marketplaceChain.id !== "polygonAmoy" && !isMarketplaceChainReady(marketplaceChain.id)) {
+      outcome.errors!.push(
+        `marketplace chain ${marketplaceChain.id} has no deployed dropEdition contract \u2014 deploy contracts/drop_edition_stylus first`,
+      );
+      outcome.blockedAt = "mint-failed";
+      await this.persistBundle(bundleId, outcome);
+      return outcome;
+    }
+
+    if (marketplaceChain.enforceJoyCreatorGate) {
+      try {
+        const gate = await publisher.verifyCreatorGate(wallet.address);
+        if (!gate.canMint) {
+          outcome.errors!.push(`gate: ${gate.reason ?? "canMint=false"}`);
+          outcome.blockedAt = "no-gate";
+          await this.persistBundle(bundleId, outcome);
+          return outcome;
+        }
+      } catch (err) {
+        outcome.errors!.push(`verifyCreatorGate threw: ${(err as Error).message}`);
         outcome.blockedAt = "no-gate";
         await this.persistBundle(bundleId, outcome);
         return outcome;
       }
-    } catch (err) {
-      outcome.errors!.push(`verifyCreatorGate threw: ${(err as Error).message}`);
-      outcome.blockedAt = "no-gate";
-      await this.persistBundle(bundleId, outcome);
-      return outcome;
     }
 
     // 5. Mint
     const quantity = Math.max(1, input.quantity ?? 1);
     let mint: { tokenId: string; txHash?: string; gasEstimate?: bigint };
     try {
-      mint = await publisher.lazyMintDrop(metadataUri!, quantity, { dryRun });
+      if (marketplaceChain.currency === "ETH") {
+        if (!input.priceWei) {
+          throw new Error(
+            `priceWei is required when publishing to ${marketplaceChain.id} (native-ETH chain)`,
+          );
+        }
+        const tokenId = await this.allocateNextTokenId(marketplaceChain.contracts.dropEdition);
+        mint = await publisher.mintEditionStylus(
+          {
+            tokenId,
+            quantity,
+            priceWei: BigInt(input.priceWei),
+          },
+          { dryRun },
+        );
+      } else {
+        mint = await publisher.lazyMintDrop(metadataUri!, quantity, { dryRun });
+      }
       outcome.tokenId = mint.tokenId;
       if (mint.txHash) outcome.mintTxHash = mint.txHash;
       if (mint.gasEstimate != null) {
@@ -219,44 +263,55 @@ export class PublishOrchestrator {
 
     // Dry run stops here with ok=true
     if (dryRun) {
-      // Still estimate listing gas so the UI can surface a total
-      try {
-        const list = await publisher.createListing(
-          mint.tokenId,
-          parseUSDC(input.priceUsdc ?? 0),
-          CONTRACT_ADDRESSES.USDC_POLYGON,
-          quantity,
-          { dryRun: true },
-        );
-        if (list.gasEstimate != null) {
-          outcome.estimatedGas = {
-            ...outcome.estimatedGas,
-            listing: list.gasEstimate.toString(),
-          };
+      // Listing only happens on Polygon Amoy (USDC); Arbitrum mints are
+      // self-listed via mint_edition price.
+      if (marketplaceChain.currency === "USDC") {
+        try {
+          const list = await publisher.createListing(
+            mint.tokenId,
+            parseUSDC(input.priceUsdc ?? 0),
+            CONTRACT_ADDRESSES.USDC_POLYGON,
+            quantity,
+            { dryRun: true },
+          );
+          if (list.gasEstimate != null) {
+            outcome.estimatedGas = {
+              ...outcome.estimatedGas,
+              listing: list.gasEstimate.toString(),
+            };
+          }
+        } catch (err) {
+          outcome.errors!.push(`listing dry-run: ${(err as Error).message}`);
         }
-      } catch (err) {
-        outcome.errors!.push(`listing dry-run: ${(err as Error).message}`);
       }
       outcome.ok = true;
       await this.persistBundle(bundleId, { ...outcome, status: "dry-run-ok" });
       return outcome;
     }
 
-    // 6. Listing
-    try {
-      const list = await publisher.createListing(
-        mint.tokenId,
-        parseUSDC(input.priceUsdc ?? 0),
-        CONTRACT_ADDRESSES.USDC_POLYGON,
-        quantity,
-      );
-      outcome.listingId = list.listingId;
-      if (list.txHash) outcome.listTxHash = list.txHash;
-    } catch (err) {
-      outcome.errors!.push(`listing: ${(err as Error).message}`);
-      outcome.blockedAt = "list-failed";
-      await this.persistBundle(bundleId, outcome);
-      return outcome;
+    // 6. Listing — only on Polygon Amoy. On Arbitrum the mint price IS the
+    //    listing price (set on the contract at initialize-time + per-mint
+    //    msg.value), so there is no separate listing tx.
+    if (marketplaceChain.currency === "USDC") {
+      try {
+        const list = await publisher.createListing(
+          mint.tokenId,
+          parseUSDC(input.priceUsdc ?? 0),
+          CONTRACT_ADDRESSES.USDC_POLYGON,
+          quantity,
+        );
+        outcome.listingId = list.listingId;
+        if (list.txHash) outcome.listTxHash = list.txHash;
+      } catch (err) {
+        outcome.errors!.push(`listing: ${(err as Error).message}`);
+        outcome.blockedAt = "list-failed";
+        await this.persistBundle(bundleId, outcome);
+        return outcome;
+      }
+    } else {
+      // Arbitrum: synthesize a listingId so downstream consumers (UI,
+      // Goldsky watch) have a stable identifier.
+      outcome.listingId = `stylus-${marketplaceChain.id}-${mint.tokenId}`;
     }
 
     // 7. Persist receipts
@@ -298,7 +353,45 @@ export class PublishOrchestrator {
     if (!active) return undefined;
     const pk = await jcnKeyManager.getPrivateKey(active.keyId);
     if (!pk) return undefined;
-    return buildWallet(pk.toString("hex"), POLYGON_AMOY);
+    const chain = this.resolveMarketplaceChain().chain;
+    return buildWallet(pk.toString("hex"), chain);
+  }
+
+  /**
+   * Resolve the active marketplace chain from user settings. Defaults to
+   * `polygonAmoy` when the setting is missing or invalid so existing
+   * publishes continue to work unchanged.
+   */
+  private resolveMarketplaceChain(): MarketplaceChainConfig {
+    let id: MarketplaceChainId = DEFAULT_MARKETPLACE_CHAIN;
+    try {
+      const settings = readSettings();
+      const candidate = (settings as { marketplaceChain?: string }).marketplaceChain;
+      if (isMarketplaceChainId(candidate)) id = candidate;
+    } catch {
+      // settings unavailable — fall back to default
+    }
+    return getMarketplaceChain(id);
+  }
+
+  /**
+   * Allocate the next free tokenId for an Arbitrum Stylus DropEdition by
+   * counting prior mint events recorded for the contract. Best-effort: if
+   * the count query fails, falls back to a timestamp-derived id which is
+   * unlikely to collide in practice.
+   */
+  private async allocateNextTokenId(contractAddress: string): Promise<string> {
+    try {
+      const rows = await db
+        .select({ value: count() })
+        .from(onChainDropEvents)
+        .where(eq(onChainDropEvents.contractAddress, contractAddress));
+      const next = (rows[0]?.value ?? 0) as number;
+      return next.toString();
+    } catch (err) {
+      logger.warn(`allocateNextTokenId fallback: ${(err as Error).message}`);
+      return Date.now().toString();
+    }
   }
 
   private deriveFilename(input: PublishInput): string {
@@ -312,6 +405,8 @@ export class PublishOrchestrator {
         case "agent":
         case "document":
           return ".json";
+        case "blueprint":
+          return ".yaml";
         case "model":
           return ".bin";
         default:

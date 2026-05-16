@@ -47,7 +47,9 @@ import {
   AlertCircle,
   CheckCircle2,
   Loader2,
+  FlaskConical,
 } from "lucide-react";
+import AILearningPage from "@/pages/AILearningPage";
 
 // =============================================================================
 // MEMORY TYPE ICONS & COLORS
@@ -599,6 +601,10 @@ export default function MemoryPage() {
             <User className="mr-2 h-4 w-4" />
             Profile
           </TabsTrigger>
+          <TabsTrigger value="learning">
+            <FlaskConical className="mr-2 h-4 w-4" />
+            Learning
+          </TabsTrigger>
           <TabsTrigger value="settings">
             <Settings className="mr-2 h-4 w-4" />
             Settings
@@ -648,6 +654,16 @@ export default function MemoryPage() {
 
         <TabsContent value="profile">
           <ProfilePanel />
+        </TabsContent>
+
+        <TabsContent value="learning">
+          {/*
+            Phase 2 nav consolidation: /ai-learning is now a tab inside
+            /memory. The standalone route is preserved so deep links and
+            existing IPC handlers continue to work — see
+            briefs/nav-consolidation-audit.md.
+          */}
+          <AILearningPage />
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-4">

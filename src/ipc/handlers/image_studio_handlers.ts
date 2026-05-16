@@ -10,6 +10,8 @@ import OpenAI from "openai";
 import { generateText } from "ai";
 import { getModelClient } from "@/ipc/utils/get_model_client";
 import { recordAICost } from "@/ipc/utils/cost_tracking";
+import { createProvenanceManifest } from "@/types/provenance";
+import { getDomainEventBus } from "@/lib/events/domain_event_bus";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -487,6 +489,92 @@ async function generateWithComfyUI(params: GenerateImageParams): Promise<string>
   throw new Error("ComfyUI job timed out after 120 seconds");
 }
 
+// ── xAI Grok (OpenAI-compatible) ───────────────────────────────────────────────
+
+async function generateWithXai(params: GenerateImageParams): Promise<string> {
+  const apiKey = await getApiKeyAsync("xai");
+  const xai = new OpenAI({ apiKey, baseURL: "https://api.x.ai/v1" });
+  const response = await xai.images.generate({
+    model: params.model || "grok-2-image-1212",
+    prompt: params.prompt,
+    n: 1,
+    response_format: "b64_json",
+  });
+  const b64 = response.data?.[0]?.b64_json ?? null;
+  if (b64 === null) throw new Error("xAI returned no image data");
+  return saveBase64Image(b64, uniqueFilename("xai"));
+}
+
+// ── Automatic1111 (Local) ──────────────────────────────────────────────────────
+
+async function generateWithA1111(params: GenerateImageParams): Promise<string> {
+  const baseUrl = process.env.A1111_URL || "http://127.0.0.1:7860";
+  const body: Record<string, unknown> = {
+    prompt: params.prompt,
+    negative_prompt: params.negativePrompt ?? "",
+    width: params.width,
+    height: params.height,
+    steps: params.steps ?? 20,
+    cfg_scale: params.cfgScale ?? 7,
+    sampler_name: params.sampler ?? "Euler a",
+    seed: params.seed ? Number(params.seed) : -1,
+    n_iter: 1,
+    batch_size: 1,
+  };
+  if (params.model && params.model !== "default") {
+    body.override_settings = { sd_model_checkpoint: params.model };
+  }
+  const endpoint = params.referenceImageBase64 ? "/sdapi/v1/img2img" : "/sdapi/v1/txt2img";
+  if (params.referenceImageBase64) {
+    body.init_images = [params.referenceImageBase64.replace(/^data:image\/[^;]+;base64,/, "")];
+    body.denoising_strength = params.strength ?? 0.7;
+  }
+  const res = await fetch(`${baseUrl}${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`A1111 returned ${res.status}: ${await res.text().catch(() => "unknown error")}`);
+  }
+  const json = (await res.json()) as { images?: string[] };
+  const b64 = json.images?.[0];
+  if (!b64) throw new Error("A1111 returned no image");
+  return saveBase64Image(b64, uniqueFilename("a1111"));
+}
+
+// ── LocalAI ────────────────────────────────────────────────────────────────────
+
+async function generateWithLocalAI(params: GenerateImageParams): Promise<string> {
+  const baseUrl = process.env.LOCALAI_URL || "http://127.0.0.1:8080";
+  const sizeStr = `${params.width}x${params.height}`;
+  const res = await fetch(`${baseUrl}/v1/images/generations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: params.model || "stablediffusion",
+      prompt: params.prompt,
+      n: 1,
+      size: sizeStr,
+      response_format: "b64_json",
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`LocalAI returned ${res.status}: ${await res.text().catch(() => "unknown error")}`);
+  }
+  const json = (await res.json()) as { data?: Array<{ b64_json?: string; url?: string }> };
+  const entry = json.data?.[0];
+  if (entry?.b64_json) {
+    return saveBase64Image(entry.b64_json, uniqueFilename("localai"));
+  }
+  if (entry?.url) {
+    const imgRes = await fetch(entry.url);
+    const buf = Buffer.from(await imgRes.arrayBuffer());
+    return saveBinaryImage(buf, uniqueFilename("localai"));
+  }
+  throw new Error("LocalAI returned no image data");
+}
+
 // ── Dispatch ───────────────────────────────────────────────────────────────────
 
 /** Generate an image with the given provider/model. Returns the local file path. */
@@ -506,6 +594,14 @@ export async function generateImage(params: GenerateImageParams): Promise<string
       return generateWithRunway(params);
     case "comfyui":
       return generateWithComfyUI(params);
+    case "xai":
+      return generateWithXai(params);
+    case "a1111":
+      return generateWithA1111(params);
+    case "localai":
+      return generateWithLocalAI(params);
+    case "meta":
+      throw new Error("Meta Imagine is not yet supported (no public API).");
     default:
       throw new Error(`Unsupported image provider: ${params.provider}`);
   }
@@ -520,6 +616,7 @@ export function registerImageStudioHandlers() {
 
     const batchCount = Math.min(Math.max(params.batchCount ?? 1, 1), 4);
     const rows = [];
+    const generationStartedAt = Date.now();
 
     for (let i = 0; i < batchCount; i++) {
       const filePath = await generateImage(params);
@@ -532,6 +629,25 @@ export function registerImageStudioHandlers() {
         hasReferenceImage: !!params.referenceImageBase64,
         strength: params.strength,
       };
+
+      // DEAI Phase 0D — provenance manifest captured at generation time.
+      const provenance = createProvenanceManifest({
+        model: params.model ?? "unknown",
+        provider: params.provider,
+        prompt: params.prompt,
+        negativePrompt: params.negativePrompt ?? undefined,
+        params: {
+          width: params.width ?? 1024,
+          height: params.height ?? 1024,
+          seed: params.seed ?? null,
+          style: params.style ?? null,
+          steps: params.steps,
+          cfgScale: params.cfgScale,
+          sampler: params.sampler,
+          strength: params.strength,
+          batchIndex: batchCount > 1 ? i : undefined,
+        },
+      });
 
       const [row] = await db
         .insert(imageStudioImages)
@@ -546,10 +662,19 @@ export function registerImageStudioHandlers() {
           seed: params.seed ?? null,
           style: params.style ?? null,
           metadata: genMeta,
+          provenanceJson: provenance,
         })
         .returning();
       rows.push(row);
     }
+
+    // DEAI Phase 0E — emit compute.job.completed for tokenomics/metering
+    // subscribers. Fire-and-forget; metering must NEVER fail generation.
+    void getDomainEventBus().publish("compute.job.completed", {
+      jobId: `image-studio:${rows[0]?.id ?? "unknown"}`,
+      status: "succeeded",
+      durationMs: Date.now() - generationStartedAt,
+    }).catch(() => { /* swallow */ });
 
     return rows;
   });
@@ -589,6 +714,13 @@ export function registerImageStudioHandlers() {
 
     const filePath = await saveBase64Image(b64, uniqueFilename("openai-edit"));
 
+    const editProvenance = createProvenanceManifest({
+      model: params.model || "dall-e-2",
+      provider: "openai",
+      prompt: params.prompt,
+      params: { width: 1024, height: 1024, editedFrom: params.imageId, mode: "edit" },
+    });
+
     const [row] = await db
       .insert(imageStudioImages)
       .values({
@@ -602,6 +734,7 @@ export function registerImageStudioHandlers() {
         seed: null,
         style: null,
         metadata: { editedFrom: params.imageId },
+        provenanceJson: editProvenance,
       })
       .returning();
 
@@ -689,13 +822,12 @@ export function registerImageStudioHandlers() {
   });
 
   ipcMain.handle("image-studio:available-providers", async () => {
-    const imageProviders = ["openai", "google", "stabilityai", "replicate", "fal", "runway"];
-
     interface ProviderModel {
       id: string;
       label: string;
       supportsImg2Img?: boolean;
       supportsNegativePrompt?: boolean;
+      comingSoon?: boolean;
     }
 
     interface ProviderInfo {
@@ -703,21 +835,36 @@ export function registerImageStudioHandlers() {
       label: string;
       models: ProviderModel[];
       supportsUpscale?: boolean;
+      configured?: boolean;
+      kind?: "cloud" | "local";
+      health?: "ok" | "unreachable";
+      website?: string;
+      apiKeyEnvVars?: string[];
+      comingSoon?: boolean;
     }
 
-    const available: ProviderInfo[] = [];
-
-    const providerMeta: Record<string, { label: string; models: ProviderModel[]; supportsUpscale?: boolean }> = {
-      openai: {
+    // Single source of truth — every provider is returned regardless of key
+    // state so the renderer can show "Needs API key" / "Coming soon" badges
+    // and prompt the user to set a key inline.
+    const cloudProviders: ProviderInfo[] = [
+      {
+        id: "openai",
         label: "DALL-E (OpenAI)",
+        kind: "cloud",
+        website: "https://platform.openai.com/api-keys",
+        apiKeyEnvVars: ["OPENAI_API_KEY"],
         models: [
           { id: "dall-e-3", label: "DALL-E 3" },
           { id: "gpt-image-1", label: "GPT Image 1" },
           { id: "dall-e-2", label: "DALL-E 2", supportsImg2Img: true },
         ],
       },
-      google: {
+      {
+        id: "google",
         label: "Imagen / Gemini (Google)",
+        kind: "cloud",
+        website: "https://aistudio.google.com/app/apikey",
+        apiKeyEnvVars: ["GOOGLE_AI_API_KEY", "GEMINI_API_KEY"],
         models: [
           { id: "imagen-4.0-generate-001", label: "Imagen 4" },
           { id: "imagen-4.0-fast-generate-001", label: "Imagen 4 Fast" },
@@ -728,9 +875,13 @@ export function registerImageStudioHandlers() {
           { id: "gemini-2.0-flash-preview-image-generation", label: "Gemini 2.0 Flash Image", supportsImg2Img: true },
         ],
       },
-      stabilityai: {
+      {
+        id: "stabilityai",
         label: "Stability AI",
+        kind: "cloud",
         supportsUpscale: true,
+        website: "https://platform.stability.ai/account/keys",
+        apiKeyEnvVars: ["STABILITY_API_KEY"],
         models: [
           { id: "stable-image-ultra", label: "Stable Image Ultra", supportsNegativePrompt: true },
           { id: "stable-image-core", label: "Stable Image Core", supportsNegativePrompt: true },
@@ -738,8 +889,12 @@ export function registerImageStudioHandlers() {
           { id: "sd3.5-large-turbo", label: "SD 3.5 Large Turbo", supportsNegativePrompt: true, supportsImg2Img: true },
         ],
       },
-      replicate: {
+      {
+        id: "replicate",
         label: "Replicate",
+        kind: "cloud",
+        website: "https://replicate.com/account/api-tokens",
+        apiKeyEnvVars: ["REPLICATE_API_TOKEN"],
         models: [
           { id: "black-forest-labs/flux-1.1-pro", label: "FLUX 1.1 Pro" },
           { id: "black-forest-labs/flux-schnell", label: "FLUX Schnell (fast)" },
@@ -748,8 +903,12 @@ export function registerImageStudioHandlers() {
           { id: "bytedance/sdxl-lightning-4step", label: "SDXL Lightning (fast)", supportsNegativePrompt: true },
         ],
       },
-      fal: {
+      {
+        id: "fal",
         label: "Fal.ai",
+        kind: "cloud",
+        website: "https://fal.ai/dashboard/keys",
+        apiKeyEnvVars: ["FAL_KEY", "FAL_API_KEY"],
         models: [
           { id: "fal-ai/flux-pro/v1.1", label: "FLUX 1.1 Pro" },
           { id: "fal-ai/flux/dev", label: "FLUX Dev", supportsImg2Img: true },
@@ -759,59 +918,180 @@ export function registerImageStudioHandlers() {
           { id: "fal-ai/aura-flow", label: "AuraFlow", supportsNegativePrompt: true },
         ],
       },
-      runway: {
+      {
+        id: "runway",
         label: "Runway",
+        kind: "cloud",
+        website: "https://app.runwayml.com/account",
+        apiKeyEnvVars: ["RUNWAY_API_KEY", "RUNWAYML_API_SECRET"],
         models: [
           { id: "gen3a_turbo", label: "Gen-3 Alpha Turbo" },
         ],
       },
-    };
+      {
+        id: "xai",
+        label: "Grok (xAI)",
+        kind: "cloud",
+        website: "https://console.x.ai/",
+        apiKeyEnvVars: ["XAI_API_KEY"],
+        models: [
+          { id: "grok-2-image-1212", label: "Grok 2 Image (Aurora)" },
+        ],
+      },
+      {
+        id: "meta",
+        label: "Meta Imagine",
+        kind: "cloud",
+        comingSoon: true,
+        website: "https://imagine.meta.com",
+        models: [
+          { id: "meta-imagine", label: "Meta Imagine (no public API yet)", comingSoon: true },
+        ],
+      },
+    ];
 
-    for (const id of imageProviders) {
-      const resolved = await resolveApiKey(id);
-      if (resolved) {
-        const meta = providerMeta[id];
-        available.push({
-          id,
-          label: meta.label,
-          models: meta.models,
-          supportsUpscale: meta.supportsUpscale,
-        });
+    const available: ProviderInfo[] = [];
+    for (const p of cloudProviders) {
+      if (p.comingSoon) {
+        available.push({ ...p, configured: false });
+        continue;
       }
+      const resolved = await resolveApiKey(p.id);
+      available.push({ ...p, configured: !!resolved });
     }
 
-    // ComfyUI — check if local service is reachable
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 1500);
-      const res = await fetch("http://127.0.0.1:8188/system_stats", { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (res.ok) {
-        // Try to detect installed checkpoints
-        let models: ProviderModel[] = [
-          { id: "v1-5-pruned-emaonly.ckpt", label: "SD 1.5", supportsNegativePrompt: true, supportsImg2Img: true },
-        ];
-        try {
-          const ckptRes = await fetch("http://127.0.0.1:8188/object_info/CheckpointLoaderSimple");
-          if (ckptRes.ok) {
-            const info = await ckptRes.json();
-            const ckptList = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0];
-            if (Array.isArray(ckptList) && ckptList.length > 0) {
-              models = ckptList.slice(0, 20).map((name: string) => ({
-                id: name,
-                label: name.replace(/\.(ckpt|safetensors)$/, ""),
-                supportsNegativePrompt: true,
-                supportsImg2Img: true,
-              }));
+    // ── Local providers — health-probe each on its default port ────────────
+    const localProbes: Array<{
+      id: string;
+      label: string;
+      website?: string;
+      probeUrl: string;
+      timeoutMs: number;
+      // Returns enriched info if reachable; null otherwise.
+      enrich: () => Promise<{ models: ProviderModel[]; supportsUpscale?: boolean }>;
+    }> = [
+      {
+        id: "comfyui",
+        label: "ComfyUI (Local)",
+        website: "https://github.com/comfyanonymous/ComfyUI",
+        probeUrl: "http://127.0.0.1:8188/system_stats",
+        timeoutMs: 1500,
+        async enrich() {
+          let models: ProviderModel[] = [
+            { id: "v1-5-pruned-emaonly.ckpt", label: "SD 1.5", supportsNegativePrompt: true, supportsImg2Img: true },
+          ];
+          try {
+            const ckptRes = await fetch("http://127.0.0.1:8188/object_info/CheckpointLoaderSimple");
+            if (ckptRes.ok) {
+              const info = await ckptRes.json();
+              const ckptList = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0];
+              if (Array.isArray(ckptList) && ckptList.length > 0) {
+                models = ckptList.slice(0, 20).map((name: string) => ({
+                  id: name,
+                  label: name.replace(/\.(ckpt|safetensors)$/, ""),
+                  supportsNegativePrompt: true,
+                  supportsImg2Img: true,
+                }));
+              }
             }
+          } catch {
+            // fallback to default model
           }
-        } catch {
-          // fallback to default model
-        }
-        available.push({ id: "comfyui", label: "ComfyUI (Local)", models });
+          return { models };
+        },
+      },
+      {
+        id: "a1111",
+        label: "Automatic1111 (Local)",
+        website: "https://github.com/AUTOMATIC1111/stable-diffusion-webui",
+        probeUrl: "http://127.0.0.1:7860/sdapi/v1/sd-models",
+        timeoutMs: 1500,
+        async enrich() {
+          let models: ProviderModel[] = [
+            { id: "default", label: "Active checkpoint", supportsNegativePrompt: true, supportsImg2Img: true },
+          ];
+          try {
+            const res = await fetch("http://127.0.0.1:7860/sdapi/v1/sd-models");
+            if (res.ok) {
+              const list = (await res.json()) as Array<{ title?: string; model_name?: string }>;
+              if (Array.isArray(list) && list.length > 0) {
+                models = list.slice(0, 30).map((m) => ({
+                  id: m.title ?? m.model_name ?? "default",
+                  label: m.model_name ?? m.title ?? "default",
+                  supportsNegativePrompt: true,
+                  supportsImg2Img: true,
+                }));
+              }
+            }
+          } catch {
+            // fallback
+          }
+          return { models };
+        },
+      },
+      {
+        id: "localai",
+        label: "LocalAI",
+        website: "https://localai.io",
+        probeUrl: "http://127.0.0.1:8080/v1/models",
+        timeoutMs: 1500,
+        async enrich() {
+          let models: ProviderModel[] = [
+            { id: "stablediffusion", label: "stablediffusion" },
+          ];
+          try {
+            const res = await fetch("http://127.0.0.1:8080/v1/models");
+            if (res.ok) {
+              const json = (await res.json()) as { data?: Array<{ id: string }> };
+              const list = json.data ?? [];
+              if (list.length > 0) {
+                models = list.slice(0, 30).map((m) => ({ id: m.id, label: m.id }));
+              }
+            }
+          } catch {
+            // fallback
+          }
+          return { models };
+        },
+      },
+    ];
+
+    for (const probe of localProbes) {
+      let reachable = false;
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), probe.timeoutMs);
+        const res = await fetch(probe.probeUrl, { signal: ctrl.signal });
+        clearTimeout(timer);
+        reachable = res.ok;
+      } catch {
+        reachable = false;
       }
-    } catch {
-      // ComfyUI not running — skip silently
+      if (reachable) {
+        const enriched = await probe.enrich();
+        available.push({
+          id: probe.id,
+          label: probe.label,
+          kind: "local",
+          health: "ok",
+          website: probe.website,
+          configured: true,
+          models: enriched.models,
+          supportsUpscale: enriched.supportsUpscale,
+        });
+      } else {
+        available.push({
+          id: probe.id,
+          label: probe.label,
+          kind: "local",
+          health: "unreachable",
+          website: probe.website,
+          configured: false,
+          models: [
+            { id: "default", label: "Start the local server to use this provider" },
+          ],
+        });
+      }
     }
 
     return available;

@@ -30,7 +30,7 @@ import { creatorKeys } from "./use_creator_dashboard";
 
 const client = IpcClient.getInstance();
 
-interface PublishAssetConfig<TId> {
+export interface PublishAssetConfig<TId> {
   /** TanStack Query key prefix to invalidate on success (e.g. "agents"). */
   queryKey: string;
   /** IPC method that publishes the asset and returns a PublishResult. */

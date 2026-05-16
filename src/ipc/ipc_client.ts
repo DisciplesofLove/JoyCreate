@@ -131,6 +131,7 @@ import type {
   MyDropsParams,
   MyClaimsParams,
   OwnershipParams,
+  CreatorRevenueSummary,
 } from "@/types/publish_types";
 
 export interface ChatStreamCallbacks {
@@ -4954,6 +4955,13 @@ export class IpcClient {
     return this.ipcRenderer.invoke("marketplace:my-stores", params);
   }
 
+  /** Per-token revenue summary derived from supplyClaimed * pricePerToken. */
+  public async marketplaceMyRevenue(
+    params: { wallet: string; pageSize?: number },
+  ): Promise<CreatorRevenueSummary> {
+    return this.ipcRenderer.invoke("marketplace:my-revenue", params);
+  }
+
   // ── Creator Dashboard ─────────────────────────────────────────────────
 
   public async creatorGetOverview(): Promise<CreatorOverview> {
@@ -5010,6 +5018,19 @@ export class IpcClient {
 
   public async workflowListPublished(): Promise<unknown[]> {
     return this.ipcRenderer.invoke("workflow:list-published");
+  }
+
+  // ── Blueprint Marketplace ──────────────────────────────────────────────
+  //
+  // Publishes a Sovereign Blueprint (YAML DAG) on-chain via the same
+  // PublishOrchestrator path agents use. The YAML body MUST be passed
+  // through `payload.metadata.yamlText` since blueprints have no DB row to
+  // resolve from `sourceId` alone.
+
+  public async blueprintPublishToMarketplace(
+    payload: UnifiedPublishPayload,
+  ): Promise<PublishResult> {
+    return this.ipcRenderer.invoke("blueprint:publish-to-marketplace", payload);
   }
 
   // ── Agent Orchestrator (trace replay) ─────────────────────────
@@ -5362,4 +5383,360 @@ export class IpcClient {
   }): Promise<GauntletVerifierResult> {
     return this.signAndInvoke("gauntlet:verify-only", input);
   }
+
+  // ── Notifications ──────────────────────────────────────────────────────
+
+  public async listNotifications(args: {
+    unreadOnly?: boolean;
+    category?: string;
+    limit?: number;
+  } = {}): Promise<NotificationRow[]> {
+    return this.ipcRenderer.invoke("notifications:list", args);
+  }
+
+  public async getUnreadNotificationCount(): Promise<number> {
+    return this.ipcRenderer.invoke("notifications:unread-count");
+  }
+
+  public async markNotificationRead(id: number): Promise<void> {
+    return this.ipcRenderer.invoke("notifications:mark-read", id);
+  }
+
+  public async markAllNotificationsRead(): Promise<void> {
+    return this.ipcRenderer.invoke("notifications:mark-all-read");
+  }
+
+  public async dismissNotification(id: number): Promise<void> {
+    return this.ipcRenderer.invoke("notifications:dismiss", id);
+  }
+
+  // ── On-chain DropERC1155 Listener ──────────────────────────────────────
+
+  public async startOnchainListener(): Promise<OnchainListenerStatus> {
+    return this.ipcRenderer.invoke("onchain:listener:start");
+  }
+
+  public async stopOnchainListener(): Promise<OnchainListenerStatus> {
+    return this.ipcRenderer.invoke("onchain:listener:stop");
+  }
+
+  public async getOnchainListenerStatus(): Promise<OnchainListenerStatus> {
+    return this.ipcRenderer.invoke("onchain:listener:status");
+  }
+
+  public async replayOnchainSince(fromBlock: number): Promise<{ replayed: number }> {
+    return this.ipcRenderer.invoke("onchain:listener:replay-since", fromBlock);
+  }
+
+  // ── Earnings (Phase 1B) ────────────────────────────────────────────────
+
+  public async listAgentRentalEarnings(args?: { limit?: number }): Promise<AgentRentalEarningRow[]> {
+    return this.ipcRenderer.invoke("earnings:list-agent-rentals", args);
+  }
+
+  public async listSubscriptionEarnings(args?: { limit?: number }): Promise<SubscriptionEarningRow[]> {
+    return this.ipcRenderer.invoke("earnings:list-subscriptions", args);
+  }
+
+  public async getEarningsSummary(): Promise<EarningsSummary> {
+    return this.ipcRenderer.invoke("earnings:summary");
+  }
+
+  // ── Studio Publish (Phase 1C) ──────────────────────────────────────────
+
+  public async publishStudioImage(args: StudioPublishArgs): Promise<StudioPublishOutcome> {
+    return this.ipcRenderer.invoke("studio:publish-image", args);
+  }
+
+  public async publishStudioVideo(args: StudioPublishArgs): Promise<StudioPublishOutcome> {
+    return this.ipcRenderer.invoke("studio:publish-video", args);
+  }
+
+  // ── Dataset Publish (Phase 1D) ─────────────────────────────────────────
+
+  public async publishDataset(args: DatasetPublishArgs): Promise<StudioPublishOutcome> {
+    return this.ipcRenderer.invoke("dataset:publish-to-marketplace", args);
+  }
+
+  // ── Data Market (Provenance + Smart-Lease, Arbitrum Stylus) ──────────
+
+  public async dataMarketStatus(
+    args: { chain: DataMarketChainId },
+  ): Promise<DataMarketStatus> {
+    return this.ipcRenderer.invoke("data-market:status", args);
+  }
+
+  public async dataProvenanceMint(
+    args: DataProvenanceMintArgs,
+  ): Promise<DataProvenanceMintResult> {
+    return this.ipcRenderer.invoke("data-provenance:mint", args);
+  }
+
+  public async dataProvenanceGet(
+    args: { chain: DataMarketChainId; tokenId: string },
+  ): Promise<DataProvenanceRecord> {
+    return this.ipcRenderer.invoke("data-provenance:get", args);
+  }
+
+  public async dataProvenanceList(
+    args?: { chain?: DataMarketChainId; creator?: string; limit?: number },
+  ): Promise<DataProvenanceRow[]> {
+    return this.ipcRenderer.invoke("data-provenance:list", args ?? {});
+  }
+
+  public async dataLeaseCreateListing(
+    args: DataLeaseCreateListingArgs,
+  ): Promise<DataLeaseCreateListingResult> {
+    return this.ipcRenderer.invoke("data-lease:create-listing", args);
+  }
+
+  public async dataLeaseGetListing(
+    args: { chain: DataMarketChainId; listingId: string },
+  ): Promise<DataLeaseListingRecord> {
+    return this.ipcRenderer.invoke("data-lease:get-listing", args);
+  }
+
+  public async dataLeaseListListings(
+    args?: {
+      chain?: DataMarketChainId;
+      creator?: string;
+      activeOnly?: boolean;
+      limit?: number;
+    },
+  ): Promise<DataLeaseListingRow[]> {
+    return this.ipcRenderer.invoke("data-lease:list-listings", args ?? {});
+  }
+
+  public async dataLeasePurchase(
+    args: { chain: DataMarketChainId; listingId: string; priceWei: string },
+  ): Promise<DataLeasePurchaseResult> {
+    return this.ipcRenderer.invoke("data-lease:purchase", args);
+  }
+
+  public async dataLeaseListMyGrants(
+    args?: { chain?: DataMarketChainId; lessee?: string; limit?: number },
+  ): Promise<DataLeaseGrantRow[]> {
+    return this.ipcRenderer.invoke("data-lease:list-my-grants", args ?? {});
+  }
+
+  public async dataLeaseHasActive(
+    args: { chain: DataMarketChainId; listingId: string; lessee: string },
+  ): Promise<boolean> {
+    return this.ipcRenderer.invoke("data-lease:has-active", args);
+  }
+}
+
+// ── Data Market shared types ─────────────────────────────────────────────
+
+export type DataMarketChainId = "arbitrumSepolia" | "arbitrumOne";
+
+export interface DataMarketStatus {
+  chain: DataMarketChainId;
+  ready: boolean;
+  provenanceAddress: string;
+  leaseAddress: string;
+  rpcUrl: string;
+}
+
+export interface DataProvenanceMintArgs {
+  chain: DataMarketChainId;
+  merkleRoot: string;
+  contentUri: string;
+  humanProof: string;
+}
+
+export interface DataProvenanceMintResult {
+  tokenId: string;
+  txHash: string;
+  blockNumber: number;
+  creator: string;
+  mintedAtChain: string;
+}
+
+export interface DataProvenanceRecord {
+  tokenId: string;
+  creator: string;
+  merkleRoot: string;
+  contentUri: string;
+  humanProof: string;
+  mintedAtChain: string;
+}
+
+export interface DataProvenanceRow {
+  id: number;
+  chainId: string;
+  contractAddress: string;
+  tokenId: string;
+  creator: string;
+  merkleRoot: string;
+  contentUri: string;
+  humanProof: string;
+  mintedAtChain: string;
+  txHash: string;
+  revoked: boolean;
+  observedAt: Date;
+}
+
+export interface DataLeaseCreateListingArgs {
+  chain: DataMarketChainId;
+  tokenId: string;
+  priceWei: string;
+  durationSecs: string;
+  accConditionsHash: string;
+}
+
+export interface DataLeaseCreateListingResult {
+  listingId: string;
+  txHash: string;
+  blockNumber: number;
+}
+
+export interface DataLeaseListingRecord {
+  listingId: string;
+  creator: string;
+  tokenId: string;
+  priceWei: string;
+  durationSecs: string;
+  accConditionsHash: string;
+  active: boolean;
+}
+
+export interface DataLeaseListingRow {
+  id: number;
+  chainId: string;
+  contractAddress: string;
+  listingId: string;
+  tokenId: string;
+  creator: string;
+  priceWei: string;
+  durationSecs: string;
+  accConditionsHash: string;
+  active: boolean;
+  createdTxHash: string;
+  observedAt: Date;
+}
+
+export interface DataLeasePurchaseResult {
+  leaseId: string;
+  listingId: string;
+  lessee: string;
+  tokenId: string;
+  expiresAt: string;
+  accConditionsHash: string;
+  txHash: string;
+  blockNumber: number;
+}
+
+export interface DataLeaseGrantRow {
+  id: number;
+  chainId: string;
+  contractAddress: string;
+  leaseId: string;
+  listingId: string;
+  tokenId: string;
+  lessee: string;
+  paidWei: string;
+  expiresAt: string;
+  accConditionsHash: string;
+  relayerStatus: string;
+  relayerError: string | null;
+  grantedTxHash: string;
+  observedAt: Date;
+}
+
+export interface DatasetPublishArgs {
+  datasetId: string;
+  manifestId?: string;
+  name?: string;
+  description?: string;
+  priceUsdc?: number;
+  royaltyBps?: number;
+  dryRun?: boolean;
+}
+
+export interface OnchainListenerStatus {
+  status: "stopped" | "starting" | "running" | "reconnecting" | "error";
+  lastError: string | null;
+  contract: string;
+}
+
+export interface AgentRentalEarningRow {
+  id: number;
+  agentRef: string;
+  agentName: string;
+  renterAddress: string | null;
+  amountUsdc: string;
+  txHash: string | null;
+  blockNumber: number | null;
+  earnedAt: string;
+}
+
+export interface SubscriptionEarningRow {
+  id: number;
+  planRef: string;
+  planName: string;
+  subscriberAddress: string | null;
+  amountUsdc: string;
+  periodStart: string | null;
+  periodEnd: string | null;
+  txHash: string | null;
+  earnedAt: string;
+}
+
+export interface EarningsSummary {
+  agentTotalUsdc: string;
+  subscriptionTotalUsdc: string;
+  agentCount: number;
+  subscriptionCount: number;
+}
+
+export interface StudioPublishArgs {
+  assetId: number;
+  name?: string;
+  description?: string;
+  priceUsdc?: number;
+  royaltyBps?: number;
+  dryRun?: boolean;
+}
+
+export interface StudioPublishOutcome {
+  ok: boolean;
+  dryRun: boolean;
+  contentCid?: string;
+  metadataCid?: string;
+  metadataUri?: string;
+  tokenId?: string;
+  listingId?: string;
+  mintTxHash?: string;
+  listTxHash?: string;
+  marketplaceUrl?: string;
+  goldskyIndexed?: boolean;
+  errors?: string[];
+  blockedAt?: string;
+  bundleId?: number;
+  estimatedGas?: { mint?: string; listing?: string };
+}
+
+// ── Notification row shape (mirrors src/db/schema.ts → notifications) ──
+export interface NotificationRow {
+  id: number;
+  userDid: string | null;
+  category:
+    | "agents"
+    | "builds"
+    | "deploys"
+    | "marketplace"
+    | "social"
+    | "system"
+    | "security"
+    | "workflows";
+  priority: "urgent" | "high" | "medium" | "low" | "info";
+  title: string;
+  body: string;
+  actionUrl: string | null;
+  actionLabel: string | null;
+  sourceEventId: number | null;
+  readAt: string | null;
+  dismissedAt: string | null;
+  createdAt: string;
 }

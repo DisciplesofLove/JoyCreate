@@ -612,6 +612,26 @@ class HeliaVerificationService {
     return { bytes: data.length };
   }
 
+  /**
+   * Store an in-memory byte buffer as a UnixFS block and return its CID.
+   * Used by Genius Core context-slot blocks (small dag-cbor payloads).
+   */
+  async addBytes(data: Uint8Array): Promise<{ cid: string; bytes: number }> {
+    if (!this.helia || !this.fsCodec) {
+      throw new Error("Helia node not running");
+    }
+    const cid = await this.fsCodec.addBytes(data);
+    return { cid: cid.toString(), bytes: data.length };
+  }
+
+  /** Fetch a CID's content into an in-memory byte buffer. */
+  async getBytes(cidStr: string): Promise<Uint8Array> {
+    if (!this.helia || !this.fsCodec) {
+      throw new Error("Helia node not running");
+    }
+    return this.collectCatStream(cidStr);
+  }
+
   /** Pin an arbitrary CID (used for sovereign model weights, etc.) */
   async pinCid(cidStr: string): Promise<void> {
     if (!this.helia) throw new Error("Helia node not running");

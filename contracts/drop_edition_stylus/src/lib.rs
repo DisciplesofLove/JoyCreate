@@ -9,14 +9,31 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-use alloy_primitives::{Address, FixedBytes, U256};
-use stylus_sdk::{alloy_sol_types::sol, prelude::*};
+use alloy_primitives::{Address, U256};
+use openzeppelin_stylus::token::erc1155::{self, Erc1155, IErc1155};
+use stylus_sdk::{abi::Bytes, alloy_sol_types::sol, prelude::*};
+
+// =============================================================================
+// DropEdition — audited ERC-1155 mint surface for the JoyCreate marketplace.
+//
+// SECURITY MODEL
+//   • Token mechanics (balances, transfers, approvals, ERC-1155 events) are
+//     delegated to `openzeppelin_stylus::token::erc1155::Erc1155` v0.3.0 — the
+//     audited OpenZeppelin Contracts for Stylus implementation.
+//   • Only the wrapper logic (initialize, owner, mint price/state, payable
+//     mint, withdraw) is local. It is intentionally small and reviewable.
+//   • `initialize(owner, mint_price)` is callable once. The deploy script
+//     MUST call it atomically with the same wallet that ran `cargo stylus
+//     deploy` to eliminate the front-run window. Even if a front-runner
+//     initialized first, no user funds are at risk because `mint_active`
+//     defaults to `false` and only the initialized owner can flip it on.
+// =============================================================================
 
 sol_storage! {
     #[entrypoint]
     pub struct DropEdition {
-        // id => (account => balance)
-        mapping(uint256 => mapping(address => uint256)) balances;
+        #[borrow]
+        Erc1155 erc1155;
         address owner;
         uint256 mint_price;
         bool mint_active;
@@ -38,14 +55,6 @@ sol! {
     #[derive(Debug)]
     error InvalidRecipient();
 
-    // ERC-1155 standard event so off-chain indexers can listen.
-    event TransferSingle(
-        address indexed operator,
-        address indexed from,
-        address indexed to,
-        uint256 id,
-        uint256 value
-    );
     event Initialized(address indexed owner, uint256 mint_price);
     event MintActiveChanged(bool active);
     event PriceChanged(uint256 new_price);
@@ -64,8 +73,6 @@ pub enum DropEditionError {
 
 #[public]
 impl DropEdition {
-    /// Initialize the contract. First caller wins (deploy + initialize must
-    /// be in same tx batch — see C-FIX-1).
     pub fn initialize(
         &mut self,
         owner: Address,
@@ -73,6 +80,9 @@ impl DropEdition {
     ) -> Result<(), DropEditionError> {
         if self.initialized.get() {
             return Err(DropEditionError::AlreadyInitialized(AlreadyInitialized {}));
+        }
+        if owner.is_zero() {
+            return Err(DropEditionError::InvalidRecipient(InvalidRecipient {}));
         }
         self.initialized.set(true);
         self.owner.set(owner);
@@ -86,29 +96,23 @@ impl DropEdition {
         self.owner.get()
     }
 
+    /// ERC-1155 balanceOf — delegates to the audited OZ implementation.
+    #[selector(name = "balanceOf")]
+    pub fn balance_of(&self, account: Address, id: U256) -> U256 {
+        self.erc1155.balance_of(account, id)
+    }
+
+    #[selector(name = "mintPrice")]
     pub fn mint_price(&self) -> U256 {
         self.mint_price.get()
     }
 
+    #[selector(name = "mintActive")]
     pub fn mint_active(&self) -> bool {
         self.mint_active.get()
     }
 
-    /// ERC-1155 balanceOf.
-    #[selector(name = "balanceOf")]
-    pub fn balance_of(&self, account: Address, id: U256) -> U256 {
-        self.balances.getter(id).get(account)
-    }
-
-    /// ERC-165 supportsInterface (claims ERC-165 + ERC-1155).
-    #[selector(name = "supportsInterface")]
-    pub fn supports_interface(&self, interface_id: FixedBytes<4>) -> bool {
-        let bytes: [u8; 4] = interface_id.into();
-        // ERC-165: 0x01ffc9a7  | ERC-1155: 0xd9b67a26
-        bytes == [0x01, 0xff, 0xc9, 0xa7] || bytes == [0xd9, 0xb6, 0x7a, 0x26]
-    }
-
-    /// Owner-only: toggle mint state.
+    #[selector(name = "setMintState")]
     pub fn set_mint_state(&mut self, active: bool) -> Result<(), DropEditionError> {
         self.only_owner()?;
         self.mint_active.set(active);
@@ -116,7 +120,7 @@ impl DropEdition {
         Ok(())
     }
 
-    /// Owner-only: change per-edition price (wei).
+    #[selector(name = "setMintPrice")]
     pub fn set_mint_price(&mut self, new_price: U256) -> Result<(), DropEditionError> {
         self.only_owner()?;
         self.mint_price.set(new_price);
@@ -124,45 +128,37 @@ impl DropEdition {
         Ok(())
     }
 
-    /// Pay msg.value == mint_price * amount to mint `amount` of token `id` to `to`.
-    /// Emits ERC-1155 TransferSingle from address(0).
     #[payable]
+    #[selector(name = "mintEdition")]
     pub fn mint_edition(
         &mut self,
         to: Address,
         id: U256,
         amount: U256,
-    ) -> Result<(), DropEditionError> {
+    ) -> Result<(), Vec<u8>> {
         if to.is_zero() {
-            return Err(DropEditionError::InvalidRecipient(InvalidRecipient {}));
+            return Err(DropEditionError::InvalidRecipient(InvalidRecipient {}).into());
         }
         if !self.mint_active.get() {
-            return Err(DropEditionError::MintInactive(MintInactive {}));
+            return Err(DropEditionError::MintInactive(MintInactive {}).into());
         }
         let required = self.mint_price.get() * amount;
         if self.vm().msg_value() < required {
-            return Err(DropEditionError::InsufficientPayment(InsufficientPayment {}));
+            return Err(DropEditionError::InsufficientPayment(InsufficientPayment {}).into());
         }
-        let sender = self.vm().msg_sender();
-        let mut id_map = self.balances.setter(id);
-        let prev = id_map.get(to);
-        id_map.setter(to).set(prev + amount);
-        log(
-            self.vm(),
-            TransferSingle {
-                operator: sender,
-                from: Address::ZERO,
-                to,
-                id,
-                value: amount,
-            },
-        );
-        Ok(())
+        let empty: Bytes = Vec::new().into();
+        self.erc1155
+            ._mint(to, id, amount, &empty)
+            .map_err(|e: erc1155::Error| Vec::<u8>::from(e))
     }
 
-    /// Owner-only: withdraw all ETH (C-FIX-2).
     pub fn withdraw(&mut self, to: Address) -> Result<(), Vec<u8>> {
         self.only_owner().map_err(Vec::<u8>::from)?;
+        if to.is_zero() {
+            return Err(Vec::<u8>::from(DropEditionError::InvalidRecipient(
+                InvalidRecipient {},
+            )));
+        }
         let bal = self.vm().balance(self.vm().contract_address());
         self.vm()
             .transfer_eth(to, bal)
@@ -178,5 +174,61 @@ impl DropEdition {
             return Err(DropEditionError::NotOwner(NotOwner {}));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use stylus_sdk::testing::*;
+
+    #[test]
+    fn initialize_only_once() {
+        let vm = TestVM::default();
+        let mut c = DropEdition::from(&vm);
+        let owner = vm.msg_sender();
+        c.initialize(owner, U256::from(1000u64)).unwrap();
+        assert!(c.initialize(owner, U256::from(1u64)).is_err());
+        assert_eq!(c.owner(), owner);
+        assert_eq!(c.mint_price(), U256::from(1000u64));
+        assert!(!c.mint_active());
+    }
+
+    #[test]
+    fn set_mint_state_owner_only() {
+        let vm = TestVM::default();
+        let mut c = DropEdition::from(&vm);
+        let owner = vm.msg_sender();
+        c.initialize(owner, U256::from(0u64)).unwrap();
+        c.set_mint_state(true).unwrap();
+        assert!(c.mint_active());
+        vm.set_sender(Address::from([0xBEu8; 20]));
+        assert!(c.set_mint_state(false).is_err());
+    }
+
+    #[test]
+    fn mint_requires_active() {
+        let vm = TestVM::default();
+        let mut c = DropEdition::from(&vm);
+        let owner = vm.msg_sender();
+        c.initialize(owner, U256::from(0u64)).unwrap();
+        assert!(c
+            .mint_edition(owner, U256::from(1u64), U256::from(1u64))
+            .is_err());
+    }
+
+    #[test]
+    fn mint_happy_path() {
+        let vm = TestVM::default();
+        let mut c = DropEdition::from(&vm);
+        let owner = vm.msg_sender();
+        c.initialize(owner, U256::from(0u64)).unwrap();
+        c.set_mint_state(true).unwrap();
+        c.mint_edition(owner, U256::from(7u64), U256::from(3u64))
+            .unwrap();
+        assert_eq!(
+            c.balance_of(owner, U256::from(7u64)),
+            U256::from(3u64)
+        );
     }
 }

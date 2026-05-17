@@ -20,7 +20,7 @@ import {
   dataLeaseListings,
   dataLeaseGrants,
 } from "@/db/schema";
-import { jcnKeyManager } from "@/lib/jcn/jcn_key_manager";
+import { jcnKeyManager } from "@/lib/jcn_key_manager";
 import {
   DATA_MARKET_RPC,
   type DataMarketChainId,

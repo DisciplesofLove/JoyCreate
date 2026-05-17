@@ -37,6 +37,16 @@ const DEFAULT_SETTINGS: UserSettings = {
   selectedTemplateId: DEFAULT_TEMPLATE_ID,
   isRunning: false,
   lastKnownPerformance: undefined,
+  geniusCore: {
+    enabled: false,
+    vramBudgetGb: 8,
+    baseModelId: "phi-3-mini-4k-instruct-int4-onnx",
+    executionProvider: "auto",
+    npuOffloadEnabled: false,
+    weightStreamingEnabled: false,
+    keystrokeLoggerEnabled: false,
+    nightlyDistillationEnabled: false,
+  },
 };
 
 const SETTINGS_FILE = "user-settings.json";

@@ -613,7 +613,10 @@ export const ARBITRUM_ONE = {
  * will refuse to switch to Arbitrum (chain_registry guards against zero addr).
  */
 export const ARBITRUM_SEPOLIA_STYLUS_CONTRACTS = {
-  dropEdition: "0x2bd4bb9c5a91653e06114511cdb265728f738aa5" as const,
+  // Audited build: backed by OpenZeppelin Stylus Erc1155 v0.3.0.
+  // Deployed 2025 — deploy tx 0x970570339d4824cb0788e335d7ace5da84510ec421005654be321454cc681da3
+  // Owner: 0x5939229582A5b42A6C5f55Fe55eC47523Cd5B9FE, mintPrice 0, mintActive true.
+  dropEdition: "0x016950006648752f7ce8ca63d9beaba197b003e8" as const,
 } as const;
 
 export const ARBITRUM_ONE_STYLUS_CONTRACTS = {

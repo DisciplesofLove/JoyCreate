@@ -628,8 +628,7 @@ class LifecycleEngine {
     };
   }
 
-  async getReputation(actorId: string): Promise<ReputationSnapshot | null> {
-    const db = getDb();
+  async getReputation(actorId: string): Promise<ReputationSnapshot | null> {    const db = getDb();
     const [rep] = await db
       .select()
       .from(reputationScores)
@@ -657,6 +656,39 @@ class LifecycleEngine {
       longestStreak: rep.longestStreak,
       averageQualityScore: rep.averageQualityScore,
     };
+  }
+
+  /**
+   * List the highest-overallScore reputation snapshots. Used by the
+   * Phase 4 Reputation Dashboard to render a global leaderboard.
+   */
+  async listTopReputation(limit = 50): Promise<ReputationSnapshot[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(reputationScores)
+      .orderBy(desc(reputationScores.overallScore))
+      .limit(Math.min(Math.max(limit, 1), 500));
+
+    return rows.map((rep) => ({
+      id: rep.id,
+      overallScore: rep.overallScore,
+      tier: rep.tier as TrustTier,
+      creationScore: rep.creationScore,
+      verificationScore: rep.verificationScore,
+      usageScore: rep.usageScore,
+      rewardScore: rep.rewardScore,
+      consistencyScore: rep.consistencyScore,
+      totalAssetsCreated: rep.totalAssetsCreated,
+      totalVerificationsPassed: rep.totalVerificationsPassed,
+      totalVerificationsFailed: rep.totalVerificationsFailed,
+      totalUsageEvents: rep.totalUsageEvents,
+      totalRewardsEarned: rep.totalRewardsEarned,
+      totalReceiptsGenerated: rep.totalReceiptsGenerated,
+      currentStreak: rep.currentStreak,
+      longestStreak: rep.longestStreak,
+      averageQualityScore: rep.averageQualityScore,
+    }));
   }
 
   // ---------------------------------------------------------------------------

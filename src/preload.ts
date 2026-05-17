@@ -564,6 +564,7 @@ const validInvokeChannels = [
   "lifecycle:reward:summary",
   "lifecycle:reputation:get",
   "lifecycle:reputation:recompute",
+  "lifecycle:reputation:list-top",
   "lifecycle:feedback:create",
   "lifecycle:feedback:list",
   "lifecycle:feedback:resolve",
@@ -687,6 +688,19 @@ const validInvokeChannels = [
   "data-lease:purchase",
   "data-lease:list-my-grants",
   "data-lease:has-active",
+  // API Gateway — expose agents as authenticated HTTP endpoints.
+  "api-gateway:status",
+  "api-gateway:start",
+  "api-gateway:stop",
+  "api-gateway:create-endpoint",
+  "api-gateway:list-endpoints",
+  "api-gateway:get-endpoint",
+  "api-gateway:update-endpoint",
+  "api-gateway:delete-endpoint",
+  "api-gateway:create-key",
+  "api-gateway:list-keys",
+  "api-gateway:revoke-key",
+  "api-gateway:list-usage",
   // JoyBridge — single canonical namespace (Joy Unification PR).
   // Each channel below is also registered in joybridge_handlers.ts. If you
   // add a new joybridge:* channel, you MUST add it here too — see Collab
@@ -2138,6 +2152,13 @@ const validInvokeChannels = [
   "model-registry:download",
   "model-registry:download-status",
   "model-registry:list-downloads",
+  // Phase 5 — P2P chunked distribution
+  "model-p2p:create-manifest",
+  "model-p2p:signing-digest",
+  "model-p2p:attach-signature",
+  "model-p2p:verify-manifest",
+  "model-p2p:download",
+  "model-p2p:compare-semver",
   // Cloud Model Catalog Watchdog
   "models:refresh-catalog",
   // MCP Server
@@ -2526,6 +2547,22 @@ const validInvokeChannels = [
   // Data Studio Extended — generation jobs/templates
   "generation:list-jobs",
   "generation:save-template",
+  // Genius Core local ONNX runtime
+  "genius-core:status",
+  "genius-core:init",
+  "genius-core:load-context-slot",
+  "genius-core:infer",
+  "genius-core:stream-infer",
+  "genius-core:list-base-models",
+  "genius-core:set-base-model",
+  "genius-core:peek-project-slot",
+  "genius-core:open-project-slot",
+  "genius-core:record-edit",
+  "genius-core:flush-edit-log",
+  "genius-core:export-edit-session",
+  "genius-core:distillation-status",
+  "genius-core:distillation-run-now",
+  "genius-core:distillation-set-enabled",
 ];
 
 // Add valid receive channels
@@ -2712,6 +2749,8 @@ const validReceiveChannels = [
   // Calendar — sync progress events
   "calendar:sync-progress",
   "calendar:sync-complete",
+  // Genius Core local ONNX runtime — streaming inference chunks
+  "genius-core:stream-chunk",
 ] as const;
 
 type ValidInvokeChannel = (typeof validInvokeChannels)[number];

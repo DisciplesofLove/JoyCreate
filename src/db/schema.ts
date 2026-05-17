@@ -62,6 +62,12 @@ export const projects = sqliteTable("projects", {
   isFavorite: integer("is_favorite", { mode: "boolean" })
     .notNull()
     .default(sql`0`),
+  /**
+   * Genius Core per-project context slot CID (IPLD dag-cbor block stored
+   * via Helia). Null until the project has been distilled at least once.
+   * Updated by `src/lib/genius_core/context_slots.ts`.
+   */
+  contextSlotCid: text("context_slot_cid"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -3031,6 +3037,49 @@ export const gauntletAudit = sqliteTable("gauntlet_audit", {
     .default(sql`(unixepoch())`),
 });
 
+/**
+ * Genius Core — order-respecting edit log (Phase 5).
+ *
+ * Buffered, debounced (~300 ms) capture of editor operations used as the
+ * input stream for nightly QLoRA distillation. Only written when BOTH
+ * `settings.geniusCore.keystrokeLoggerEnabled === true` AND
+ * `settings.telemetryConsent === "opted_in"` are true at insert time —
+ * gate is enforced at the call site in `src/lib/genius_core/edit_logger.ts`.
+ *
+ * `op` semantics:
+ * - "insert" | "delete" — editor mutation (range + textHash describe payload).
+ * - "cursor" — cursor / selection move (range only).
+ * - "ai_accept" | "ai_reject" — user verdict on an AI suggestion.
+ *
+ * `textHash` is a SHA-256 of the inserted/deleted text; the plaintext is
+ * never persisted. `range` is `{ startLine, startCol, endLine, endCol }`.
+ */
+export const editLogEntries = sqliteTable("edit_log_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull(),
+  fileId: text("file_id").notNull(),
+  op: text("op", {
+    enum: ["insert", "delete", "cursor", "ai_accept", "ai_reject"],
+  }).notNull(),
+  range: text("range", { mode: "json" })
+    .$type<{
+      startLine: number;
+      startCol: number;
+      endLine: number;
+      endCol: number;
+    }>()
+    .notNull(),
+  textHash: text("text_hash"),
+  textLength: integer("text_length").notNull().default(0),
+  /** Monotonic per-session sequence number — preserves order under clock skew. */
+  sequence: integer("sequence").notNull(),
+  /** Wall-clock ms timestamp at capture time. */
+  occurredAtMs: integer("occurred_at_ms").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
 
 
 // =============================================================================
@@ -3230,6 +3279,84 @@ export const dataLeaseGrants = sqliteTable("data_lease_grants", {
   relayerError: text("relayer_error"),
   grantedTxHash: text("granted_tx_hash").notNull(),
   observedAt: integer("observed_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+// ===========================================================================
+// API Gateway — agents-as-a-service
+// ===========================================================================
+//
+// Lets creators expose any local agent as a metered HTTP endpoint. Each row
+// in `apiEndpoints` binds an agent + invocation config to a public path; each
+// `apiKeys` row authenticates one consumer; `apiUsageRecords` is the audit
+// log that the tokenomics meter rolls up for billing.
+
+export const apiEndpoints = sqliteTable("api_endpoints", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Stable slug used as the URL path segment, e.g. `/api/v1/{slug}`. */
+  slug: text("slug").notNull().unique(),
+  /** Human label for the management UI. */
+  name: text("name").notNull(),
+  description: text("description"),
+  /** FK to `agents.id`. Nullable to allow raw "echo" / stub endpoints. */
+  agentId: integer("agent_id"),
+  /** Free-form invocation config — e.g. {systemPrompt,model,maxTokens}. */
+  configJson: text("config_json", { mode: "json" }).$type<Record<string, unknown>>(),
+  /** Per-call price in wei (decimal string). 0 = free. */
+  pricePerCallWei: text("price_per_call_wei").notNull().default("0"),
+  /** Per-1k-output-token price in wei (decimal string). 0 = no token charge. */
+  pricePerKTokenWei: text("price_per_k_token_wei").notNull().default("0"),
+  /** Soft rate limit applied across all keys on this endpoint, per minute. */
+  rateLimitPerMin: integer("rate_limit_per_min").notNull().default(60),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+export const apiKeys = sqliteTable("api_keys", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** FK to `apiEndpoints.id`. */
+  endpointId: integer("endpoint_id").notNull(),
+  /** Plain label, e.g. "Acme Research production". */
+  name: text("name").notNull(),
+  /** First 12 chars of the key for UI display; never expose the full key. */
+  keyPrefix: text("key_prefix").notNull(),
+  /** sha256 hex digest of the full secret. */
+  keyHash: text("key_hash").notNull().unique(),
+  /** Per-key rate limit, per minute. `null` = inherit endpoint default. */
+  rateLimitPerMin: integer("rate_limit_per_min"),
+  /** Hard monthly call quota. `null` = unlimited. */
+  monthlyCallQuota: integer("monthly_call_quota"),
+  /** ISO timestamp string; revoked keys are rejected at the gateway. */
+  revokedAt: integer("revoked_at", { mode: "timestamp" }),
+  lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+export const apiUsageRecords = sqliteTable("api_usage_records", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  endpointId: integer("endpoint_id").notNull(),
+  apiKeyId: integer("api_key_id").notNull(),
+  /** Bytes of request body. */
+  bytesIn: integer("bytes_in").notNull().default(0),
+  /** Bytes of response body. */
+  bytesOut: integer("bytes_out").notNull().default(0),
+  /** Approximate output token count (for per-token pricing). */
+  outputTokens: integer("output_tokens").notNull().default(0),
+  /** Wall-clock latency in ms. */
+  latencyMs: integer("latency_ms").notNull().default(0),
+  statusCode: integer("status_code").notNull(),
+  /** Computed wei charged for this call (decimal string). */
+  chargedWei: text("charged_wei").notNull().default("0"),
+  errorMessage: text("error_message"),
+  createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
 });

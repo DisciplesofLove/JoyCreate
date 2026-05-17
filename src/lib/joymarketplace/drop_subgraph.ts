@@ -7,9 +7,15 @@
  * DropERC1155 + Stores subgraphs. No MarketplaceV3 listings, no Supabase
  * listing mirror.
  *
- * Endpoints are env-overridable for staging/local subgraphs:
- *   JOYMARKETPLACE_DROP_SUBGRAPH_URL
- *   JOYMARKETPLACE_STORES_SUBGRAPH_URL
+ * Chain coverage: Polygon Amoy (default) + Arbitrum Sepolia. The chain to
+ * query is passed per-call via the optional `chainId` argument; zero-arg
+ * shapes preserve Amoy-only behaviour so existing callers / tests stay
+ * green. Endpoints are env-overridable for staging/local subgraphs:
+ *
+ *   Amoy:    JOYMARKETPLACE_DROP_SUBGRAPH_URL
+ *            JOYMARKETPLACE_STORES_SUBGRAPH_URL
+ *   Sepolia: JOYMARKETPLACE_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA
+ *            JOYMARKETPLACE_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA
  *
  * The renderer should reach this layer through the
  * `marketplace_browse_handlers.ts` IPC surface, not import this module
@@ -17,6 +23,7 @@
  */
 
 import log from "electron-log";
+import type { MarketplaceChainId } from "@/lib/onchain/chain_registry";
 
 const logger = log.scope("drop_subgraph");
 
@@ -30,14 +37,73 @@ export const DEFAULT_DROP_SUBGRAPH_URL =
 export const DEFAULT_STORES_SUBGRAPH_URL =
   "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-amoy/0.0.3/gn";
 
-/** Resolve the active Drop subgraph URL (env override > default). */
-export function getDropSubgraphUrl(): string {
-  return process.env.JOYMARKETPLACE_DROP_SUBGRAPH_URL || DEFAULT_DROP_SUBGRAPH_URL;
+/** Default Arbitrum Sepolia DropERC1155 subgraph (joy-drop-arbitrum-sepolia). */
+export const DEFAULT_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA =
+  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-arbitrum-sepolia/0.0.1/gn";
+
+/** Default Arbitrum Sepolia Stores subgraph (joy-stores-arbitrum-sepolia). */
+export const DEFAULT_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA =
+  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.1/gn";
+
+/**
+ * Chains for which an indexed subgraph is available. Arbitrum One has no
+ * Stylus drop deployment yet, so it is intentionally omitted — callers that
+ * pass `"arbitrumOne"` get a clear error rather than silent Amoy fallback.
+ */
+export type SubgraphChainId = Extract<
+  MarketplaceChainId,
+  "polygonAmoy" | "arbitrumSepolia"
+>;
+
+export const SUBGRAPH_CHAIN_IDS: readonly SubgraphChainId[] = [
+  "polygonAmoy",
+  "arbitrumSepolia",
+] as const;
+
+export function isSubgraphChainId(value: unknown): value is SubgraphChainId {
+  return value === "polygonAmoy" || value === "arbitrumSepolia";
 }
 
-/** Resolve the active Stores subgraph URL (env override > default). */
-export function getStoresSubgraphUrl(): string {
-  return process.env.JOYMARKETPLACE_STORES_SUBGRAPH_URL || DEFAULT_STORES_SUBGRAPH_URL;
+/** Resolve the active Drop subgraph URL (env override > compiled default). */
+export function getDropSubgraphUrl(chainId: SubgraphChainId = "polygonAmoy"): string {
+  switch (chainId) {
+    case "polygonAmoy":
+      return (
+        process.env.JOYMARKETPLACE_DROP_SUBGRAPH_URL ||
+        DEFAULT_DROP_SUBGRAPH_URL
+      );
+    case "arbitrumSepolia":
+      return (
+        process.env.JOYMARKETPLACE_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA ||
+        DEFAULT_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA
+      );
+  }
+}
+
+/** Resolve the active Stores subgraph URL (env override > compiled default). */
+export function getStoresSubgraphUrl(chainId: SubgraphChainId = "polygonAmoy"): string {
+  switch (chainId) {
+    case "polygonAmoy":
+      return (
+        process.env.JOYMARKETPLACE_STORES_SUBGRAPH_URL ||
+        DEFAULT_STORES_SUBGRAPH_URL
+      );
+    case "arbitrumSepolia":
+      return (
+        process.env.JOYMARKETPLACE_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA ||
+        DEFAULT_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA
+      );
+  }
+}
+
+function assertSubgraphChain(chainId: SubgraphChainId | undefined): SubgraphChainId {
+  const id = chainId ?? "polygonAmoy";
+  if (!isSubgraphChainId(id)) {
+    throw new Error(
+      `Subgraph not available for chain "${String(id)}" — supported: ${SUBGRAPH_CHAIN_IDS.join(", ")}`,
+    );
+  }
+  return id;
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -130,6 +196,8 @@ export interface ListDropsParams {
   /** Sort field. Default "lazyMintedAt". */
   orderBy?: "lazyMintedAt" | "tokenId" | "totalPurchases" | "supplyClaimed";
   orderDirection?: "asc" | "desc";
+  /** Chain to query. Default "polygonAmoy" for backward compat. */
+  chainId?: SubgraphChainId;
 }
 
 export interface ListDropsByCreatorParams extends ListDropsParams {
@@ -142,6 +210,8 @@ export interface ListClaimsByBuyerParams {
   buyer: string;
   page?: number;
   pageSize?: number;
+  /** Chain to query. Default "polygonAmoy". */
+  chainId?: SubgraphChainId;
 }
 
 // ── Internal: GraphQL fetcher ──────────────────────────────────────────────
@@ -242,9 +312,10 @@ export async function listDrops(params: ListDropsParams = {}): Promise<ListDrops
   const skip = (page - 1) * pageSize;
   const orderBy = params.orderBy ?? "lazyMintedAt";
   const orderDirection = params.orderDirection ?? "desc";
+  const chainId = assertSubgraphChain(params.chainId);
 
   const data = await gql<{ tokens: DropToken[] }>(
-    getDropSubgraphUrl(),
+    getDropSubgraphUrl(chainId),
     `query ListDrops($first: Int!, $skip: Int!, $orderBy: Token_orderBy!, $orderDirection: OrderDirection!) {
       tokens(first: $first, skip: $skip, orderBy: $orderBy, orderDirection: $orderDirection) {
         ${TOKEN_FIELDS}
@@ -262,10 +333,14 @@ export async function listDrops(params: ListDropsParams = {}): Promise<ListDrops
 /**
  * Look up a single drop by tokenId. Returns `null` if not found.
  */
-export async function getDrop(tokenId: string | number | bigint): Promise<DropToken | null> {
+export async function getDrop(
+  tokenId: string | number | bigint,
+  chainId: SubgraphChainId = "polygonAmoy",
+): Promise<DropToken | null> {
   const id = String(tokenId);
+  const chain = assertSubgraphChain(chainId);
   const data = await gql<{ token: DropToken | null }>(
-    getDropSubgraphUrl(),
+    getDropSubgraphUrl(chain),
     `query GetDrop($id: ID!) {
       token(id: $id) { ${TOKEN_FIELDS} }
     }`,
@@ -311,9 +386,10 @@ export async function listClaimsByBuyer(params: ListClaimsByBuyerParams): Promis
   const page = Math.max(params.page ?? 1, 1);
   const skip = (page - 1) * pageSize;
   const buyer = params.buyer.toLowerCase();
+  const chainId = assertSubgraphChain(params.chainId);
 
   const data = await gql<{ purchases: DropPurchase[] }>(
-    getDropSubgraphUrl(),
+    getDropSubgraphUrl(chainId),
     `query ListClaimsByBuyer($buyer: Bytes!, $first: Int!, $skip: Int!) {
       purchases(
         where: { claimer: $buyer }
@@ -337,12 +413,14 @@ export async function listClaimsByBuyer(params: ListClaimsByBuyerParams): Promis
 export async function getOwnership(
   tokenId: string | number | bigint,
   walletAddress: string,
+  chainId: SubgraphChainId = "polygonAmoy",
 ): Promise<DropUserBalance | null> {
   if (!walletAddress) {
     throw new Error("getOwnership: walletAddress is required");
   }
   const tid = String(tokenId);
   const user = walletAddress.toLowerCase();
+  const chain = assertSubgraphChain(chainId);
   // UserBalance.id convention in the subgraph is `<user>-<tokenId>` (typical
   // thirdweb pattern). Try a direct id lookup first; fall back to where-filter.
   const idGuess = `${user}-${tid}`;
@@ -351,7 +429,7 @@ export async function getOwnership(
     direct: DropUserBalance | null;
     via_where: DropUserBalance[];
   }>(
-    getDropSubgraphUrl(),
+    getDropSubgraphUrl(chain),
     `query GetOwnership($id: ID!, $user: Bytes!, $tokenId: BigInt!) {
       direct: userBalance(id: $id) {
         id user tokenId totalClaimed lastClaimedAt
@@ -369,10 +447,14 @@ export async function getOwnership(
  * Look up a store (joy domain) by id (the bare label, e.g. "love").
  * Returns null if no store with that id exists.
  */
-export async function getStore(id: string): Promise<JoyStore | null> {
+export async function getStore(
+  id: string,
+  chainId: SubgraphChainId = "polygonAmoy",
+): Promise<JoyStore | null> {
   if (!id) throw new Error("getStore: id is required");
+  const chain = assertSubgraphChain(chainId);
   const data = await gql<{ store: JoyStore | null }>(
-    getStoresSubgraphUrl(),
+    getStoresSubgraphUrl(chain),
     `query GetStore($id: ID!) {
       store(id: $id) { ${STORE_FIELDS} }
     }`,
@@ -384,13 +466,18 @@ export async function getStore(id: string): Promise<JoyStore | null> {
 /**
  * List all stores owned by a wallet.
  */
-export async function listStoresByOwner(walletAddress: string, first = 50): Promise<JoyStore[]> {
+export async function listStoresByOwner(
+  walletAddress: string,
+  first = 50,
+  chainId: SubgraphChainId = "polygonAmoy",
+): Promise<JoyStore[]> {
   if (!walletAddress) {
     throw new Error("listStoresByOwner: walletAddress is required");
   }
   const owner = walletAddress.toLowerCase();
+  const chain = assertSubgraphChain(chainId);
   const data = await gql<{ stores: JoyStore[] }>(
-    getStoresSubgraphUrl(),
+    getStoresSubgraphUrl(chain),
     `query ListStoresByOwner($owner: Bytes!, $first: Int!) {
       stores(where: { owner: $owner }, first: $first, orderBy: createdAt, orderDirection: desc) {
         ${STORE_FIELDS}
@@ -420,18 +507,20 @@ export async function listStoresByOwner(walletAddress: string, first = 50): Prom
 export async function listStoresByDomainOwner(
   walletAddress: string,
   first = 50,
+  chainId: SubgraphChainId = "polygonAmoy",
 ): Promise<JoyStore[]> {
   if (!walletAddress) {
     throw new Error("listStoresByDomainOwner: walletAddress is required");
   }
   const owner = walletAddress.toLowerCase();
   const cap = Math.min(Math.max(first, 1), 100);
+  const chain = assertSubgraphChain(chainId);
 
   // 1. Fetch the wallet's domain registrations (we only need `name`).
   const domainData = await gql<{
     domainRegistrations: { name: string | null }[];
   }>(
-    getStoresSubgraphUrl(),
+    getStoresSubgraphUrl(chain),
     `query DomainsByOwner($owner: Bytes!, $first: Int!) {
       domainRegistrations(
         where: { owner: $owner }
@@ -453,7 +542,7 @@ export async function listStoresByDomainOwner(
 
   // 2. One bulk store fetch by id (== label).
   const storeData = await gql<{ stores: JoyStore[] }>(
-    getStoresSubgraphUrl(),
+    getStoresSubgraphUrl(chain),
     `query StoresByLabels($ids: [ID!]!) {
       stores(where: { id_in: $ids }, orderBy: createdAt, orderDirection: desc) {
         ${STORE_FIELDS}

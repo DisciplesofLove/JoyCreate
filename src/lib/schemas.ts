@@ -269,6 +269,13 @@ export const UserSettingsSchema = z.object({
   telemetryConsent: z.enum(["opted_in", "opted_out", "unset"]).optional(),
   telemetryUserId: z.string().optional(),
   hasRunBefore: z.boolean().optional(),
+  /**
+   * Phase 3 onboarding wizard — flipped to true when the user finishes or
+   * explicitly skips the multi-step setup at `/onboarding`. Used as a soft
+   * gate so existing installs (where this field is undefined) are never
+   * forced through the wizard.
+   */
+  onboardingComplete: z.boolean().optional(),
   /** @deprecated All features are now free. Kept for backward compat with existing settings files. */
   enableJoyPro: z.boolean().optional(),
   experiments: ExperimentsSchema.optional(),
@@ -385,6 +392,47 @@ export const UserSettingsSchema = z.object({
    */
   marketplaceChain: z
     .enum(["polygonAmoy", "arbitrumSepolia", "arbitrumOne"])
+    .optional(),
+
+  ////////////////////////////////
+  // GENIUS CORE (local ONNX runtime)
+  ////////////////////////////////
+  /**
+   * Local edge-native neural runtime that sits beside Ollama/LMStudio as a
+   * third local provider. All fields optional so existing installs keep
+   * working unchanged. See `src/lib/genius_core/`.
+   */
+  geniusCore: z
+    .object({
+      enabled: z.boolean(),
+      /** Maximum VRAM the engine may allocate, in gigabytes. */
+      vramBudgetGb: z.number().min(1).max(96),
+      /** Model registry id of the base layer model. */
+      baseModelId: z.string(),
+      /** ONNX Runtime execution provider preference. */
+      executionProvider: z.enum([
+        "auto",
+        "webgpu",
+        "directml",
+        "coreml",
+        "cuda",
+        "cpu",
+      ]),
+      /** Absolute path under userData for per-project IPLD context slot cache. */
+      contextSlotsDir: z.string().optional(),
+      /** Route lightweight background work (telemetry, indexing) to NPU when available. */
+      npuOffloadEnabled: z.boolean(),
+      /** Allow live P2P weight-shard streaming for off-local-cache inference steps. */
+      weightStreamingEnabled: z.boolean(),
+      /**
+       * Order-respecting edit logger for online structural learning.
+       * SEPARATE from `telemetryConsent` — must be explicitly opted in.
+       * When true, also requires `telemetryConsent === "opted_in"` to actually capture.
+       */
+      keystrokeLoggerEnabled: z.boolean(),
+      /** Nightly idle-triggered QLoRA distillation. Off by default. */
+      nightlyDistillationEnabled: z.boolean(),
+    })
     .optional(),
 
   ////////////////////////////////

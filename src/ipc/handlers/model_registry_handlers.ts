@@ -28,6 +28,16 @@ import {
   type SearchParams,
   type RateModelParams,
 } from "@/lib/model_registry_service";
+import {
+  createModelManifest,
+  downloadFromManifest,
+  verifyManifest,
+  attachManifestSignature,
+  manifestSigningDigest,
+  compareSemver,
+  parseSemver,
+  type ModelChunkManifest,
+} from "@/lib/model_p2p_distribution";
 
 const logger = log.scope("model_registry_handlers");
 const handle = createLoggedHandler(logger);
@@ -227,4 +237,111 @@ export function registerModelRegistryHandlers() {
   handle("model-registry:list-downloads", async () => {
     return listDownloads();
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 5 — P2P chunked distribution
+  // ---------------------------------------------------------------------------
+
+  // Build a chunked + hashed manifest for a local model file.
+  handle(
+    "model-p2p:create-manifest",
+    async (
+      _event,
+      args: {
+        filePath: string;
+        modelId: string;
+        version: string;
+        chunkSize?: number;
+      },
+    ) => {
+      if (!args.filePath) throw new Error("Missing required field: filePath");
+      if (!args.modelId) throw new Error("Missing required field: modelId");
+      if (!args.version) throw new Error("Missing required field: version");
+      parseSemver(args.version); // validate
+      return createModelManifest({
+        filePath: args.filePath,
+        modelId: args.modelId,
+        version: args.version,
+        chunkSize: args.chunkSize,
+      });
+    },
+  );
+
+  // Compute the canonical signing digest for a manifest so the renderer can
+  // sign it with the user's wallet.
+  handle(
+    "model-p2p:signing-digest",
+    async (_event, args: { manifest: ModelChunkManifest }) => {
+      if (!args.manifest) throw new Error("Missing required field: manifest");
+      const { signature: _ignored, ...unsigned } = args.manifest;
+      return manifestSigningDigest(unsigned);
+    },
+  );
+
+  // Attach a publisher signature produced by the renderer wallet.
+  handle(
+    "model-p2p:attach-signature",
+    async (
+      _event,
+      args: {
+        manifest: ModelChunkManifest;
+        address: string;
+        signature: string;
+      },
+    ) => {
+      if (!args.manifest) throw new Error("Missing required field: manifest");
+      if (!args.address) throw new Error("Missing required field: address");
+      if (!args.signature) throw new Error("Missing required field: signature");
+      const { signature: _ignored, ...unsigned } = args.manifest;
+      return attachManifestSignature(unsigned, args.address, args.signature);
+    },
+  );
+
+  // Verify a manifest's integrity and (optionally) its publisher signature.
+  handle(
+    "model-p2p:verify-manifest",
+    async (
+      _event,
+      args: {
+        manifest: ModelChunkManifest;
+        requirePublisherAddress?: string;
+      },
+    ) => {
+      if (!args.manifest) throw new Error("Missing required field: manifest");
+      return verifyManifest(args.manifest, {
+        requirePublisherAddress: args.requirePublisherAddress,
+      });
+    },
+  );
+
+  // Fetch + reassemble + verify a model from its manifest.
+  handle(
+    "model-p2p:download",
+    async (
+      _event,
+      args: {
+        manifest: ModelChunkManifest;
+        outputPath: string;
+        maxRetriesPerChunk?: number;
+        requirePublisherAddress?: string;
+      },
+    ) => {
+      if (!args.manifest) throw new Error("Missing required field: manifest");
+      if (!args.outputPath)
+        throw new Error("Missing required field: outputPath");
+      return downloadFromManifest(args.manifest, {
+        outputPath: args.outputPath,
+        maxRetriesPerChunk: args.maxRetriesPerChunk,
+        requirePublisherAddress: args.requirePublisherAddress,
+      });
+    },
+  );
+
+  // Semver comparison helper exposed to the renderer (used by version pickers).
+  handle(
+    "model-p2p:compare-semver",
+    async (_event, args: { a: string; b: string }) => {
+      return compareSemver(args.a, args.b);
+    },
+  );
 }

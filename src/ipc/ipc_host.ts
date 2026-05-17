@@ -31,6 +31,7 @@ import { registerPortalHandlers } from "./handlers/portal_handlers";
 import { registerPromptHandlers } from "./handlers/prompt_handlers";
 import { registerHelpBotHandlers } from "./handlers/help_bot_handlers";
 import { registerMcpHandlers } from "./handlers/mcp_handlers";
+import { registerGeniusCoreHandlers } from "./handlers/genius_core_handlers";
 import { registerSecurityHandlers } from "./handlers/security_handlers";
 import { registerVisualEditingHandlers } from "../pro/main/ipc/handlers/visual_editing_handlers";
 import { registerAgentToolHandlers } from "../pro/main/ipc/handlers/local_agent/agent_tool_handlers";
@@ -46,6 +47,10 @@ import { registerMarketplaceSyncHandlers } from "./handlers/marketplace_sync_han
 import { registerJoyBridgeHandlers } from "./handlers/joybridge_handlers";
 import { registerMarketplaceInboundHandlers } from "./handlers/marketplace_inbound_handlers";
 import { registerDataMarketHandlers } from "./handlers/data_market_handlers";
+import { startLitRelayer } from "../lib/onchain/lit_relayer";
+import { registerApiGatewayHandlers } from "./handlers/api_gateway_handlers";
+import { startApiGateway } from "../lib/api_gateway/service";
+import { installAgentInvoker } from "../lib/api_gateway/invoker";
 import { registerScraperHandlers } from "./handlers/scraper_handlers";
 import { registerAssetStudioHandlers } from "./handlers/asset_studio_handlers";
 import { registerNFTHandlers } from "./handlers/nft_handlers";
@@ -219,6 +224,7 @@ export function registerIpcHandlers() {
   registerPromptHandlers();
   registerHelpBotHandlers();
   registerMcpHandlers();
+  registerGeniusCoreHandlers();
   registerSecurityHandlers();
   registerVisualEditingHandlers();
   registerAgentToolHandlers();
@@ -239,6 +245,12 @@ export function registerIpcHandlers() {
   registerJoyBridgeHandlers();
   registerMarketplaceInboundHandlers(); // Inbound: Joy Marketplace → JoyCreate webhook handler
   registerDataMarketHandlers(); // Arbitrum Stylus: DataProvenance + DataLease
+  startLitRelayer(); // background poll: pending lease grants → Lit ACC provisioning
+  registerApiGatewayHandlers(); // expose agents as metered HTTP endpoints
+  installAgentInvoker(); // bind gateway → real LLM via getModelClient
+  void startApiGateway().catch((err) =>
+    console.error("[api_gateway] failed to start:", err),
+  );
   registerScraperHandlers();
   registerAssetStudioHandlers();
   registerNFTHandlers();

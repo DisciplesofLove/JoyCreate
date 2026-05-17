@@ -1066,6 +1066,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
+ "openzeppelin-stylus",
  "stylus-sdk",
 ]
 
@@ -1994,6 +1995,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "openzeppelin-stylus"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cef3971d2d38f992397ed222826d213489f19a4b1936ac482fb5fa23926a4fd4"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-macro",
+ "alloy-sol-macro-expander",
+ "alloy-sol-macro-input",
+ "alloy-sol-types",
+ "keccak-const",
+ "openzeppelin-stylus-proc",
+ "stylus-sdk",
+]
+
+[[package]]
+name = "openzeppelin-stylus-proc"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e070fcdfd2bc4cd6dcd32d61797467439277d7cc8e7eea73dd42c7ccd22b0e1d"
+dependencies = [
+ "convert_case",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "parity-scale-codec"
 version = "3.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2857,6 +2886,7 @@ dependencies = [
  "lazy_static",
  "mini-alloc",
  "rclite",
+ "regex",
  "stylus-core",
  "stylus-proc",
  "stylus-test",

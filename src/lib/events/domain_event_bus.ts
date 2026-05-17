@@ -79,6 +79,58 @@ export interface ReputationDeltaPayload {
   reason: string;
 }
 
+export interface GeniusCoreInitializedPayload {
+  executionProvider: string;
+  vramBudgetGb: number;
+  baseModelId: string;
+}
+
+export interface GeniusCoreBaseLoadedPayload {
+  baseModelId: string;
+  /** Bytes resident in VRAM / accelerator memory for the base layer. */
+  residentBytes: number;
+  /** Milliseconds to first usable token after load. */
+  loadDurationMs: number;
+}
+
+export interface GeniusCoreContextSlotLoadedPayload {
+  projectId: string;
+  /** IPLD CID of the slot, when persisted. Omitted on fresh slots. */
+  slotCid?: string;
+  loadDurationMs: number;
+}
+
+export interface GeniusCoreInferenceCompletedPayload {
+  projectId?: string;
+  modelId: string;
+  executionProvider: string;
+  tokensIn: number;
+  tokensOut: number;
+  durationMs: number;
+  /** True when shards were streamed live from P2P peers during this step. */
+  usedShardStream: boolean;
+}
+
+export interface GeniusCoreDistillationCompletedPayload {
+  projectId: string;
+  adapterId: string;
+  method: "lora" | "qlora";
+  sampleCount: number;
+  finalLoss: number;
+  durationMs: number;
+}
+
+export interface GeniusCoreAdapterPublishedPayload {
+  adapterId: string;
+  projectId: string;
+  /** Encrypted-at-rest CID of the adapter blob (Lit-encrypted before pinning). */
+  ciphertextCid: string;
+  /** Stylus DropEdition mint tx hash, when on-chain publish succeeded. */
+  mintTxHash?: string;
+  /** Celestia anchor tx, when DA submission succeeded. */
+  celestiaTxHash?: string;
+}
+
 export interface DomainEventMap {
   "asset.published": AssetPublishedPayload;
   "asset.claimed": AssetClaimedPayload;
@@ -86,6 +138,12 @@ export interface DomainEventMap {
   "agent.invoked": AgentInvokedPayload;
   "compute.job.completed": ComputeJobCompletedPayload;
   "reputation.delta": ReputationDeltaPayload;
+  "genius_core.initialized": GeniusCoreInitializedPayload;
+  "genius_core.base.loaded": GeniusCoreBaseLoadedPayload;
+  "genius_core.context_slot.loaded": GeniusCoreContextSlotLoadedPayload;
+  "genius_core.inference.completed": GeniusCoreInferenceCompletedPayload;
+  "genius_core.distillation.completed": GeniusCoreDistillationCompletedPayload;
+  "genius_core.adapter.published": GeniusCoreAdapterPublishedPayload;
 }
 
 export type DomainEventType = keyof DomainEventMap;

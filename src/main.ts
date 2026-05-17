@@ -64,6 +64,15 @@ dotenv.config(); // also try CWD-based .env as secondary source
 // Register IPC handlers before app is ready
 registerIpcHandlers();
 
+// Activate Genius Core ONNX backend (Phase 1). The backend stays inert until
+// the renderer calls `genius-core:init`, which only succeeds when the user
+// has flipped `geniusCore.enabled` in settings.
+import("./lib/genius_core/onnx_runtime_main")
+  .then((m) => m.activateOnnxRuntimeMainBackend())
+  .catch((err) => {
+    log.warn("Failed to activate Genius Core ONNX backend", err);
+  });
+
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
   app.quit();

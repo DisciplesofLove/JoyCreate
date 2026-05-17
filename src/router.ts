@@ -14,6 +14,11 @@ import { localModelsRoute } from "./routes/local-models";
 import { documentsRoute, documentEditorRoute } from "./routes/documents";
 import { deployRoute } from "./routes/deploy";
 import { datasetsRoute } from "./routes/datasets";
+import { dataMarketRoute } from "./routes/data-market";
+import { apiGatewayRoute } from "./routes/api-gateway";
+import { onboardingRoute } from "./routes/onboarding";
+import { reputationRoute } from "./routes/reputation";
+import { privacySettingsRoute } from "./routes/privacy";
 import { assetStudioRoute } from "./routes/asset-studio";
 import { nftMarketplaceRoute } from "./routes/nft-marketplace";
 import { creatorNetworkRoute } from "./routes/creator-network";
@@ -116,6 +121,11 @@ const routeTree = rootRoute.addChildren([
   documentEditorRoute,
   deployRoute,
   datasetsRoute,
+  dataMarketRoute,
+  apiGatewayRoute,
+  onboardingRoute,
+  reputationRoute,
+  privacySettingsRoute,
   assetStudioRoute,
   nftMarketplaceRoute,
   creatorNetworkRoute,

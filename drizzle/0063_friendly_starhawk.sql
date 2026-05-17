@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `context_slot_cid` text;

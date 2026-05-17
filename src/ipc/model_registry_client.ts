@@ -11,6 +11,10 @@ import type {
   RegisterModelParams,
   RateModelParams,
 } from "@/lib/model_registry_service";
+import type {
+  ModelChunkManifest,
+  DownloadResult,
+} from "@/lib/model_p2p_distribution";
 
 class ModelRegistryClient {
   private static instance: ModelRegistryClient;
@@ -192,6 +196,57 @@ class ModelRegistryClient {
     }>
   > {
     return this.ipcRenderer.invoke("model-registry:list-downloads");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 5 — P2P chunked distribution
+  // ---------------------------------------------------------------------------
+
+  /** Build a chunked + hashed manifest for a local model file. */
+  async createP2PManifest(params: {
+    filePath: string;
+    modelId: string;
+    version: string;
+    chunkSize?: number;
+  }): Promise<ModelChunkManifest> {
+    return this.ipcRenderer.invoke("model-p2p:create-manifest", params);
+  }
+
+  /** Get the canonical signing digest the user's wallet should sign. */
+  async getP2PSigningDigest(manifest: ModelChunkManifest): Promise<string> {
+    return this.ipcRenderer.invoke("model-p2p:signing-digest", { manifest });
+  }
+
+  /** Attach a publisher signature produced in the renderer. */
+  async attachP2PSignature(params: {
+    manifest: ModelChunkManifest;
+    address: string;
+    signature: string;
+  }): Promise<ModelChunkManifest> {
+    return this.ipcRenderer.invoke("model-p2p:attach-signature", params);
+  }
+
+  /** Verify manifest structure (and signature, if present). */
+  async verifyP2PManifest(params: {
+    manifest: ModelChunkManifest;
+    requirePublisherAddress?: string;
+  }): Promise<{ signatureValid: boolean | null }> {
+    return this.ipcRenderer.invoke("model-p2p:verify-manifest", params);
+  }
+
+  /** Fetch + reassemble + verify a model from its manifest. */
+  async downloadP2PModel(params: {
+    manifest: ModelChunkManifest;
+    outputPath: string;
+    maxRetriesPerChunk?: number;
+    requirePublisherAddress?: string;
+  }): Promise<DownloadResult> {
+    return this.ipcRenderer.invoke("model-p2p:download", params);
+  }
+
+  /** Compare two semver strings (-1 / 0 / 1). */
+  async compareSemver(a: string, b: string): Promise<number> {
+    return this.ipcRenderer.invoke("model-p2p:compare-semver", { a, b });
   }
 }
 

@@ -178,6 +178,16 @@ export function registerLifecycleHandlers(): void {
     },
   );
 
+  ipcMain.handle(
+    "lifecycle:reputation:list-top",
+    async (
+      _event: IpcMainInvokeEvent,
+      params: { limit?: number } = {},
+    ): Promise<ReputationSnapshot[]> => {
+      return lifecycleEngine.listTopReputation(params.limit ?? 50);
+    },
+  );
+
   // ---------------------------------------------------------------------------
   // 7. BETTER CREATE — Feedback
   // ---------------------------------------------------------------------------

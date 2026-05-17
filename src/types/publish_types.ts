@@ -286,22 +286,36 @@ export interface JoyStoreRecord {
   updatedAt: string | null;
 }
 
+/**
+ * Chains for which the marketplace has an indexed subgraph. Kept in sync
+ * with `SubgraphChainId` in `src/lib/joymarketplace/drop_subgraph.ts`. We
+ * duplicate the literal here to avoid pulling main-process modules into
+ * the renderer through the types barrel.
+ */
+export type MarketplaceSubgraphChainId = "polygonAmoy" | "arbitrumSepolia";
+
 export interface MyDropsParams {
   wallet: string;
   page?: number;
   pageSize?: number;
   query?: string;
+  /** Default `"polygonAmoy"` if omitted. */
+  chainId?: MarketplaceSubgraphChainId;
 }
 
 export interface MyClaimsParams {
   wallet: string;
   page?: number;
   pageSize?: number;
+  /** Default `"polygonAmoy"` if omitted. */
+  chainId?: MarketplaceSubgraphChainId;
 }
 
 export interface OwnershipParams {
   tokenId: string | number;
   wallet: string;
+  /** Default `"polygonAmoy"` if omitted. */
+  chainId?: MarketplaceSubgraphChainId;
 }
 
 /**

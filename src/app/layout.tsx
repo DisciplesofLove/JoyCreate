@@ -5,6 +5,7 @@ import { DeepLinkProvider } from "../contexts/DeepLinkContext";
 import { Toaster } from "sonner";
 import { TitleBar } from "./TitleBar";
 import { useEffect, type ReactNode } from "react";
+import { useRouterState, useNavigate } from "@tanstack/react-router";
 import { AssistantContextProvider } from "@/components/joy-assistant/AssistantContextProvider";
 import { JoyAssistantPanel } from "@/components/joy-assistant/JoyAssistantPanel";
 import { JoyAssistantBoundary } from "@/components/joy-assistant/JoyAssistantBoundary";
@@ -85,6 +86,21 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     setSelectedComponentsPreview([]);
     setConsoleEntries([]);
   }, [selectedAppId]);
+
+  // Phase 3: soft onboarding gate. Only redirect truly-fresh installs
+  // (no `hasRunBefore`, no `onboardingComplete`) and only when they land
+  // on `/`. Existing users are never disturbed because both flags will be
+  // either explicitly set or undefined-on-an-old-install (where
+  // `hasRunBefore` is set as part of the legacy first-run handler).
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  useEffect(() => {
+    if (!settings) return;
+    if (settings.onboardingComplete) return;
+    if (settings.hasRunBefore) return;
+    if (pathname !== "/") return;
+    navigate({ to: "/onboarding" });
+  }, [settings, pathname, navigate]);
 
   return (
     <>

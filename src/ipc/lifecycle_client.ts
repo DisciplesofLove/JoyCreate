@@ -137,6 +137,10 @@ class LifecycleClient {
     return this.ipc.invoke("lifecycle:reputation:recompute", { actorId });
   }
 
+  async listTopReputation(limit = 50): Promise<ReputationSnapshot[]> {
+    return this.ipc.invoke("lifecycle:reputation:list-top", { limit });
+  }
+
   // ---------------------------------------------------------------------------
   // 7. BETTER CREATE — Feedback
   // ---------------------------------------------------------------------------

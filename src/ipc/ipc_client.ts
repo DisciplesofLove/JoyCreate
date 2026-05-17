@@ -653,6 +653,122 @@ export class IpcClient {
     await this.ipcRenderer.invoke("reload-env-path");
   }
 
+  // ── Genius Core (local ONNX runtime) ────────────────────────────────
+  public async geniusCoreStatus(): Promise<import("../lib/genius_core").GeniusCoreStatusReport> {
+    return this.ipcRenderer.invoke("genius-core:status");
+  }
+
+  public async geniusCoreInit(): Promise<import("../lib/genius_core").GeniusCoreStatusReport> {
+    return this.ipcRenderer.invoke("genius-core:init");
+  }
+
+  public async geniusCoreLoadContextSlot(
+    projectId: string,
+  ): Promise<import("../lib/genius_core").GeniusCoreStatusReport> {
+    return this.ipcRenderer.invoke("genius-core:load-context-slot", projectId);
+  }
+
+  public async geniusCoreInfer(
+    req: import("../lib/genius_core").GeniusCoreInferRequest,
+  ): Promise<import("../lib/genius_core").GeniusCoreInferResponse> {
+    return this.ipcRenderer.invoke("genius-core:infer", req);
+  }
+
+  public async geniusCoreStreamInfer(
+    req: import("../lib/genius_core").GeniusCoreInferRequest,
+    onChunk: (chunk: string) => void,
+  ): Promise<import("../lib/genius_core").GeniusCoreInferResponse> {
+    const subscription = this.ipcRenderer.on(
+      "genius-core:stream-chunk",
+      (payload: unknown) => {
+        const p = payload as { chunk?: string };
+        if (typeof p?.chunk === "string") onChunk(p.chunk);
+      },
+    );
+    try {
+      return await this.ipcRenderer.invoke("genius-core:stream-infer", req);
+    } finally {
+      subscription();
+    }
+  }
+
+  public async geniusCoreListBaseModels(): Promise<
+    Array<{
+      id: string;
+      displayName: string;
+      format: "onnx";
+      quantization: string;
+      contextWindow: number;
+      executionProviders: string[];
+      approxBytes: number;
+    }>
+  > {
+    return this.ipcRenderer.invoke("genius-core:list-base-models");
+  }
+
+  public async geniusCoreSetBaseModel(
+    modelId: string,
+  ): Promise<import("../lib/genius_core").GeniusCoreStatusReport> {
+    return this.ipcRenderer.invoke("genius-core:set-base-model", modelId);
+  }
+
+  public async geniusCorePeekProjectSlot(
+    projectId: string,
+  ): Promise<import("./handlers/genius_core_handlers").GeniusCoreProjectSlotInfo> {
+    return this.ipcRenderer.invoke("genius-core:peek-project-slot", projectId);
+  }
+
+  public async geniusCoreOpenProjectSlot(
+    projectId: string,
+  ): Promise<import("./handlers/genius_core_handlers").GeniusCoreProjectSlotInfo> {
+    return this.ipcRenderer.invoke("genius-core:open-project-slot", projectId);
+  }
+
+  public async geniusCoreRecordEdit(
+    input: import("../lib/genius_core/edit_logger").RecordInput,
+  ): Promise<{ accepted: boolean }> {
+    return this.ipcRenderer.invoke("genius-core:record-edit", input);
+  }
+
+  public async geniusCoreFlushEditLog(): Promise<{ flushed: boolean }> {
+    return this.ipcRenderer.invoke("genius-core:flush-edit-log");
+  }
+
+  public async geniusCoreExportEditSession(opts: {
+    projectId: number;
+    sinceMs: number;
+    limit?: number;
+  }): Promise<import("../lib/genius_core/edit_logger").EditLogEntry[]> {
+    return this.ipcRenderer.invoke("genius-core:export-edit-session", opts);
+  }
+
+  public async geniusCoreDistillationStatus(): Promise<
+    import("../lib/genius_core/distillation_scheduler").DistillationStatus
+  > {
+    return this.ipcRenderer.invoke("genius-core:distillation-status");
+  }
+
+  public async geniusCoreDistillationRunNow(
+    projectId: number,
+  ): Promise<
+    import("./handlers/genius_core_handlers").GeniusCoreDistillationReceiptDto
+  > {
+    return this.ipcRenderer.invoke("genius-core:distillation-run-now", {
+      projectId,
+    });
+  }
+
+  public async geniusCoreDistillationSetEnabled(
+    enabled: boolean,
+  ): Promise<
+    import("../lib/genius_core/distillation_scheduler").DistillationStatus
+  > {
+    return this.ipcRenderer.invoke(
+      "genius-core:distillation-set-enabled",
+      enabled,
+    );
+  }
+
   // Create a new app with an initial chat
   public async createApp(params: CreateAppParams): Promise<CreateAppResult> {
     return this.ipcRenderer.invoke("create-app", params);
@@ -5524,6 +5640,52 @@ export class IpcClient {
   ): Promise<boolean> {
     return this.ipcRenderer.invoke("data-lease:has-active", args);
   }
+
+  // ── API Gateway ─────────────────────────────────────────────────────────
+  public async apiGatewayStatus(): Promise<ApiGatewayStatus> {
+    return this.ipcRenderer.invoke("api-gateway:status");
+  }
+  public async apiGatewayStart(args?: { port?: number }): Promise<ApiGatewayStatus> {
+    return this.ipcRenderer.invoke("api-gateway:start", args ?? {});
+  }
+  public async apiGatewayStop(): Promise<ApiGatewayStatus> {
+    return this.ipcRenderer.invoke("api-gateway:stop");
+  }
+  public async apiGatewayCreateEndpoint(
+    args: ApiGatewayCreateEndpointArgs,
+  ): Promise<ApiEndpointRow> {
+    return this.ipcRenderer.invoke("api-gateway:create-endpoint", args);
+  }
+  public async apiGatewayListEndpoints(): Promise<ApiEndpointRow[]> {
+    return this.ipcRenderer.invoke("api-gateway:list-endpoints");
+  }
+  public async apiGatewayGetEndpoint(args: { id: number }): Promise<ApiEndpointDetail> {
+    return this.ipcRenderer.invoke("api-gateway:get-endpoint", args);
+  }
+  public async apiGatewayUpdateEndpoint(
+    args: ApiGatewayUpdateEndpointArgs,
+  ): Promise<ApiEndpointRow> {
+    return this.ipcRenderer.invoke("api-gateway:update-endpoint", args);
+  }
+  public async apiGatewayDeleteEndpoint(args: { id: number }): Promise<{ deleted: true }> {
+    return this.ipcRenderer.invoke("api-gateway:delete-endpoint", args);
+  }
+  public async apiGatewayCreateKey(
+    args: ApiGatewayCreateKeyArgs,
+  ): Promise<ApiGatewayCreateKeyResult> {
+    return this.ipcRenderer.invoke("api-gateway:create-key", args);
+  }
+  public async apiGatewayListKeys(args: { endpointId: number }): Promise<ApiKeyRow[]> {
+    return this.ipcRenderer.invoke("api-gateway:list-keys", args);
+  }
+  public async apiGatewayRevokeKey(args: { id: number }): Promise<ApiKeyRow> {
+    return this.ipcRenderer.invoke("api-gateway:revoke-key", args);
+  }
+  public async apiGatewayListUsage(
+    args: { endpointId: number; limit?: number },
+  ): Promise<ApiUsageRow[]> {
+    return this.ipcRenderer.invoke("api-gateway:list-usage", args);
+  }
 }
 
 // ── Data Market shared types ─────────────────────────────────────────────
@@ -5642,6 +5804,101 @@ export interface DataLeaseGrantRow {
   relayerError: string | null;
   grantedTxHash: string;
   observedAt: Date;
+}
+
+// ── API Gateway shared types ─────────────────────────────────────────────
+
+export interface ApiGatewayStatus {
+  running: boolean;
+  port: number | null;
+  baseUrl: string | null;
+}
+
+export interface ApiEndpointRow {
+  id: number;
+  slug: string;
+  name: string;
+  description: string | null;
+  agentId: number | null;
+  configJson: Record<string, unknown> | null;
+  pricePerCallWei: string;
+  pricePerKTokenWei: string;
+  rateLimitPerMin: number;
+  enabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ApiEndpointDetail extends ApiEndpointRow {
+  stats: {
+    totalCalls: number;
+    errorCalls: number;
+    totalChargedWei: string;
+    avgLatencyMs: number;
+  };
+  activeKeyCount: number;
+}
+
+export interface ApiGatewayCreateEndpointArgs {
+  slug: string;
+  name: string;
+  description?: string;
+  agentId?: number | null;
+  configJson?: Record<string, unknown> | null;
+  pricePerCallWei?: string;
+  pricePerKTokenWei?: string;
+  rateLimitPerMin?: number;
+}
+
+export interface ApiGatewayUpdateEndpointArgs {
+  id: number;
+  name?: string;
+  description?: string | null;
+  enabled?: boolean;
+  pricePerCallWei?: string;
+  pricePerKTokenWei?: string;
+  rateLimitPerMin?: number;
+  configJson?: Record<string, unknown> | null;
+}
+
+export interface ApiKeyRow {
+  id: number;
+  endpointId: number;
+  name: string;
+  keyPrefix: string;
+  keyHash: string;
+  rateLimitPerMin: number | null;
+  monthlyCallQuota: number | null;
+  revokedAt: Date | null;
+  lastUsedAt: Date | null;
+  createdAt: Date;
+}
+
+export interface ApiGatewayCreateKeyArgs {
+  endpointId: number;
+  name: string;
+  rateLimitPerMin?: number | null;
+  monthlyCallQuota?: number | null;
+}
+
+export interface ApiGatewayCreateKeyResult {
+  key: ApiKeyRow;
+  /** The full secret — shown to the user ONCE; cannot be retrieved again. */
+  secret: string;
+}
+
+export interface ApiUsageRow {
+  id: number;
+  endpointId: number;
+  apiKeyId: number;
+  bytesIn: number;
+  bytesOut: number;
+  outputTokens: number;
+  latencyMs: number;
+  statusCode: number;
+  chargedWei: string;
+  errorMessage: string | null;
+  createdAt: Date;
 }
 
 export interface DatasetPublishArgs {

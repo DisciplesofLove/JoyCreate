@@ -31,6 +31,10 @@ import {
   type DropUserBalance,
   type JoyStore,
 } from "@/lib/joymarketplace/drop_subgraph";
+import {
+  isSubgraphChainId,
+  type SubgraphChainId,
+} from "@/lib/joymarketplace/drop_subgraph";
 import type {
   MarketplaceBrowseParams,
   MarketplaceBrowseResult,
@@ -45,6 +49,9 @@ import type {
   CreatorRevenueSummary,
 } from "@/types/publish_types";
 import type { PricingModel, AssetStatus } from "@/types/marketplace_types";
+import { db } from "@/db";
+import { dataLeaseListings } from "@/db/schema";
+import { desc, eq } from "drizzle-orm";
 
 const logger = log.scope("marketplace_browse");
 
@@ -198,6 +205,68 @@ function weiToDisplay(wei: string | null): number | undefined {
   }
 }
 
+/**
+ * Convert a `dataLeaseListings` row into the same `MarketplaceBrowseItem`
+ * shape as DropERC1155 drops, so the unified marketplace UI can render
+ * Arbitrum Stylus DataLease offerings alongside Polygon drops. Phase 2
+ * marketplace consolidation: see joycreate-completion-plan.md.
+ */
+function dataLeaseToBrowseItem(
+  row: typeof dataLeaseListings.$inferSelect,
+): MarketplaceBrowseItem {
+  const price = weiToDisplay(row.priceWei);
+  const durationDays = Math.round(Number(row.durationSecs ?? "0") / 86_400);
+  return {
+    id: `lease:${row.chainId}:${row.listingId}`,
+    name: `Dataset lease #${row.listingId}`,
+    shortDescription: `Time-bound lease (${durationDays}d) of provenance token ${row.tokenId} on ${row.chainId}.`,
+    category: "ai-workflow" as UnifiedCategory,
+    assetType: "dataset",
+    pricingModel: price && price > 0 ? "one-time" : "free",
+    price,
+    currency: row.chainId.startsWith("arbitrum") ? "ETH" : "MATIC",
+    thumbnailUrl: undefined,
+    downloads: 0,
+    rating: 0,
+    reviewCount: 0,
+    publisherName: "On-chain creator",
+    publisherId: row.creator,
+    publishedAt: row.observedAt
+      ? new Date(row.observedAt).toISOString()
+      : new Date(0).toISOString(),
+    tags: ["on-chain", "data-lease", row.chainId],
+  };
+}
+
+async function listDataLeaseBrowseItems(
+  params: MarketplaceBrowseParams,
+): Promise<MarketplaceBrowseItem[]> {
+  try {
+    const rows = await db
+      .select()
+      .from(dataLeaseListings)
+      .where(eq(dataLeaseListings.active, true))
+      .orderBy(desc(dataLeaseListings.observedAt))
+      .limit(100);
+    let items = rows.map(dataLeaseToBrowseItem);
+    if (params.query) {
+      const q = params.query.toLowerCase();
+      items = items.filter(
+        (i) =>
+          i.name.toLowerCase().includes(q) ||
+          i.shortDescription.toLowerCase().includes(q) ||
+          i.publisherId.toLowerCase().includes(q),
+      );
+    }
+    return items;
+  } catch (err) {
+    logger.warn(
+      `data-lease listings unavailable: ${(err as Error).message}`,
+    );
+    return [];
+  }
+}
+
 /** Convert a `DropToken` + (optional) metadata into a browse-grid row. */
 function toBrowseItem(token: DropToken, meta: TokenMetadata | null): MarketplaceBrowseItem {
   const props = meta?.properties ?? {};
@@ -310,6 +379,14 @@ export function registerMarketplaceBrowseHandlers() {
       );
 
       let items = enriched.map(({ token, meta }) => toBrowseItem(token, meta));
+
+      // Phase 2: merge on-chain DataLease listings (Arbitrum Stylus) into
+      // the unified browse result so datasets show up next to drops.
+      // Skip if the caller filtered to a non-dataset assetType.
+      if (!params.assetType || params.assetType === "dataset") {
+        const leaseItems = await listDataLeaseBrowseItems(params);
+        items = items.concat(leaseItems);
+      }
 
       if (params.assetType) {
         items = items.filter((i) => i.assetType === params.assetType);
@@ -436,14 +513,20 @@ export function registerMarketplaceBrowseHandlers() {
         page?: number;
         pageSize?: number;
         query?: string;
+        chainId?: SubgraphChainId;
       },
     ): Promise<MarketplaceBrowseResult> => {
       if (!params?.wallet) throw new Error("wallet is required");
       const pageSize = Math.min(Math.max(params.pageSize ?? 24, 1), 100);
       const page = Math.max(params.page ?? 1, 1);
       const wallet = params.wallet.toLowerCase();
+      const chainId: SubgraphChainId = isSubgraphChainId(params.chainId)
+        ? params.chainId
+        : "polygonAmoy";
 
-      logger.info(`my-drops wallet=${wallet} page=${page} pageSize=${pageSize}`);
+      logger.info(
+        `my-drops chain=${chainId} wallet=${wallet} page=${page} pageSize=${pageSize}`,
+      );
 
       // Fetch a page of drops (subgraph-side filter unavailable today).
       const { items: tokens, hasMore } = await listDropsByCreator({
@@ -452,6 +535,7 @@ export function registerMarketplaceBrowseHandlers() {
         pageSize,
         orderBy: "lazyMintedAt",
         orderDirection: "desc",
+        chainId,
       });
 
       const enriched = await Promise.all(
@@ -498,14 +582,25 @@ export function registerMarketplaceBrowseHandlers() {
     "marketplace:my-claims",
     async (
       _,
-      params: { wallet: string; page?: number; pageSize?: number },
+      params: {
+        wallet: string;
+        page?: number;
+        pageSize?: number;
+        chainId?: SubgraphChainId;
+      },
     ): Promise<DropPurchase[]> => {
       if (!params?.wallet) throw new Error("wallet is required");
-      logger.info(`my-claims wallet=${params.wallet} page=${params.page ?? 1}`);
+      const chainId: SubgraphChainId = isSubgraphChainId(params.chainId)
+        ? params.chainId
+        : "polygonAmoy";
+      logger.info(
+        `my-claims chain=${chainId} wallet=${params.wallet} page=${params.page ?? 1}`,
+      );
       return listClaimsByBuyer({
         buyer: params.wallet,
         page: params.page,
         pageSize: params.pageSize,
+        chainId,
       });
     },
   );
@@ -518,13 +613,20 @@ export function registerMarketplaceBrowseHandlers() {
     "marketplace:ownership",
     async (
       _,
-      params: { tokenId: string | number; wallet: string },
+      params: {
+        tokenId: string | number;
+        wallet: string;
+        chainId?: SubgraphChainId;
+      },
     ): Promise<DropUserBalance | null> => {
       if (!params?.wallet) throw new Error("wallet is required");
       if (params.tokenId === undefined || params.tokenId === null) {
         throw new Error("tokenId is required");
       }
-      return getOwnership(params.tokenId, params.wallet);
+      const chainId: SubgraphChainId = isSubgraphChainId(params.chainId)
+        ? params.chainId
+        : "polygonAmoy";
+      return getOwnership(params.tokenId, params.wallet, chainId);
     },
   );
 
@@ -535,10 +637,20 @@ export function registerMarketplaceBrowseHandlers() {
    */
   ipcMain.handle(
     "marketplace:my-stores",
-    async (_, params: { wallet: string; first?: number }): Promise<JoyStore[]> => {
+    async (
+      _,
+      params: {
+        wallet: string;
+        first?: number;
+        chainId?: SubgraphChainId;
+      },
+    ): Promise<JoyStore[]> => {
       if (!params?.wallet) throw new Error("wallet is required");
-      logger.info(`my-stores wallet=${params.wallet}`);
-      return listStoresByDomainOwner(params.wallet, params.first ?? 50);
+      const chainId: SubgraphChainId = isSubgraphChainId(params.chainId)
+        ? params.chainId
+        : "polygonAmoy";
+      logger.info(`my-stores chain=${chainId} wallet=${params.wallet}`);
+      return listStoresByDomainOwner(params.wallet, params.first ?? 50, chainId);
     },
   );
 

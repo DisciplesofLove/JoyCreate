@@ -10,12 +10,12 @@
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 export const DATA_PROVENANCE_CONTRACTS = {
-  arbitrumSepolia: ZERO_ADDRESS,
+  arbitrumSepolia: "0xe6c66de70de8cfba8129db78ff81d36d7de0ccb8",
   arbitrumOne: ZERO_ADDRESS,
 } as const;
 
 export const DATA_LEASE_CONTRACTS = {
-  arbitrumSepolia: ZERO_ADDRESS,
+  arbitrumSepolia: "0xa3aab9773b8f354aadc2489281aa232b03cacd71",
   arbitrumOne: ZERO_ADDRESS,
 } as const;
 

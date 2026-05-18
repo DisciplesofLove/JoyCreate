@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { atom, useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
+import { toast } from "sonner";
 import { JoyAssistantClient } from "@/ipc/joy_assistant_client";
 import type {
   AssistantAction,
@@ -111,6 +112,38 @@ export function useJoyAssistant(sessionId: string) {
       setPendingActions([]);
     }
   }, [persistedHistory, sessionId]);
+
+  // System-originated notifications (scheduled agent completions, OpenClaw
+  // inbound replies, etc.). Append to the visible thread if the notification
+  // targets the active session; otherwise surface a toast so the user knows
+  // the other session has new activity. Always invalidate history so other
+  // sessions update their cache.
+  const [panelOpen] = useAtom(assistantPanelOpenAtom);
+  const panelOpenRef = useRef(panelOpen);
+  useEffect(() => {
+    panelOpenRef.current = panelOpen;
+  }, [panelOpen]);
+  useEffect(() => {
+    const unsub = JoyAssistantClient.getInstance().onNotification((payload) => {
+      if (payload.sessionId === sessionId) {
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === payload.message.id)) return prev;
+          return [...prev, payload.message];
+        });
+      }
+      queryClient.invalidateQueries({
+        queryKey: assistantKeys.history(payload.sessionId),
+      });
+      queryClient.invalidateQueries({ queryKey: assistantKeys.sessions() });
+      if (!panelOpenRef.current) {
+        const preview = payload.message.content.slice(0, 140);
+        toast("Joy Assistant", {
+          description: preview,
+        });
+      }
+    });
+    return unsub;
+  }, [sessionId, queryClient]);
 
   const startStream = useCallback(
     (

@@ -30,6 +30,12 @@ export interface GeniusCoreBaseModel {
   contextWindow: number;
   /** Execution providers we know this model has been validated on. */
   supportedProviders: GeniusCoreExecutionProvider[];
+  /**
+   * Provenance — "curated" entries are baked into the app, "registry" entries
+   * are loaded at runtime from the on-chain model registry (Phase 9). The
+   * curated set is the offline fallback and always wins for built-ins.
+   */
+  source: "curated" | "registry";
 }
 
 export const GENIUS_CORE_BASE_MODELS: ReadonlyArray<GeniusCoreBaseModel> = [
@@ -41,6 +47,27 @@ export const GENIUS_CORE_BASE_MODELS: ReadonlyArray<GeniusCoreBaseModel> = [
     approxBytes: 2_400_000_000,
     contextWindow: 4096,
     supportedProviders: ["auto", "webgpu", "directml", "cpu"],
+    source: "curated",
+  },
+  {
+    id: "llama-3.2-1b-instruct-q4f16-onnx",
+    hfRepo: "onnx-community/Llama-3.2-1B-Instruct-q4f16",
+    displayName: "Llama 3.2 1B Instruct (Q4F16 ONNX)",
+    quantization: "q4f16",
+    approxBytes: 800_000_000,
+    contextWindow: 8192,
+    supportedProviders: ["auto", "webgpu", "directml", "cpu"],
+    source: "curated",
+  },
+  {
+    id: "qwen2.5-0.5b-instruct-q4-onnx",
+    hfRepo: "onnx-community/Qwen2.5-0.5B-Instruct",
+    displayName: "Qwen 2.5 0.5B Instruct (Q4 ONNX)",
+    quantization: "q4",
+    approxBytes: 380_000_000,
+    contextWindow: 8192,
+    supportedProviders: ["auto", "webgpu", "directml", "cpu"],
+    source: "curated",
   },
 ];
 

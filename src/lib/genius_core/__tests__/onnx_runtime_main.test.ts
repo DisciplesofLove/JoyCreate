@@ -259,6 +259,19 @@ describe("OnnxRuntimeMain — Phase 1 backend", () => {
       expect(p.projectId).toBe("p2");
     });
 
+    it("records lastInference on status() after a successful infer()", async () => {
+      const b = new OnnxRuntimeMain();
+      await b.init();
+      expect(b.status().lastInference).toBeFalsy();
+      await b.infer({ prompt: "hi" });
+      const li = b.status().lastInference;
+      expect(li).toBeDefined();
+      expect(li!.usedShardStream).toBe(false);
+      expect(li!.tokensOut).toBe(2);
+      expect(typeof li!.durationMs).toBe("number");
+      expect(typeof li!.atMs).toBe("number");
+    });
+
     it("passes temperature and maxTokens through to generate()", async () => {
       const b = new OnnxRuntimeMain();
       await b.init();

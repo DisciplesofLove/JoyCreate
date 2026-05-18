@@ -22,10 +22,19 @@ interface AssistantStreamCallbacks {
   onError: (error: string) => void;
 }
 
+export interface AssistantNotification {
+  sessionId: string;
+  message: AssistantMessage;
+  meta?: Record<string, unknown> | null;
+}
+
+type AssistantNotificationHandler = (payload: AssistantNotification) => void;
+
 class JoyAssistantClient {
   private static instance: JoyAssistantClient;
   private ipcRenderer: IpcRenderer;
   private activeStreams: Map<string, AssistantStreamCallbacks> = new Map();
+  private notificationHandlers: Set<AssistantNotificationHandler> = new Set();
 
   private constructor() {
     this.ipcRenderer = (window as any).electron.ipcRenderer as IpcRenderer;
@@ -85,6 +94,25 @@ class JoyAssistantClient {
         this.activeStreams.delete(sessionId);
       }
     });
+
+    this.ipcRenderer.on("joy-assistant:notification", (data) => {
+      if (
+        !data ||
+        typeof data !== "object" ||
+        !("sessionId" in data) ||
+        !("message" in data)
+      ) {
+        return;
+      }
+      const payload = data as AssistantNotification;
+      for (const handler of this.notificationHandlers) {
+        try {
+          handler(payload);
+        } catch {
+          // handler errors must not break other subscribers
+        }
+      }
+    });
   }
 
   // ── Streaming chat ──────────────────────────────────────────────────────
@@ -105,6 +133,18 @@ class JoyAssistantClient {
   cancel(sessionId: string): void {
     this.ipcRenderer.invoke("joy-assistant:cancel", sessionId).catch(() => {});
     this.activeStreams.delete(sessionId);
+  }
+
+  /**
+   * Subscribe to system-originated notifications pushed into Joy Assistant
+   * sessions (e.g. scheduled agent completions, OpenClaw inbound replies).
+   * Returns an unsubscribe function.
+   */
+  onNotification(handler: AssistantNotificationHandler): () => void {
+    this.notificationHandlers.add(handler);
+    return () => {
+      this.notificationHandlers.delete(handler);
+    };
   }
 
   // ── Request/response calls ──────────────────────────────────────────────

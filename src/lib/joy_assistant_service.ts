@@ -209,6 +209,63 @@ export function setSessionTitle(sessionId: string, title: string): void {
   setPersistentSessionTitle(sessionId, title);
 }
 
+/**
+ * Push a system-originated notice into the user's most recent Joy
+ * Assistant session (or a specific one if provided). Used by external
+ * producers like scheduled agent runs or OpenClaw inbound replies to
+ * post results into the in-app chat without the user typing.
+ *
+ * The message is appended to disk-backed history so it survives reloads
+ * and shows up the next time the session is opened. A renderer-side
+ * `joy-assistant:notification` event is also broadcast so any open panel
+ * can refresh.
+ */
+export function pushSystemMessage(args: {
+  content: string;
+  sessionId?: string;
+  meta?: Record<string, unknown>;
+}): { sessionId: string; messageId: string } | null {
+  const trimmed = (args.content ?? "").trim();
+  if (!trimmed) return null;
+
+  let targetSessionId = args.sessionId;
+  if (!targetSessionId) {
+    const sessions = listPersistentSessions();
+    targetSessionId = sessions[0]?.id;
+  }
+  if (!targetSessionId) return null;
+
+  const session = getOrCreateSession(targetSessionId);
+  const msg: AssistantMessage = {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    content: trimmed,
+    timestamp: Date.now(),
+    routingInfo: {
+      providerId: "system",
+      modelId: "system:notification",
+      isLocal: true,
+    },
+  };
+  session.messages.push(msg);
+  touchSession(targetSessionId);
+
+  // Best-effort live notification to renderer panels.
+  try {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send("joy-assistant:notification", {
+        sessionId: targetSessionId,
+        message: msg,
+        meta: args.meta ?? null,
+      });
+    }
+  } catch (err) {
+    logger.debug("Notification broadcast failed", err);
+  }
+
+  return { sessionId: targetSessionId, messageId: msg.id };
+}
+
 /** Drop the last assistant message and return the prior user prompt for re-streaming. */
 export function popLastForRegenerate(sessionId: string): string | undefined {
   return popLastAssistantMessage(sessionId);
@@ -412,6 +469,54 @@ export async function chat(
   };
   session.messages.push(userMsg);
   touchSession(sessionId);
+
+  // 3a. Agent mention shortcut — if the message starts with `@<slug>` or
+  // `/agent <id>`, route it through the agent_builder dispatcher instead
+  // of the smart LLM router. The agent's output is streamed back as the
+  // assistant message (no token-level streaming yet — single delta).
+  try {
+    const { resolveMention, dispatchAgent } = await import(
+      "./agent_dispatcher"
+    );
+    const mention = resolveMention(message);
+    if (mention) {
+      if (abortSignal?.aborted) return;
+      const exec = await dispatchAgent({
+        agentIdOrSlug: mention.agentId,
+        input: mention.remainingText || message,
+        source: "joy-assistant",
+        sessionId,
+      });
+      const outputText =
+        typeof exec.output === "string"
+          ? exec.output
+          : exec.output !== undefined
+            ? JSON.stringify(exec.output, null, 2)
+            : exec.error
+              ? `Agent error: ${exec.error}`
+              : "(agent produced no output)";
+      callbacks.onDelta(outputText);
+      const assistantMsg: AssistantMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: outputText,
+        timestamp: Date.now(),
+        routingInfo: {
+          providerId: "agent",
+          modelId: `agent:${mention.agentId}`,
+          isLocal: true,
+        },
+      };
+      session.messages.push(assistantMsg);
+      touchSession(sessionId);
+      callbacks.onActions([]);
+      callbacks.onEnd();
+      return;
+    }
+  } catch (err) {
+    logger.warn("Agent mention dispatch failed", err);
+    // fall through to normal chat flow
+  }
 
   // 4. Build system prompt with knowledge context + system capabilities
   // The full SYSTEM_TOOLS_PROMPT (with <actions> tag instructions and tool

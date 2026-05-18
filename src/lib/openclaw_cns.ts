@@ -340,6 +340,60 @@ export class OpenClawCNS extends EventEmitter {
     this.emit("request:start", request);
     
     try {
+      // â”€â”€ Agent dispatch shortcut â”€â”€
+      // If the caller targeted a specific agent_builder agent (via
+      // `options.agentId`, or `type === "agent"` with the id in the
+      // input payload), bypass the LLM router and run that agent in-process.
+      const inputObj =
+        typeof request.input === "object" && request.input !== null
+          ? (request.input as Record<string, unknown>)
+          : null;
+      const agentTarget =
+        request.options?.agentId ??
+        (request.type === "agent" && inputObj
+          ? (inputObj.agentId as string | undefined)
+          : undefined);
+      if (agentTarget) {
+        const { dispatchAgent } = await import("./agent_dispatcher");
+        const promptText =
+          typeof request.input === "string"
+            ? request.input
+            : inputObj
+              ? (inputObj.prompt as string | undefined) ??
+                (inputObj.text as string | undefined) ??
+                JSON.stringify(request.input)
+              : "";
+        const exec = await dispatchAgent({
+          agentIdOrSlug: String(agentTarget),
+          input: promptText,
+          source: "cns",
+        });
+        const content =
+          typeof exec.output === "string"
+            ? exec.output
+            : exec.output !== undefined
+              ? JSON.stringify(exec.output)
+              : exec.error
+                ? `Agent error: ${exec.error}`
+                : "";
+        const response: AIResponse = {
+          id: `resp-${request.id}`,
+          requestId: request.id,
+          content,
+          model: `agent:${exec.agentId}`,
+          isLocal: true,
+          usage: {
+            promptTokens: exec.metrics.tokensUsed.input,
+            completionTokens: exec.metrics.tokensUsed.output,
+            totalTokens: exec.metrics.tokensUsed.total,
+          },
+          timing: { totalMs: Date.now() - startTime },
+        };
+        this.activeOperations.delete(request.id);
+        this.emit("request:complete", response);
+        return response;
+      }
+
       // Determine routing (registry-aware)
       const route = await this.determineRoute(request);
       

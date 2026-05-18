@@ -111,6 +111,7 @@ function makeLogger(
     clock,
     scheduler: sched.scheduler,
     cancel: sched.cancel,
+    publishDropped: overrides.publishDropped,
   });
   return {
     logger,
@@ -239,6 +240,20 @@ describe("EditLogger privacy gate", () => {
     });
     expect(logger.record(baseInput())).toBe(false);
   });
+
+  it("passes the projectId to the gate for per-project policy decisions", () => {
+    const seen: Array<number | undefined> = [];
+    const logger = new EditLogger({
+      gate: (projectId) => {
+        seen.push(projectId);
+        return projectId === 7;
+      },
+      writer: vi.fn(),
+    });
+    expect(logger.record(baseInput({ projectId: 1 }))).toBe(false);
+    expect(logger.record(baseInput({ projectId: 7 }))).toBe(true);
+    expect(seen).toEqual([1, 7]);
+  });
 });
 
 // ── Debounce & ordering ──────────────────────────────────────────────────
@@ -351,6 +366,37 @@ describe("EditLogger overflow", () => {
     expect(logger.status().droppedOnOverflow).toBe(2);
     expect(calls[0]).toHaveLength(3);
     expect(calls[0].map((e) => e.sequence)).toEqual([3, 4, 5]);
+  });
+
+  it("invokes publishDropped on overflow with running total", async () => {
+    const publishDropped = vi.fn();
+    const { logger } = makeLogger({ maxBufferSize: 2, publishDropped });
+    for (let i = 0; i < 5; i++) logger.record(baseInput({ text: String(i) }));
+    expect(publishDropped).toHaveBeenCalledTimes(3);
+    // First overflow: buffer 3 → cap 2, drop 1 → total 1.
+    expect(publishDropped.mock.calls[0][0]).toMatchObject({
+      droppedCount: 1,
+      totalDropped: 1,
+      bufferSize: 2,
+      projectId: 1,
+    });
+    expect(publishDropped.mock.calls[2][0]).toMatchObject({
+      droppedCount: 1,
+      totalDropped: 3,
+      bufferSize: 2,
+    });
+  });
+
+  it("publishDropped errors are swallowed", () => {
+    const publishDropped = vi.fn(() => {
+      throw new Error("bus down");
+    });
+    const { logger } = makeLogger({ maxBufferSize: 1, publishDropped });
+    expect(() => {
+      logger.record(baseInput({ text: "a" }));
+      logger.record(baseInput({ text: "b" }));
+    }).not.toThrow();
+    expect(publishDropped).toHaveBeenCalledTimes(1);
   });
 });
 

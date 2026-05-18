@@ -28,6 +28,23 @@ import {
   ChevronRight,
   ShoppingBag,
   Sparkles,
+  Fingerprint,
+  Image as ImageIcon,
+  Video,
+  GraduationCap,
+  Calendar,
+  Code2,
+  BrainCircuit,
+  KeyRound,
+  Trophy,
+  CircleDollarSign,
+  BellRing,
+  BarChart3,
+  ScrollText,
+  Hammer,
+  Puzzle,
+  Store,
+  Lock,
   type LucideIcon,
 } from "lucide-react";
 import { Link, useRouter } from "@tanstack/react-router";
@@ -102,6 +119,20 @@ const quickActions: {
     gradient: "from-purple-500/20 to-indigo-500/20",
   },
   {
+    icon: Fingerprint,
+    label: "Identity Hub",
+    description: "Manage DIDs, ENS & JNS records",
+    to: "/identity",
+    gradient: "from-teal-500/20 to-cyan-500/20",
+  },
+  {
+    icon: ImageIcon,
+    label: "Image Studio",
+    description: "Generate & edit images with AI",
+    to: "/image-studio",
+    gradient: "from-fuchsia-500/20 to-pink-500/20",
+  },
+  {
     icon: Sparkles,
     label: "My Creations",
     description: "Manage your published assets",
@@ -129,7 +160,10 @@ const systemNavCategories: {
       { title: "Library", to: "/library", icon: BookOpen, gradient: "from-amber-500 to-yellow-500" },
       { title: "MCP Hub", to: "/mcp-hub", icon: Plug, gradient: "from-indigo-500 to-violet-500" },
       { title: "Email Hub", to: "/email-hub", icon: Mail, gradient: "from-emerald-500 to-teal-500" },
+      { title: "Smart Browser", to: "/smart-browser", icon: Globe, gradient: "from-sky-500 to-indigo-500" },
       { title: "Marketplace", to: "/nft-marketplace", icon: ShoppingBag, gradient: "from-purple-500 to-indigo-500" },
+      { title: "Plugin Marketplace", to: "/plugin-marketplace", icon: Puzzle, gradient: "from-fuchsia-500 to-pink-500" },
+      { title: "Joy Marketplace", to: "/joy/marketplace", icon: Store, gradient: "from-rose-500 to-pink-500" },
     ],
   },
   {
@@ -140,23 +174,44 @@ const systemNavCategories: {
       { title: "Agents", to: "/agents", icon: Bot, gradient: "from-violet-500 to-purple-500" },
       { title: "Agent Swarm", to: "/agent-swarm", icon: Network, gradient: "from-fuchsia-500 to-violet-500" },
       { title: "Workflows", to: "/workflows", icon: Workflow, gradient: "from-orange-500 to-amber-500" },
+      { title: "Skills", to: "/skills", icon: Sparkles, gradient: "from-amber-500 to-orange-500" },
+      { title: "Training Center", to: "/training", icon: GraduationCap, gradient: "from-emerald-500 to-teal-500" },
+      { title: "Calendar", to: "/calendar", icon: Calendar, gradient: "from-cyan-500 to-blue-500" },
     ],
   },
   {
     label: "Build",
     headerGradient: "from-emerald-600 to-teal-600",
     items: [
+      { title: "Image Studio", to: "/image-studio", icon: ImageIcon, gradient: "from-fuchsia-500 to-pink-500" },
+      { title: "Video Studio", to: "/video-studio", icon: Video, gradient: "from-rose-500 to-fuchsia-500" },
+      { title: "Code Studio", to: "/code-studio", icon: Code2, gradient: "from-indigo-500 to-blue-500" },
+      { title: "NLP Studio", to: "/nlp-studio", icon: BrainCircuit, gradient: "from-purple-500 to-fuchsia-500" },
+      { title: "Asset Studio", to: "/asset-studio", icon: Package, gradient: "from-fuchsia-500 to-pink-500" },
+      { title: "Data Studio", to: "/datasets", icon: Database, gradient: "from-emerald-500 to-teal-500" },
+      { title: "Sovereign Forge", to: "/sovereign-forge", icon: Hammer, gradient: "from-amber-500 to-orange-500" },
       { title: "Local AI", to: "/local-models", icon: Shield, gradient: "from-emerald-500 to-teal-500" },
       { title: "Model Manager", to: "/model-download", icon: Download, gradient: "from-teal-500 to-cyan-500" },
+      { title: "Model Registry", to: "/model-registry", icon: Layers, gradient: "from-cyan-500 to-blue-500" },
       { title: "Documents", to: "/documents", icon: FileText, gradient: "from-sky-500 to-cyan-500" },
-      { title: "Data Studio", to: "/datasets", icon: Database, gradient: "from-emerald-500 to-teal-500" },
+      { title: "Knowledge", to: "/agents/knowledge", icon: Brain, gradient: "from-violet-500 to-purple-500" },
       { title: "Web Scraping", to: "/scraping", icon: Globe, gradient: "from-rose-500 to-orange-500" },
       { title: "Data Vault", to: "/local-vault", icon: HardDrive, gradient: "from-amber-500 to-orange-500" },
-      { title: "Knowledge Base", to: "/knowledge-base", icon: Brain, gradient: "from-violet-500 to-purple-500" },
-      { title: "Asset Studio", to: "/asset-studio", icon: Package, gradient: "from-fuchsia-500 to-pink-500" },
-      { title: "AI Operations", to: "/system-services", icon: Activity, gradient: "from-emerald-500 to-green-500" },
       { title: "OpenClaw Control", to: "/openclaw-control", icon: Radio, gradient: "from-rose-500 to-orange-500" },
       { title: "OpenClaw Board", to: "/openclaw-kanban", icon: Kanban, gradient: "from-red-500 to-orange-500" },
+    ],
+  },
+  {
+    label: "Identity & Reputation",
+    headerGradient: "from-teal-600 to-cyan-600",
+    items: [
+      { title: "Identity Hub", to: "/identity", icon: Fingerprint, gradient: "from-teal-500 to-cyan-500" },
+      { title: "SSI Credentials", to: "/ssi-credentials", icon: KeyRound, gradient: "from-indigo-500 to-violet-500" },
+      { title: "Reputation", to: "/reputation", icon: Trophy, gradient: "from-amber-500 to-yellow-500" },
+      { title: "Earnings", to: "/earnings", icon: CircleDollarSign, gradient: "from-emerald-500 to-green-500" },
+      { title: "Tokenomics", to: "/tokenomics", icon: Coins, gradient: "from-yellow-500 to-amber-500" },
+      { title: "Profile", to: "/profile", icon: Sparkles, gradient: "from-pink-500 to-rose-500" },
+      { title: "Privacy", to: "/privacy", icon: Lock, gradient: "from-slate-500 to-zinc-500" },
     ],
   },
   {
@@ -164,12 +219,28 @@ const systemNavCategories: {
     headerGradient: "from-violet-600 to-fuchsia-600",
     items: [
       { title: "Publish", to: "/deploy", icon: Rocket, gradient: "from-violet-500 to-fuchsia-500" },
+      { title: "App Publishing", to: "/app-publishing", icon: Package, gradient: "from-indigo-500 to-violet-500" },
       { title: "Web3 Deploy", to: "/decentralized-deploy", icon: Layers, gradient: "from-cyan-500 to-blue-500" },
-      { title: "Marketplace", to: "/nft-marketplace", icon: Coins, gradient: "from-purple-500 to-indigo-500" },
+      { title: "On-Chain Market", to: "/on-chain-marketplace", icon: Coins, gradient: "from-purple-500 to-indigo-500" },
       { title: "Federation", to: "/federation", icon: Globe, gradient: "from-cyan-500 to-teal-500" },
       { title: "P2P Chat", to: "/decentralized-chat", icon: Radio, gradient: "from-green-500 to-emerald-500" },
       { title: "AI Compute", to: "/compute", icon: Cpu, gradient: "from-amber-500 to-orange-500" },
       { title: "My Creations", to: "/creator", icon: Sparkles, gradient: "from-orange-500 to-amber-500" },
+      { title: "My Assets", to: "/my-marketplace-assets", icon: ShoppingBag, gradient: "from-rose-500 to-pink-500" },
+    ],
+  },
+  {
+    label: "Operate",
+    headerGradient: "from-slate-600 to-zinc-600",
+    items: [
+      { title: "AI Operations", to: "/system-services", icon: Activity, gradient: "from-emerald-500 to-green-500" },
+      { title: "Genius Core", to: "/genius-core", icon: BrainCircuit, gradient: "from-fuchsia-500 to-purple-500" },
+      { title: "Notifications", to: "/notifications", icon: BellRing, gradient: "from-amber-500 to-orange-500" },
+      { title: "Analytics", to: "/analytics", icon: BarChart3, gradient: "from-cyan-500 to-blue-500" },
+      { title: "Audit Log", to: "/audit-log", icon: ScrollText, gradient: "from-rose-500 to-red-500" },
+      { title: "Backup", to: "/backup", icon: HardDrive, gradient: "from-emerald-500 to-teal-500" },
+      { title: "Data Sovereignty", to: "/data-sovereignty", icon: Shield, gradient: "from-indigo-500 to-violet-500" },
+      { title: "Admin", to: "/admin", icon: LayoutDashboard, gradient: "from-slate-500 to-zinc-500" },
     ],
   },
 ];
@@ -266,7 +337,7 @@ const HubPage: React.FC = () => {
       {/* ── System Navigation ───────────────────────────────────────── */}
       <section>
         <SectionHeading>System Navigation</SectionHeading>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {systemNavCategories.map((cat) => (
             <div
               key={cat.label}

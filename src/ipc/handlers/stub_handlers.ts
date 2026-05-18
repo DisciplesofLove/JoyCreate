@@ -33,28 +33,7 @@ const logger = log.scope("ipc-stub");
 type StubBehavior = "list" | "get" | "mutation" | "void";
 
 const STUB_CHANNELS: Array<{ channel: string; behavior: StubBehavior }> = [
-  // Unified Identity Hub
-  { channel: "identity:get-current", behavior: "get" },
-  { channel: "identity:create", behavior: "mutation" },
-  { channel: "identity:ens:list", behavior: "list" },
-  { channel: "identity:jns:list", behavior: "list" },
-  { channel: "identity:events:list", behavior: "list" },
-
-  // OpenClaw Agent Command Center
-  { channel: "openclaw:sessions:list", behavior: "list" },
-  { channel: "openclaw:sessions:history", behavior: "list" },
-  { channel: "openclaw:sessions:send", behavior: "mutation" },
-  { channel: "openclaw:subagents:list", behavior: "list" },
-  { channel: "openclaw:subagents:kill", behavior: "mutation" },
-  { channel: "openclaw:subagents:steer", behavior: "mutation" },
-  { channel: "openclaw:cron:list", behavior: "list" },
-  { channel: "openclaw:cron:update", behavior: "mutation" },
-  { channel: "openclaw:cron:remove", behavior: "mutation" },
-  { channel: "openclaw:cron:run", behavior: "mutation" },
-  { channel: "openclaw:celestia:receipts:list", behavior: "list" },
-  { channel: "joycreate:agents:list", behavior: "list" },
-  { channel: "joycreate:agents:update", behavior: "mutation" },
-  { channel: "joycreate:agents:deploy", behavior: "mutation" },
+  // Unified Identity Hub — implemented in identity_handlers.ts
 
   // Data Studio Extended — version control
   { channel: "version-control:initialize", behavior: "mutation" },
@@ -92,10 +71,6 @@ const STUB_CHANNELS: Array<{ channel: string; behavior: StubBehavior }> = [
   { channel: "dashboard:update", behavior: "mutation" },
   { channel: "dashboard:list", behavior: "list" },
   { channel: "dashboard:get-data", behavior: "get" },
-
-  // Data Studio Extended — generation jobs/templates
-  { channel: "generation:list-jobs", behavior: "list" },
-  { channel: "generation:save-template", behavior: "mutation" },
 ];
 
 function safeDefault(behavior: StubBehavior): unknown {
@@ -114,9 +89,17 @@ function safeDefault(behavior: StubBehavior): unknown {
 
 export function registerStubHandlers(): void {
   logger.info(`Registering ${STUB_CHANNELS.length} stub IPC handlers`);
+  // Track which stub channels have already been logged this session so we
+  // don't flood the console when a UI polls a stubbed endpoint on a timer.
+  const warned = new Set<string>();
   for (const { channel, behavior } of STUB_CHANNELS) {
     ipcMain.handle(channel, async () => {
-      logger.debug(`stub invoked: ${channel} (returning ${behavior} default)`);
+      if (!warned.has(channel)) {
+        warned.add(channel);
+        logger.warn(
+          `stub invoked: ${channel} — no real handler registered (returning ${behavior} default). Further calls will be silent.`,
+        );
+      }
       return safeDefault(behavior);
     });
   }

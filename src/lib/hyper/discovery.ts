@@ -36,6 +36,7 @@ export type HyperScope =
   | "sovereign-models"
   | "radicle-trust"
   | "federation"
+  | "genius-core"
   | "custom";
 
 export interface TopicId {

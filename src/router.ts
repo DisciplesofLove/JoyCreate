@@ -8,9 +8,15 @@ import { appDetailsRoute } from "./routes/app-details";
 import { hubRoute } from "./routes/hub";
 import { mcpHubRoute } from "./routes/mcp-hub";
 import { libraryRoute } from "./routes/library";
-import { agentsRoute, agentEditorRoute, agentTestRoute, agentPreviewRoute } from "./routes/agents";
+import { agentsRoute, agentEditorRoute, agentTestRoute, agentPreviewRoute, agentGalleryRoute } from "./routes/agents";
+import { featuredTasksRoute } from "./routes/featured-tasks";
+import { agentSchedulesRoute } from "./routes/agent-schedules";
+import { agentKnowledgeRoute } from "./routes/agent-knowledge";
+import { agentObservabilityRoute } from "./routes/agent-observability";
+import { mcpToolsRoute } from "./routes/mcp-tools";
 import { workflowsRoute } from "./routes/workflows";
 import { localModelsRoute } from "./routes/local-models";
+import { geniusCoreRoute } from "./routes/genius-core";
 import { documentsRoute, documentEditorRoute } from "./routes/documents";
 import { deployRoute } from "./routes/deploy";
 import { datasetsRoute } from "./routes/datasets";
@@ -112,11 +118,18 @@ const routeTree = rootRoute.addChildren([
   settingsRoute,
   providerSettingsRoute,
   agentsRoute,
+  agentGalleryRoute,
+  featuredTasksRoute,
+  agentSchedulesRoute,
+  agentKnowledgeRoute,
+  agentObservabilityRoute,
+  mcpToolsRoute,
   agentEditorRoute,
   agentTestRoute,
   agentPreviewRoute,
   workflowsRoute,
   localModelsRoute,
+  geniusCoreRoute,
   documentsRoute,
   documentEditorRoute,
   deployRoute,

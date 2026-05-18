@@ -12,10 +12,12 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
 import { IpcClient } from "@/ipc/ipc_client";
 import type { GeniusCoreDistillationReceiptDto } from "@/ipc/handlers/genius_core_handlers";
 import type { DistillationStatus } from "@/lib/genius_core/distillation_scheduler";
+import type { GeniusCoreDistillationProgressPayload } from "@/lib/events/domain_event_bus";
 import { showError, showSuccess } from "@/lib/toast";
 
 const ipc = () => IpcClient.getInstance();
@@ -73,4 +75,20 @@ export function useSetGeniusCoreDistillationEnabled() {
       showError(`Failed to update distillation setting: ${err.message}`);
     },
   });
+}
+
+/**
+ * Subscribe to per-step distillation progress ticks. Optionally scope to a
+ * single `runId` (e.g. for the actively-displayed project run).
+ */
+export function useDistillationProgress(opts?: { runId?: string | null }) {
+  const [last, setLast] = useState<GeniusCoreDistillationProgressPayload | null>(null);
+  useEffect(() => {
+    const unsub = IpcClient.getInstance().onGeniusCoreDistillationProgress((p) => {
+      if (opts?.runId && p.runId !== opts.runId) return;
+      setLast(p);
+    });
+    return () => unsub();
+  }, [opts?.runId]);
+  return last;
 }

@@ -36,7 +36,7 @@ import {
   Loader2,
   Pencil,
 } from "lucide-react";
-import { useRouter } from "@tanstack/react-router";
+import { useRouter, Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import type { Skill, CreateSkillParams } from "@/types/skill_types";
 import type { AgentCapability } from "@/types/agent_factory_types";
@@ -329,16 +329,8 @@ export default function SkillsPage() {
           </TabsContent>
 
           {/* ── Skill Store Tab ── */}
-          <TabsContent value="store">
-            <div className="text-center py-20 text-muted-foreground">
-              <Package className="h-12 w-12 mx-auto mb-4 opacity-30" />
-              <p className="text-lg font-medium">
-                Skill Marketplace — Coming Soon
-              </p>
-              <p className="text-sm mt-1">
-                Browse and install skills from the JoyMarketplace.
-              </p>
-            </div>
+          <TabsContent value="store" className="space-y-4">
+            <SkillStoreTab />
           </TabsContent>
 
           {/* ── Generate Tab ── */}
@@ -633,6 +625,127 @@ function SkillDetail({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+
+// ============================================================================
+// SkillStoreTab � browse skills already published locally + link to Joy
+// Marketplace for the full cross-user marketplace experience.
+//
+// The dedicated "skill" marketplace asset type is tracked separately
+// (briefs/nav-consolidation-audit.md). Until it lands, skills are surfaced
+// inside the unified `/joy/marketplace?type=plugin` view because plugin is
+// the closest publishable wrapper for executable user-authored skills.
+// ============================================================================
+function SkillStoreTab() {
+  const queryClient = useQueryClient();
+
+  const { data: publishedSkills = [], isLoading } = useQuery({
+    queryKey: ["skills", "store", "published"],
+    queryFn: () => ipc.searchSkills({ publishStatus: "published" }),
+  });
+
+  const unpublishMutation = useMutation({
+    mutationFn: (skillId: number) => ipc.unpublishSkill(skillId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["skills"] });
+      toast.success("Skill unpublished");
+    },
+    onError: (err: Error) => toast.error(`Failed to unpublish: ${err.message}`),
+  });
+
+  return (
+    <div className="space-y-6">
+      {/* CTA: open Joy Marketplace */}
+      <div className="rounded-xl border border-border/50 bg-card p-5 flex items-center gap-4">
+        <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center shrink-0">
+          <Package className="h-6 w-6 text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-base font-semibold">Browse Joy Marketplace</h3>
+          <p className="text-sm text-muted-foreground">
+            Discover and install skills, agents, workflows, plugins, and
+            datasets published by other creators.
+          </p>
+        </div>
+        <Button asChild size="sm">
+          <Link
+            to="/joy/marketplace"
+            search={{ type: "plugin" as const }}
+            className="inline-flex items-center gap-1"
+          >
+            Open Marketplace
+          </Link>
+        </Button>
+      </div>
+
+      {/* My published skills */}
+      <div>
+        <h3 className="text-sm font-semibold mb-3 text-muted-foreground">
+          Your Published Skills
+        </h3>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : publishedSkills.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground border border-dashed border-border/50 rounded-xl">
+            <Package className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p className="text-sm font-medium">No published skills yet</p>
+            <p className="text-xs mt-1">
+              Publish a skill from the "My Skills" tab to list it here.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {publishedSkills.map((skill) => (
+              <div
+                key={skill.id}
+                className="rounded-xl border border-border/50 bg-card p-4 space-y-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h4 className="text-sm font-semibold truncate">
+                      {skill.name}
+                    </h4>
+                    <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
+                      {skill.description}
+                    </p>
+                  </div>
+                  <Badge variant="secondary" className="text-[10px] shrink-0">
+                    Published
+                  </Badge>
+                </div>
+                <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                  <span className="inline-flex items-center gap-1">
+                    <Download className="h-3 w-3" />
+                    {skill.downloads ?? 0}
+                  </span>
+                  <span>? {Number(skill.rating ?? 0).toFixed(1)}</span>
+                  {skill.price > 0 ? (
+                    <span className="ml-auto font-medium text-foreground">
+                      {skill.price} {skill.currency || "USD"}
+                    </span>
+                  ) : (
+                    <span className="ml-auto">Free</span>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => unpublishMutation.mutate(skill.id)}
+                  disabled={unpublishMutation.isPending}
+                >
+                  Unpublish
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

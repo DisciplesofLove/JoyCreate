@@ -18,6 +18,8 @@ import { eq, desc } from "drizzle-orm";
 import log from "electron-log";
 
 import { registerAgentBuilderSystemHandlers } from "./agent_builder_system_handlers";
+import { registerAgentScheduleHandlers } from "./agent_schedule_handlers";
+import { registerAgentKnowledgeHandlers } from "./agent_knowledge_handlers";
 
 import type {
   CreateAgentRequest,
@@ -657,6 +659,8 @@ export function registerAgentBuilderHandlers(): void {
   // namespace from this file's `agent:*` channels, but same domain — chain
   // it so callers only need a single registration entry point.
   registerAgentBuilderSystemHandlers();
+  registerAgentScheduleHandlers();
+  registerAgentKnowledgeHandlers();
 }
 
 // ============================================================================

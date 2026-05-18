@@ -3083,6 +3083,67 @@ export const editLogEntries = sqliteTable("edit_log_entries", {
 
 
 // =============================================================================
+// Genius Core — Adapter quality scoring + auto-rollback
+// =============================================================================
+
+/**
+ * Per-project evaluation set used by `evaluateAdapter()` to score a freshly
+ * distilled adapter before it is allowed to replace the active context slot.
+ * `prompts` is the list of probe inputs; `expectedKeywords` is a parallel
+ * array of keyword arrays — a response scores 1 if any keyword appears
+ * (case-insensitive), 0 otherwise. Final score is the mean across prompts.
+ *
+ * Keyword scoring is intentionally model-agnostic and dependency-free for
+ * v1. Later phases can swap in embedding-similarity or judge-LLM scorers.
+ */
+export const geniusCoreEvalSets = sqliteTable("genius_core_eval_sets", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull().unique(),
+  prompts: text("prompts", { mode: "json" }).$type<string[]>().notNull(),
+  expectedKeywords: text("expected_keywords", { mode: "json" })
+    .$type<string[][]>()
+    .notNull(),
+  /** Most recent score against the active adapter, in [0, 1]. */
+  lastScore: real("last_score"),
+  lastEvaluatedAt: integer("last_evaluated_at", { mode: "timestamp" }),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * Append-only ledger of every adapter evaluation. Lets the scheduler
+ * compare a new adapter against the previous best and roll back on
+ * regression. Also powers the "training quality" chart in the control
+ * panel.
+ */
+export const geniusCoreAdapterScores = sqliteTable("genius_core_adapter_scores", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull(),
+  /** Trainer-defined adapter id (matches DistillationReceipt.adapterId). */
+  adapterId: text("adapter_id").notNull(),
+  /** Context-slot CID the adapter was published under; null on rollback rows. */
+  slotCid: text("slot_cid"),
+  /** Mean score across the project eval set, in [0, 1]. */
+  score: real("score").notNull(),
+  /** Number of eval prompts the score was computed over. */
+  sampleCount: integer("sample_count").notNull(),
+  /** "applied" | "rolled_back" | "rejected" (never written as a slot). */
+  outcome: text("outcome", {
+    enum: ["applied", "rolled_back", "rejected"],
+  }).notNull().default("applied"),
+  /** Score of the previous adapter that this entry was compared against. */
+  baselineScore: real("baseline_score"),
+  evaluatedAt: integer("evaluated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+
+// =============================================================================
 // DEAI Phase 0 — Domain Events, Notifications, Earnings, On-chain Listener
 // =============================================================================
 
@@ -3356,6 +3417,43 @@ export const apiUsageRecords = sqliteTable("api_usage_records", {
   /** Computed wei charged for this call (decimal string). */
   chargedWei: text("charged_wei").notNull().default("0"),
   errorMessage: text("error_message"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+
+// ============================================================================
+// UNIVERSAL IDENTITY (single-user, local-first)
+//   - one row per identity in `unified_identities` (typically just one)
+//   - all subsystem records (UniversalIdentity, ENS list, JNS list, events)
+//     are persisted as JSON blobs to avoid migrating the full 50+ field type
+// ============================================================================
+
+export const unifiedIdentities = sqliteTable("unified_identities", {
+  did: text("did").primaryKey(),
+  isCurrent: integer("is_current", { mode: "boolean" }).notNull().default(false),
+  identityJson: text("identity_json").notNull(),
+  ensRecordsJson: text("ens_records_json").notNull().default("[]"),
+  jnsRecordsJson: text("jns_records_json").notNull().default("[]"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+export const unifiedIdentityEvents = sqliteTable("unified_identity_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  eventId: text("event_id").notNull().unique(),
+  did: text("did").notNull(),
+  type: text("type").notNull(),
+  description: text("description").notNull(),
+  triggeredBy: text("triggered_by").notNull(),
+  dataHash: text("data_hash").notNull(),
+  changesJson: text("changes_json"),
+  metadataJson: text("metadata_json"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),

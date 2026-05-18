@@ -62,11 +62,33 @@ export interface GeniusCoreStatusReport {
   vramBudgetGb: number;
   vramUsedBytes: number;
   lastError?: string;
+  /**
+   * Summary of the most recent inference, populated by the backend so
+   * the control panel can surface peer-shard usage and tokens-per-second.
+   * `null` until the first inference completes.
+   */
+  lastInference?: {
+    /** True when the last step pulled shards live from peers. */
+    usedShardStream: boolean;
+    /** Tokens emitted in the last inference. */
+    tokensOut: number;
+    /** Wall-clock duration of the last inference, ms. */
+    durationMs: number;
+    /** Wall-clock timestamp when the inference completed. */
+    atMs: number;
+  } | null;
 }
 
 export interface GeniusCoreBackend {
   init(): Promise<void>;
   loadBase(): Promise<void>;
+  /**
+   * Runtime swap to a new base model. Validates the id against the catalogue,
+   * frees the current session, and eagerly loads the new base so the next
+   * inference does not incur a cold-start. Caller is responsible for
+   * persisting `geniusCore.baseModelId` in user settings before calling.
+   */
+  switchBaseModel(modelId: string): Promise<void>;
   loadContextSlot(projectId: string): Promise<void>;
   infer(req: GeniusCoreInferRequest): Promise<GeniusCoreInferResponse>;
   streamInfer(
@@ -86,6 +108,9 @@ class UninitializedBackend implements GeniusCoreBackend {
     );
   }
   async loadBase(): Promise<void> {
+    throw new Error("Genius Core not initialized");
+  }
+  async switchBaseModel(_modelId: string): Promise<void> {
     throw new Error("Genius Core not initialized");
   }
   async loadContextSlot(_projectId: string): Promise<void> {
@@ -156,6 +181,11 @@ class GeniusCoreSingleton {
 
   async loadBase(): Promise<void> {
     return this.backend.loadBase();
+  }
+
+  async switchBaseModel(modelId: string): Promise<void> {
+    if (!modelId) throw new Error("modelId is required");
+    return this.backend.switchBaseModel(modelId);
   }
 
   async loadContextSlot(projectId: string): Promise<void> {

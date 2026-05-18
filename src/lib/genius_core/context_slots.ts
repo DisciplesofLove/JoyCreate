@@ -25,6 +25,7 @@
 
 import * as dagCbor from "@ipld/dag-cbor";
 import log from "electron-log";
+import { mirrorGeniusCoreEvent } from "./hyper_bridge";
 
 const logger = log.scope("genius_core.context_slots");
 
@@ -53,6 +54,13 @@ export interface ContextSlotStore {
   putBlock(bytes: Uint8Array): Promise<string>;
   getBlock(cid: string): Promise<Uint8Array>;
   pin(cid: string): Promise<void>;
+  /**
+   * Release a previously-pinned CID so Helia can reclaim its bytes on
+   * next GC. Optional — implementations that don't support unpinning
+   * may omit this; {@link ContextSlotManager.pruneHistory} treats the
+   * absence as a soft "keep everything pinned" policy.
+   */
+  unpin?(cid: string): Promise<void>;
 }
 
 /** DB-backed mapping projectId → current slot CID. */
@@ -77,8 +85,23 @@ export type ContextSlotEvent =
       blockBytes: number;
       adapterBytes: number;
     }
+  | {
+      type: "rolled_back";
+      projectId: string;
+      /** Slot that was rolled back from (no longer head). */
+      fromCid: string;
+      /** Slot that is now the head; null if rollback cleared the project. */
+      toCid: string | null;
+    }
   | { type: "loaded"; projectId: string; cid: string; loadDurationMs: number }
-  | { type: "cleared"; projectId: string; previousCid: string | null };
+  | { type: "cleared"; projectId: string; previousCid: string | null }
+  | {
+      type: "pruned";
+      projectId: string;
+      keptCids: string[];
+      prunedCids: string[];
+      unpinned: boolean;
+    };
 
 export interface ContextSlotManagerOptions {
   store: ContextSlotStore;
@@ -146,6 +169,14 @@ export class ContextSlotManager {
       cid,
       blockBytes: encoded.byteLength,
       adapterBytes: args.adapterBytes.byteLength,
+    });
+    mirrorGeniusCoreEvent(args.projectId, {
+      type: "slot",
+      projectId: args.projectId,
+      cid,
+      baseModelId: args.baseModelId,
+      previousCid: null,
+      ts: this.now(),
     });
     return { cid, block };
   }
@@ -218,6 +249,14 @@ export class ContextSlotManager {
       blockBytes: encoded.byteLength,
       adapterBytes: args.adapterBytes.byteLength,
     });
+    mirrorGeniusCoreEvent(args.projectId, {
+      type: "slot",
+      projectId: args.projectId,
+      cid,
+      baseModelId: args.baseModelId,
+      previousCid,
+      ts: this.now(),
+    });
     return { cid, block };
   }
 
@@ -232,6 +271,35 @@ export class ContextSlotManager {
     if (!previousCid) return;
     await this.registry.write(projectId, null);
     this.emit({ type: "cleared", projectId, previousCid });
+  }
+
+  /**
+   * Revert the project's head to its previous slot CID (one DAG hop back).
+   * Used by the adapter quality scorer to auto-rollback a regressed
+   * adapter. Returns the new head CID (null if the project's history
+   * has only a single slot — in which case the project is cleared).
+   */
+  async rollbackSlot(
+    projectId: string,
+  ): Promise<{ fromCid: string; toCid: string | null }> {
+    this.assertProjectId(projectId);
+    const currentCid = await this.registry.read(projectId);
+    if (!currentCid) {
+      throw new Error(
+        `Project ${projectId} has no context slot to rollback from`,
+      );
+    }
+    const raw = await this.store.getBlock(currentCid);
+    const block = this.decode(raw);
+    const toCid = block.previousCid;
+    await this.registry.write(projectId, toCid);
+    this.emit({
+      type: "rolled_back",
+      projectId,
+      fromCid: currentCid,
+      toCid,
+    });
+    return { fromCid: currentCid, toCid };
   }
 
   /**
@@ -254,6 +322,58 @@ export class ContextSlotManager {
       yield { cid: cursor, block };
       cursor = block.previousCid;
     }
+  }
+
+  /**
+   * Walk the DAG newest-first and unpin every slot beyond a retention
+   * policy. Always preserves:
+   *   • the current head + the most-recent `keepLast` slots
+   *   • any slot whose metadata.published === true (on-chain anchors)
+   *
+   * IPLD blocks themselves are content-addressed and never mutated —
+   * pruning only releases local pins so Helia can reclaim bytes on the
+   * next GC. The chain's `previousCid` links remain intact; pruned
+   * blocks may still be re-fetched from the swarm.
+   *
+   * Best-effort: a single unpin failure is logged and skipped so one
+   * bad CID can't strand the rest of the policy.
+   */
+  async pruneHistory(
+    projectId: string,
+    opts?: { keepLast?: number },
+  ): Promise<{ keptCids: string[]; prunedCids: string[] }> {
+    this.assertProjectId(projectId);
+    const keepLast = Math.max(1, opts?.keepLast ?? 10);
+    const kept: string[] = [];
+    const pruned: string[] = [];
+    let index = 0;
+    for await (const { cid, block } of this.history(projectId)) {
+      const isPublished = block.metadata?.published === true;
+      if (index < keepLast || isPublished) {
+        kept.push(cid);
+      } else {
+        pruned.push(cid);
+      }
+      index += 1;
+    }
+    const canUnpin = typeof this.store.unpin === "function";
+    if (canUnpin) {
+      for (const cid of pruned) {
+        try {
+          await this.store.unpin!(cid);
+        } catch (err) {
+          logger.warn(`context slot prune: unpin ${cid} failed`, err);
+        }
+      }
+    }
+    this.emit({
+      type: "pruned",
+      projectId,
+      keptCids: kept,
+      prunedCids: pruned,
+      unpinned: canUnpin,
+    });
+    return { keptCids: kept, prunedCids: pruned };
   }
 
   // ── internals ──────────────────────────────────────────────────────────
@@ -364,6 +484,9 @@ export async function setupContextSlotManager(): Promise<ContextSlotManager> {
     async pin(cid) {
       await heliaVerificationService.pinCid(cid);
     },
+    async unpin(cid) {
+      await heliaVerificationService.unpinCid(cid);
+    },
   };
 
   const registry: ContextSlotRegistry = {
@@ -397,12 +520,27 @@ export async function setupContextSlotManager(): Promise<ContextSlotManager> {
     store,
     registry,
     onEvent: (event) => {
-      if (event.type !== "loaded") return;
-      void bus.publish("genius_core.context_slot.loaded", {
-        projectId: event.projectId,
-        slotCid: event.cid,
-        loadDurationMs: event.loadDurationMs,
-      });
+      if (event.type === "loaded") {
+        void bus.publish("genius_core.context_slot.loaded", {
+          projectId: event.projectId,
+          slotCid: event.cid,
+          loadDurationMs: event.loadDurationMs,
+        });
+        return;
+      }
+      if (event.type === "pruned") {
+        // Best-effort metadata mirror to the peer layer. Carries counts
+        // only — never per-CID lists.
+        mirrorGeniusCoreEvent(event.projectId, {
+          type: "slot_prune",
+          projectId: event.projectId,
+          prunedCount: event.prunedCids.length,
+          keptCount: event.keptCids.length,
+          unpinned: event.unpinned,
+          ts: Date.now(),
+        });
+        return;
+      }
     },
   });
   logger.info("Context slot manager wired (Helia + projects table)");

@@ -61,6 +61,7 @@ const hoisted = vi.hoisted(() => {
       };
     }),
     shutdown: vi.fn(async () => {}),
+    switchBaseModel: vi.fn(async () => {}),
   };
   return { registered, writeSettingsMock, readSettingsMock, geniusCoreMock };
 });
@@ -170,7 +171,7 @@ describe("registerGeniusCoreHandlers", () => {
     registerGeniusCoreHandlers();
   });
 
-  it("registers all fifteen channels", () => {
+  it("registers all expected channels", () => {
     expect([...registered.keys()].sort()).toEqual(
       [
         "genius-core:distillation-run-now",
@@ -178,14 +179,20 @@ describe("registerGeniusCoreHandlers", () => {
         "genius-core:distillation-status",
         "genius-core:export-edit-session",
         "genius-core:flush-edit-log",
+        "genius-core:get-eval-set",
+        "genius-core:get-keystroke-overrides",
         "genius-core:init",
         "genius-core:infer",
+        "genius-core:list-adapter-scores",
         "genius-core:list-base-models",
         "genius-core:load-context-slot",
         "genius-core:open-project-slot",
         "genius-core:peek-project-slot",
         "genius-core:record-edit",
         "genius-core:set-base-model",
+        "genius-core:set-eval-set",
+        "genius-core:set-keystroke-override",
+        "genius-core:set-rollback-threshold",
         "genius-core:status",
         "genius-core:stream-infer",
       ].sort(),
@@ -243,14 +250,16 @@ describe("registerGeniusCoreHandlers", () => {
     expect(writeSettingsMock).not.toHaveBeenCalled();
   });
 
-  it("set-base-model persists known id and triggers shutdown", async () => {
+  it("set-base-model persists known id and hot-swaps the runtime", async () => {
     await call("genius-core:set-base-model", "phi-3-mini-4k-instruct-int4-onnx");
     expect(writeSettingsMock).toHaveBeenCalledTimes(1);
     const arg = writeSettingsMock.mock.calls[0][0] as {
       geniusCore: { baseModelId: string };
     };
     expect(arg.geniusCore.baseModelId).toBe("phi-3-mini-4k-instruct-int4-onnx");
-    expect(geniusCoreMock.shutdown).toHaveBeenCalledTimes(1);
+    expect(geniusCoreMock.switchBaseModel).toHaveBeenCalledWith(
+      "phi-3-mini-4k-instruct-int4-onnx",
+    );
   });
 
   it("set-base-model preserves other geniusCore fields", async () => {
@@ -284,5 +293,73 @@ describe("registerGeniusCoreHandlers", () => {
     const out = (await call("genius-core:list-base-models")) as Array<{ id: string }>;
     expect(out.length).toBeGreaterThan(0);
     expect(out[0].id).toBe("phi-3-mini-4k-instruct-int4-onnx");
+  });
+
+  it("get-keystroke-overrides returns the persisted map (or {} when absent)", async () => {
+    const empty = await call("genius-core:get-keystroke-overrides");
+    expect(empty).toEqual({});
+
+    readSettingsMock.mockReturnValueOnce({
+      geniusCore: {
+        enabled: false,
+        vramBudgetGb: 8,
+        keystrokeLoggerProjectOverrides: { "7": true, "9": false },
+      },
+    });
+    const out = await call("genius-core:get-keystroke-overrides");
+    expect(out).toEqual({ "7": true, "9": false });
+  });
+
+  it("set-keystroke-override validates projectId and enabled", async () => {
+    await expect(
+      call("genius-core:set-keystroke-override", null),
+    ).rejects.toThrow(/projectId/);
+    await expect(
+      call("genius-core:set-keystroke-override", { projectId: 0, enabled: true }),
+    ).rejects.toThrow(/projectId/);
+    await expect(
+      call("genius-core:set-keystroke-override", { projectId: 1, enabled: "yes" }),
+    ).rejects.toThrow(/enabled/);
+  });
+
+  it("set-keystroke-override sets, updates, and clears entries", async () => {
+    // Set: starts from empty (default mock).
+    const a = (await call("genius-core:set-keystroke-override", {
+      projectId: 7,
+      enabled: true,
+    })) as Record<string, boolean>;
+    expect(a).toEqual({ "7": true });
+    const writeArg = writeSettingsMock.mock.calls[0][0] as {
+      geniusCore: { keystrokeLoggerProjectOverrides: Record<string, boolean> };
+    };
+    expect(writeArg.geniusCore.keystrokeLoggerProjectOverrides).toEqual({
+      "7": true,
+    });
+
+    // Update existing: readSettings reflects prior write.
+    readSettingsMock.mockReturnValueOnce({
+      geniusCore: {
+        enabled: false,
+        keystrokeLoggerProjectOverrides: { "7": true },
+      },
+    });
+    const b = (await call("genius-core:set-keystroke-override", {
+      projectId: 7,
+      enabled: false,
+    })) as Record<string, boolean>;
+    expect(b).toEqual({ "7": false });
+
+    // Clear via null.
+    readSettingsMock.mockReturnValueOnce({
+      geniusCore: {
+        enabled: false,
+        keystrokeLoggerProjectOverrides: { "7": false, "9": true },
+      },
+    });
+    const c = (await call("genius-core:set-keystroke-override", {
+      projectId: 7,
+      enabled: null,
+    })) as Record<string, boolean>;
+    expect(c).toEqual({ "9": true });
   });
 });

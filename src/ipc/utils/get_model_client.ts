@@ -28,6 +28,7 @@ import {
   ensureOllamaModelReady,
 } from "../handlers/local_model_ollama_handler";
 import { createFallback } from "./fallback_ai_model";
+import { createGeniusCoreLanguageModel } from "./genius_core_provider";
 
 const joyEngineUrl = process.env.JOY_ENGINE_URL;
 
@@ -379,6 +380,18 @@ async function getRegularModelClient(
       return {
         modelClient: {
           model: provider(model.name),
+        },
+        backupModelClients: [],
+      };
+    }
+    case "genius-core": {
+      // Genius Core is the in-process ONNX runtime. The adapter wraps the
+      // singleton in a LanguageModelV2 so the rest of the chat pipeline
+      // (streaming, error mapping, etc.) is identical to the cloud path.
+      return {
+        modelClient: {
+          model: createGeniusCoreLanguageModel(model.name),
+          builtinProviderId: "genius-core",
         },
         backupModelClients: [],
       };

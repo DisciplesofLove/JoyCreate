@@ -2247,6 +2247,32 @@ export const ACTION_CATALOG: ActionDefinition[] = [
     parameters: [],
     channel: "get-app-version",
   },
+
+  // ── Agent Builder Bridge ──
+  // These two actions let any OpenClaw caller (n8n workflows, Discord bot
+  // automations, etc.) address agent_builder agents as first-class tools.
+  // `agent.run` does not map to an IPC channel — `dispatchAction` intercepts
+  // it and calls the in-process dispatcher directly.
+  {
+    id: "agent.run",
+    category: "agent",
+    name: "Run Agent",
+    description:
+      "Run an agent_builder agent by id or slug and return its output. Source is tagged 'openclaw' so the run shows up in observability.",
+    parameters: [
+      { name: "id", type: "string", required: true, description: "Agent id or @slug" },
+      { name: "input", type: "string", required: true, description: "Prompt / input passed to the agent" },
+    ],
+    channel: "__builtin:agent.run",
+  },
+  {
+    id: "agent.list",
+    category: "agent",
+    name: "List Agents",
+    description: "List all addressable (non-archived) agent_builder agents with their @slug, id, name, and type.",
+    parameters: [],
+    channel: "__builtin:agent.list",
+  },
 ];
 
 // ── Dispatch Engine ────────────────────────────────────────────────────────
@@ -2338,6 +2364,28 @@ export async function dispatchAction(
   }
 
   logger.info(`Dispatching action: ${actionId}`, { channel: action.channel });
+
+  // ── Built-in (no-IPC) actions ──
+  if (action.channel === "__builtin:agent.run") {
+    const { dispatchAgent } = await import("./agent_dispatcher");
+    const exec = await dispatchAgent({
+      agentIdOrSlug: String(dispatchParams.id),
+      input: String(dispatchParams.input ?? ""),
+      source: "openclaw",
+    });
+    return {
+      executionId: exec.id,
+      agentId: exec.agentId,
+      status: exec.status,
+      output: exec.output,
+      error: exec.error,
+      metrics: exec.metrics,
+    };
+  }
+  if (action.channel === "__builtin:agent.list") {
+    const { listAddressableAgents } = await import("./agent_dispatcher");
+    return listAddressableAgents();
+  }
 
   // Call the registered IPC handler directly from main process.
   const result = await invokeHandler(action.channel, dispatchParams, action.parameters);

@@ -19,7 +19,7 @@ import * as crypto from "crypto";
 import log from "electron-log";
 import { v4 as uuidv4 } from "uuid";
 import { db } from "@/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and, desc } from "drizzle-orm";
 import {
   datasetItems,
   studioDatasets,
@@ -454,6 +454,73 @@ export function registerDataGenerationHandlers() {
     }
   });
 
+  /**
+   * Save template — upsert by name. Used by the Data Studio "Save as
+   * template" flow, which doesn't pre-allocate an ID. If a template with
+   * the same name already exists it is updated in place; otherwise a new
+   * one is created.
+   */
+  ipcMain.handle(
+    "generation:save-template",
+    async (
+      _event,
+      template: {
+        name: string;
+        description: string;
+        type: GenerationTemplate["type"];
+        systemPrompt?: string;
+        userPromptTemplate?: string;
+        promptTemplate?: string;
+        outputSchema?: Record<string, any>;
+        defaultParams?: Record<string, any>;
+        variables?: string[];
+      },
+    ) => {
+      try {
+        const promptTemplate =
+          template.promptTemplate ?? template.userPromptTemplate ?? "";
+        if (!template.name) throw new Error("Template name is required");
+        if (!promptTemplate) throw new Error("Prompt template is required");
+
+        const existing = Array.from(templates.values()).find(
+          (t) => t.name === template.name,
+        );
+        if (existing) {
+          const updated: GenerationTemplate = {
+            ...existing,
+            description: template.description ?? existing.description,
+            type: template.type ?? existing.type,
+            promptTemplate,
+            outputSchema: template.outputSchema ?? existing.outputSchema,
+            variables: template.variables ?? existing.variables,
+            updatedAt: new Date(),
+          };
+          templates.set(updated.id, updated);
+          await saveTemplates();
+          return { success: true, templateId: updated.id };
+        }
+
+        const created: GenerationTemplate = {
+          id: uuidv4(),
+          name: template.name,
+          description: template.description ?? "",
+          type: template.type,
+          promptTemplate,
+          outputSchema: template.outputSchema,
+          variables: template.variables ?? [],
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        templates.set(created.id, created);
+        await saveTemplates();
+        return { success: true, templateId: created.id };
+      } catch (error) {
+        logger.error("Save template failed:", error);
+        throw error;
+      }
+    },
+  );
+
   // ========== Generation ==========
 
   /**
@@ -689,6 +756,87 @@ export function registerDataGenerationHandlers() {
       throw error;
     }
   });
+
+  /**
+   * List generation jobs — combines in-memory active jobs with persisted
+   * job rows in `dataset_generation_jobs`. Optional filters on status and
+   * datasetId. Returns a UI-friendly shape:
+   * `{ jobs: [{ id, status, datasetId, progress: { total, completed, failed } }] }`.
+   */
+  ipcMain.handle(
+    "generation:list-jobs",
+    async (
+      _event,
+      args?: { status?: string; datasetId?: string },
+    ) => {
+      try {
+        const filters = [];
+        if (args?.status) filters.push(eq(datasetGenerationJobs.status, args.status as any));
+        if (args?.datasetId) filters.push(eq(datasetGenerationJobs.datasetId, args.datasetId));
+        const where = filters.length === 0
+          ? undefined
+          : filters.length === 1
+            ? filters[0]
+            : and(...filters);
+
+        const rows = where
+          ? await db
+              .select()
+              .from(datasetGenerationJobs)
+              .where(where)
+              .orderBy(desc(datasetGenerationJobs.id))
+          : await db
+              .select()
+              .from(datasetGenerationJobs)
+              .orderBy(desc(datasetGenerationJobs.id));
+
+        const fromDb = rows.map((row) => ({
+          id: row.id,
+          datasetId: row.datasetId,
+          status: row.status,
+          jobType: row.jobType,
+          providerType: row.providerType,
+          providerId: row.providerId,
+          modelId: row.modelId,
+          progress: {
+            total: row.totalItems,
+            completed: row.completedItems,
+            failed: row.failedItems,
+          },
+          estimatedCost: row.estimatedCost,
+          actualCost: row.actualCost,
+        }));
+
+        // Overlay any in-memory active jobs that haven't flushed yet.
+        const seen = new Set(fromDb.map((j) => j.id));
+        for (const [id, job] of activeJobs.entries()) {
+          if (seen.has(id)) continue;
+          if (args?.status && job.status !== args.status) continue;
+          fromDb.unshift({
+            id,
+            datasetId: "",
+            status: job.status,
+            jobType: "text_generation",
+            providerType: "local",
+            providerId: "",
+            modelId: "",
+            progress: {
+              total: job.totalItems,
+              completed: job.completedItems,
+              failed: job.failedItems,
+            },
+            estimatedCost: null,
+            actualCost: null,
+          });
+        }
+
+        return { success: true, jobs: fromDb };
+      } catch (error) {
+        logger.error("List jobs failed:", error);
+        throw error;
+      }
+    },
+  );
 
   // ========== Augmentation ==========
 

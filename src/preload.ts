@@ -90,6 +90,7 @@ const validInvokeChannels = [
   "supabase:unset-app-project",
   "local-models:list-ollama",
   "local-models:list-lmstudio",
+  "local-models:list-genius-core",
   "window:minimize",
   "window:maximize",
   "window:close",
@@ -1825,10 +1826,28 @@ const validInvokeChannels = [
   "agent-builder:list-teams",
   "agent-builder:execute-team",
   "agent-builder:list-templates",
+  "agent-builder:list-featured-templates",
   "agent-builder:get-template",
   "agent-builder:save-as-template",
   "agent-builder:get-agent-stats",
   "agent-builder:get-global-stats",
+  "agent-builder:list-builtin-mcp-tools",
+  // ── Agent Schedules ──
+  "agent-schedules:list",
+  "agent-schedules:create",
+  "agent-schedules:update",
+  "agent-schedules:delete",
+  "agent-schedules:toggle",
+  "agent-schedules:run-now",
+  "agent-schedules:list-history",
+  "agent-schedules:read-audio",
+  // ── Agent Knowledge Base ──
+  "agent-kb:list-docs",
+  "agent-kb:add-text",
+  "agent-kb:add-url",
+  "agent-kb:search",
+  "agent-kb:delete-doc",
+  "agent-kb:clear",
   // ── Analytics Reporting ──
   "analytics:dataset",
   "analytics:global",
@@ -2563,6 +2582,12 @@ const validInvokeChannels = [
   "genius-core:distillation-status",
   "genius-core:distillation-run-now",
   "genius-core:distillation-set-enabled",
+  "genius-core:get-eval-set",
+  "genius-core:set-eval-set",
+  "genius-core:list-adapter-scores",
+  "genius-core:set-rollback-threshold",
+  "genius-core:get-keystroke-overrides",
+  "genius-core:set-keystroke-override",
 ];
 
 // Add valid receive channels
@@ -2594,6 +2619,7 @@ const validReceiveChannels = [
   "joy-assistant:response:chunk",
   "joy-assistant:response:end",
   "joy-assistant:response:error",
+  "joy-assistant:notification",
   // MCP consent request from main to renderer
   "mcp:tool-consent-request",
   // MCP server connection status from main to renderer
@@ -2751,6 +2777,8 @@ const validReceiveChannels = [
   "calendar:sync-complete",
   // Genius Core local ONNX runtime — streaming inference chunks
   "genius-core:stream-chunk",
+  // Genius Core distillation per-step progress (loss/step ticks)
+  "genius-core:distillation-progress",
 ] as const;
 
 type ValidInvokeChannel = (typeof validInvokeChannels)[number];

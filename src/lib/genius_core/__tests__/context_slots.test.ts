@@ -38,6 +38,7 @@ class FakeStore implements ContextSlotStore {
   putCalls = 0;
   getCalls = 0;
   pinCalls = 0;
+  unpinCalls: string[] = [];
 
   async putBlock(bytes: Uint8Array): Promise<string> {
     this.putCalls++;
@@ -55,6 +56,10 @@ class FakeStore implements ContextSlotStore {
     this.pinCalls++;
     if (!this.blocks.has(cid)) throw new Error(`cannot pin unknown cid: ${cid}`);
     this.pins.add(cid);
+  }
+  async unpin(cid: string): Promise<void> {
+    this.unpinCalls.push(cid);
+    this.pins.delete(cid);
   }
 }
 
@@ -501,5 +506,127 @@ describe("ContextSlotManager determinism", () => {
       adapterBytes: adapter("same"),
     });
     expect(r1.cid).not.toBe(r2.cid);
+  });
+});
+
+// ── pruneHistory ─────────────────────────────────────────────────────────
+
+describe("ContextSlotManager.pruneHistory", () => {
+  async function seedChain(
+    mgr: ContextSlotManager,
+    count: number,
+    publishedIdx: number[] = [],
+  ) {
+    let now = 0;
+    // First slot
+    await mgr.createSlot({
+      projectId: "1",
+      baseModelId: "phi",
+      adapterBytes: adapter(`v0`),
+      metadata: publishedIdx.includes(0) ? { published: true } : {},
+    });
+    for (let i = 1; i < count; i++) {
+      now += 1;
+      await mgr.updateSlot({
+        projectId: "1",
+        baseModelId: "phi",
+        adapterBytes: adapter(`v${i}`),
+        metadata: publishedIdx.includes(i) ? { published: true } : {},
+      });
+    }
+    void now;
+  }
+
+  it("keeps the last N (default 10) and unpins the rest", async () => {
+    const { mgr, store } = makeManager();
+    await seedChain(mgr, 13);
+    const res = await mgr.pruneHistory("1");
+    expect(res.keptCids.length).toBe(10);
+    expect(res.prunedCids.length).toBe(3);
+    expect(store.unpinCalls.length).toBe(3);
+    // Pruned CIDs are the *oldest* (last in newest-first iteration).
+    expect(new Set(res.prunedCids).size).toBe(3);
+  });
+
+  it("respects explicit keepLast", async () => {
+    const { mgr, store } = makeManager();
+    await seedChain(mgr, 6);
+    const res = await mgr.pruneHistory("1", { keepLast: 2 });
+    expect(res.keptCids.length).toBe(2);
+    expect(res.prunedCids.length).toBe(4);
+    expect(store.unpinCalls.length).toBe(4);
+  });
+
+  it("always preserves published slots even when older than keepLast", async () => {
+    const { mgr, store } = makeManager();
+    // 6 slots; index 0 (oldest) is published.
+    await seedChain(mgr, 6, [0]);
+    const res = await mgr.pruneHistory("1", { keepLast: 2 });
+    expect(res.keptCids.length).toBe(3); // 2 recent + 1 published
+    expect(res.prunedCids.length).toBe(3);
+    expect(store.unpinCalls.length).toBe(3);
+  });
+
+  it("emits a 'pruned' event with kept/pruned CIDs", async () => {
+    const { mgr, events } = makeManager();
+    await seedChain(mgr, 5);
+    const res = await mgr.pruneHistory("1", { keepLast: 2 });
+    const pruned = events.find((e) => e.type === "pruned");
+    expect(pruned).toBeDefined();
+    expect(pruned).toMatchObject({
+      type: "pruned",
+      projectId: "1",
+      unpinned: true,
+    });
+    expect((pruned as { keptCids: string[] }).keptCids).toEqual(res.keptCids);
+    expect((pruned as { prunedCids: string[] }).prunedCids).toEqual(
+      res.prunedCids,
+    );
+  });
+
+  it("is a no-op for projects with no slots", async () => {
+    const { mgr, store } = makeManager();
+    const res = await mgr.pruneHistory("never-existed");
+    expect(res.keptCids).toEqual([]);
+    expect(res.prunedCids).toEqual([]);
+    expect(store.unpinCalls.length).toBe(0);
+  });
+
+  it("emits unpinned=false when the store doesn't support unpin", async () => {
+    const store = new FakeStore();
+    // Remove unpin to simulate a store that can't release pins.
+    (store as unknown as { unpin?: unknown }).unpin = undefined;
+    const registry = new FakeRegistry();
+    const events: ContextSlotEvent[] = [];
+    const mgr = new ContextSlotManager({
+      store,
+      registry,
+      onEvent: (e) => events.push(e),
+    });
+    await seedChain(mgr, 5);
+    const res = await mgr.pruneHistory("1", { keepLast: 2 });
+    expect(res.prunedCids.length).toBe(3);
+    expect(store.unpinCalls.length).toBe(0);
+    const pruned = events.find((e) => e.type === "pruned") as {
+      type: "pruned";
+      unpinned: boolean;
+    };
+    expect(pruned.unpinned).toBe(false);
+  });
+
+  it("logs and continues when individual unpin calls throw", async () => {
+    const { mgr, store } = makeManager();
+    await seedChain(mgr, 5);
+    const realUnpin = store.unpin.bind(store);
+    let n = 0;
+    store.unpin = async (cid: string) => {
+      n += 1;
+      if (n === 1) throw new Error("transient");
+      return realUnpin(cid);
+    };
+    const res = await mgr.pruneHistory("1", { keepLast: 2 });
+    expect(res.prunedCids.length).toBe(3);
+    // Two of three unpins succeeded.
+    expect(store.pins.size).toBe(5 - 2);
   });
 });

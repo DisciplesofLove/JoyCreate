@@ -20,6 +20,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useLocalModels } from "@/hooks/useLocalModels";
 import { useLocalLMSModels } from "@/hooks/useLMStudioModels";
+import { useGeniusCoreLocalModels } from "@/hooks/useGeniusCoreLocalModels";
 import { useLanguageModelsByProviders } from "@/hooks/useLanguageModelsByProviders";
 
 import { LocalModel } from "@/ipc/ipc_types";
@@ -69,13 +70,22 @@ export function ModelPicker() {
     loadModels: loadLMStudioModels,
   } = useLocalLMSModels();
 
+  // Genius Core (in-process ONNX runtime) curated catalogue
+  const {
+    models: geniusCoreModels,
+    loading: geniusCoreLoading,
+    error: geniusCoreError,
+    loadModels: loadGeniusCoreModels,
+  } = useGeniusCoreLocalModels();
+
   // Load models when the dropdown opens
   useEffect(() => {
     if (open) {
       loadOllamaModels();
       loadLMStudioModels();
+      loadGeniusCoreModels();
     }
-  }, [open, loadOllamaModels, loadLMStudioModels]);
+  }, [open, loadOllamaModels, loadLMStudioModels, loadGeniusCoreModels]);
 
   // Get display name for the selected model
   const getModelDisplayName = () => {
@@ -91,6 +101,13 @@ export function ModelPicker() {
         lmStudioModels.find(
           (model: LocalModel) => model.modelName === selectedModel.name,
         )?.displayName || selectedModel.name // Fallback to path if not found
+      );
+    }
+    if (selectedModel.provider === "genius-core") {
+      return (
+        geniusCoreModels.find(
+          (model: LocalModel) => model.modelName === selectedModel.name,
+        )?.displayName || selectedModel.name
       );
     }
 
@@ -142,6 +159,8 @@ export function ModelPicker() {
     !ollamaLoading && !ollamaError && ollamaModels.length > 0;
   const hasLMStudioModels =
     !lmStudioLoading && !lmStudioError && lmStudioModels.length > 0;
+  const hasGeniusCoreModels =
+    !geniusCoreLoading && !geniusCoreError && geniusCoreModels.length > 0;
 
   if (!settings) {
     return null;
@@ -670,6 +689,87 @@ export function ModelPicker() {
                         {/* Display the user-friendly name */}
                         <span>{model.displayName}</span>
                         {/* Show the path as secondary info */}
+                        <span className="text-xs text-muted-foreground truncate">
+                          {model.modelName}
+                        </span>
+                      </div>
+                    </DropdownMenuItem>
+                  ))
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            {/* Genius Core SubMenu */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger
+                disabled={geniusCoreLoading && !hasGeniusCoreModels}
+                className="w-full font-normal"
+              >
+                <div className="flex flex-col items-start">
+                  <span>Genius Core</span>
+                  {geniusCoreLoading ? (
+                    <span className="text-xs text-muted-foreground">
+                      Loading...
+                    </span>
+                  ) : geniusCoreError ? (
+                    <span className="text-xs text-red-500">Error loading</span>
+                  ) : !hasGeniusCoreModels ? (
+                    <span className="text-xs text-muted-foreground">
+                      Disabled
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      {geniusCoreModels.length} models
+                    </span>
+                  )}
+                </div>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-56 max-h-100 overflow-y-auto">
+                <DropdownMenuLabel>Genius Core Models</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+
+                {geniusCoreLoading && geniusCoreModels.length === 0 ? (
+                  <div className="text-xs text-center py-2 text-muted-foreground">
+                    Loading models...
+                  </div>
+                ) : geniusCoreError ? (
+                  <div className="px-2 py-1.5 text-sm text-red-600">
+                    <div className="flex flex-col">
+                      <span>Error loading models</span>
+                      <span className="text-xs text-muted-foreground">
+                        {geniusCoreError.message}
+                      </span>
+                    </div>
+                  </div>
+                ) : !hasGeniusCoreModels ? (
+                  <div className="px-2 py-1.5 text-sm">
+                    <div className="flex flex-col">
+                      <span>Genius Core is disabled</span>
+                      <span className="text-xs text-muted-foreground">
+                        Enable it in Settings → Genius Core.
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  geniusCoreModels.map((model: LocalModel) => (
+                    <DropdownMenuItem
+                      key={`genius-core-${model.modelName}`}
+                      className={
+                        selectedModel.provider === "genius-core" &&
+                        selectedModel.name === model.modelName
+                          ? "bg-secondary"
+                          : ""
+                      }
+                      onClick={() => {
+                        onModelSelect({
+                          name: model.modelName,
+                          provider: "genius-core",
+                        });
+                        setOpen(false);
+                      }}
+                    >
+                      <div className="flex flex-col">
+                        <span>{model.displayName}</span>
                         <span className="text-xs text-muted-foreground truncate">
                           {model.modelName}
                         </span>

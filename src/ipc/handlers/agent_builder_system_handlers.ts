@@ -47,6 +47,10 @@ interface Agent {
   createdBy?: string;
   tags: string[];
   stats: AgentStats;
+  notifications?: {
+    joyAssistant?: boolean;
+    openclaw?: { clientId: string; channelId: string };
+  };
 }
 
 type AgentType = 
@@ -143,6 +147,7 @@ interface AgentExecution {
   agentId: string;
   agentVersion: string;
   status: "running" | "completed" | "failed" | "cancelled";
+  source?: AgentExecutionSource;
   input: any;
   output?: any;
   context: ExecutionContext;
@@ -152,6 +157,15 @@ interface AgentExecution {
   completedAt?: Date;
   error?: string;
 }
+
+export type AgentExecutionSource =
+  | "manual"
+  | "schedule"
+  | "joy-assistant"
+  | "openclaw"
+  | "cns"
+  | "orchestrator"
+  | "template";
 
 interface ExecutionContext {
   sessionId?: string;
@@ -190,6 +204,8 @@ interface AgentTemplate {
   name: string;
   description?: string;
   category: string;
+  featured?: boolean;
+  thumbnail?: string;
   agent: Omit<Agent, "id" | "createdAt" | "updatedAt" | "stats">;
 }
 
@@ -222,6 +238,89 @@ const executions: Map<string, AgentExecution> = new Map();
 const teams: Map<string, AgentTeam> = new Map();
 const templates: Map<string, AgentTemplate> = new Map();
 const sessions: Map<string, { agentId: string; memory: any[]; createdAt: Date }> = new Map();
+
+// ============================================================================
+// Cross-module bridges (Joy Assistant / CNS / OpenClaw)
+// ============================================================================
+
+/** Slugify an agent name for @mention routing: "My Writer" -> "my-writer". */
+export function slugifyAgentName(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Build deterministic slug map; later agents with same slug get numeric suffix. */
+function buildAgentSlugIndex(): Map<string, Agent> {
+  const out = new Map<string, Agent>();
+  const counts = new Map<string, number>();
+  for (const a of agents.values()) {
+    if (a.status === "archived") continue;
+    const base = slugifyAgentName(a.name) || a.id.slice(0, 8);
+    const n = (counts.get(base) ?? 0) + 1;
+    counts.set(base, n);
+    const slug = n === 1 ? base : `${base}-${n}`;
+    out.set(slug, a);
+  }
+  return out;
+}
+
+/** Lookup an agent by id (exact) or by slug (lowercased hyphenated name). */
+export function findAgentForDispatch(idOrSlug: string): Agent | undefined {
+  if (!idOrSlug) return undefined;
+  const direct = agents.get(idOrSlug);
+  if (direct) return direct;
+  const idx = buildAgentSlugIndex();
+  return idx.get(idOrSlug.toLowerCase());
+}
+
+/** Lightweight listing for autocompletes / mention pickers. */
+export function listAgentsForDispatch(): Array<{
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  status: AgentStatus;
+  type: AgentType;
+}> {
+  const idx = buildAgentSlugIndex();
+  const slugById = new Map<string, string>();
+  for (const [slug, a] of idx) slugById.set(a.id, slug);
+  return Array.from(agents.values())
+    .filter((a) => a.status !== "archived")
+    .map((a) => ({
+      id: a.id,
+      slug: slugById.get(a.id) ?? a.id,
+      name: a.name,
+      description: a.description,
+      status: a.status,
+      type: a.type,
+    }));
+}
+
+/**
+ * Public wrapper for executing an agent from non-renderer surfaces
+ * (Joy Assistant, CNS, OpenClaw, schedules). Looks up the agent,
+ * runs `executeAgentInternal`, and stamps the originating `source`.
+ * Throws if the agent is not found or is archived.
+ */
+export async function executeAgent(args: {
+  agentIdOrSlug: string;
+  input: unknown;
+  source: AgentExecutionSource;
+  context?: Partial<ExecutionContext>;
+}): Promise<AgentExecution> {
+  const agent = findAgentForDispatch(args.agentIdOrSlug);
+  if (!agent) {
+    throw new Error(`Agent not found: ${args.agentIdOrSlug}`);
+  }
+  if (agent.status === "archived") {
+    throw new Error(`Agent is archived: ${agent.name}`);
+  }
+  return executeAgentInternal(agent, args.input, args.context, args.source);
+}
 
 function getAgentStorageDir(): string {
   return path.join(app.getPath("userData"), "agents");
@@ -524,6 +623,289 @@ Be strategic about task distribution and handle failures gracefully.`,
         tags: ["coordination", "multi-agent", "orchestration"],
       },
     },
+    // ============================================================
+    // Featured templates (Hyperagent-style one-click workflows)
+    // ============================================================
+    {
+      id: "featured-chief-of-staff",
+      name: "Chief of Staff Daily Briefing",
+      description: "Every morning: inbox, calendar, tasks. A podcast-style briefing before coffee.",
+      category: "featured",
+      featured: true,
+      agent: {
+        name: "Chief of Staff",
+        description: "Pulls inbox, calendar, and tasks into a concise morning briefing.",
+        version: "1.0.0",
+        status: "active",
+        type: "automation_agent",
+        config: {
+          model: "gpt-5-mini",
+          temperature: 0.4,
+          maxTokens: 4096,
+          responseFormat: "markdown",
+        },
+        tools: [
+          { id: "calendar", name: "Calendar", description: "Read calendar events", type: "builtin", enabled: true, config: {} },
+          { id: "email", name: "Email", description: "Read inbox", type: "builtin", enabled: true, config: {} },
+          { id: "summarize", name: "Summarizer", description: "Summarize content", type: "builtin", enabled: true, config: {} },
+          { id: "tts", name: "Text-to-Speech", description: "Generate audio briefing", type: "builtin", enabled: true, config: {} },
+        ],
+        memory: {
+          enabled: true,
+          types: ["working", "short_term", "long_term"],
+          shortTermLimit: 50,
+          longTermEnabled: true,
+          longTermStorage: "local",
+          contextWindowSize: 8000,
+          summarizationEnabled: true,
+          summarizationThreshold: 5000,
+        },
+        prompts: {
+          system: `You are a chief of staff. Each morning you produce a tight briefing covering:
+1. Top inbox items needing a reply today
+2. Calendar for the next 12 hours with conflicts highlighted
+3. Outstanding tasks ranked by urgency
+4. A one-paragraph "what matters today" summary at the top
+
+Be concise, factual, and skip filler. Output as Markdown.`,
+        },
+        constraints: { maxIterations: 12, maxToolCalls: 25 },
+        metadata: {},
+        tags: ["featured", "briefing", "productivity"],
+      },
+    },
+    {
+      id: "featured-competitive-radar",
+      name: "Competitive Radar",
+      description: "Track competitor launches, pricing changes, and news. Weekly digest.",
+      category: "featured",
+      featured: true,
+      agent: {
+        name: "Competitive Radar",
+        description: "Monitors competitors and surfaces material changes.",
+        version: "1.0.0",
+        status: "active",
+        type: "research_agent",
+        config: {
+          model: "gpt-5-mini",
+          temperature: 0.3,
+          maxTokens: 4096,
+          responseFormat: "markdown",
+        },
+        tools: [
+          { id: "web-search", name: "Web Search", description: "Search the web", type: "builtin", enabled: true, config: {} },
+          { id: "scrape", name: "Web Scraper", description: "Extract content", type: "builtin", enabled: true, config: {} },
+          { id: "summarize", name: "Summarizer", description: "Summarize findings", type: "builtin", enabled: true, config: {} },
+        ],
+        memory: {
+          enabled: true,
+          types: ["working", "short_term", "long_term"],
+          shortTermLimit: 100,
+          longTermEnabled: true,
+          longTermStorage: "local",
+          contextWindowSize: 8000,
+          summarizationEnabled: true,
+          summarizationThreshold: 6000,
+        },
+        prompts: {
+          system: `You are a competitive intelligence analyst. For each competitor:
+1. Identify product launches, pricing changes, and major news in the lookback window
+2. Cite primary sources (press releases, changelogs, blog posts)
+3. Score significance (low/medium/high) with a one-sentence rationale
+4. Highlight implications for our roadmap
+
+Be objective. Never speculate without a citation.`,
+        },
+        constraints: { maxIterations: 20, maxToolCalls: 50 },
+        metadata: {},
+        tags: ["featured", "research", "competitive-intel"],
+      },
+    },
+    {
+      id: "featured-prospect-outreach",
+      name: "Personalized Prospect Outreach",
+      description: "Find prospects with buying triggers, draft outreach emails, and a pitch deck.",
+      category: "featured",
+      featured: true,
+      agent: {
+        name: "Prospect Outreach",
+        description: "Identifies qualified prospects and drafts personalized outreach.",
+        version: "1.0.0",
+        status: "active",
+        type: "specialist",
+        config: {
+          model: "gpt-5-mini",
+          temperature: 0.6,
+          maxTokens: 4096,
+          responseFormat: "markdown",
+        },
+        tools: [
+          { id: "web-search", name: "Web Search", description: "Find prospects", type: "builtin", enabled: true, config: {} },
+          { id: "scrape", name: "Web Scraper", description: "Pull company info", type: "builtin", enabled: true, config: {} },
+          { id: "email", name: "Email Composer", description: "Draft emails", type: "builtin", enabled: true, config: {} },
+        ],
+        memory: {
+          enabled: true,
+          types: ["working", "short_term"],
+          shortTermLimit: 50,
+          longTermEnabled: false,
+          contextWindowSize: 8000,
+          summarizationEnabled: true,
+          summarizationThreshold: 5000,
+        },
+        prompts: {
+          system: `You are a B2B sales SDR. For each target:
+1. Verify the company fits the ideal customer profile
+2. Identify a recent buying trigger (funding, hire, launch, expansion)
+3. Find the right point of contact and verify their email
+4. Draft a personalized cold email (under 120 words) referencing the trigger
+5. Output a short pitch deck outline tailored to their use case
+
+Tone: concise, specific, no fluff.`,
+        },
+        constraints: { maxIterations: 25, maxToolCalls: 60 },
+        metadata: {},
+        tags: ["featured", "sales", "outreach"],
+      },
+    },
+    {
+      id: "featured-investment-research",
+      name: "Startup Investment Research",
+      description: "Compare top startup raises in a sector and produce a deck and tear sheet.",
+      category: "featured",
+      featured: true,
+      agent: {
+        name: "Investment Research",
+        description: "Synthesizes funding rounds, traction, and risks into an investor brief.",
+        version: "1.0.0",
+        status: "active",
+        type: "research_agent",
+        config: {
+          model: "gpt-5-mini",
+          temperature: 0.3,
+          maxTokens: 8192,
+          responseFormat: "markdown",
+        },
+        tools: [
+          { id: "web-search", name: "Web Search", description: "Search the web", type: "builtin", enabled: true, config: {} },
+          { id: "scrape", name: "Web Scraper", description: "Pull filings", type: "builtin", enabled: true, config: {} },
+          { id: "summarize", name: "Summarizer", description: "Summarize sources", type: "builtin", enabled: true, config: {} },
+        ],
+        memory: {
+          enabled: true,
+          types: ["working", "short_term", "long_term"],
+          shortTermLimit: 100,
+          longTermEnabled: true,
+          longTermStorage: "local",
+          contextWindowSize: 16000,
+          summarizationEnabled: true,
+          summarizationThreshold: 10000,
+        },
+        prompts: {
+          system: `You are a venture analyst. For each target startup:
+1. Capture round size, lead investor, valuation, and use of funds (cite primary)
+2. Note traction signals (revenue, growth, hires, customers)
+3. Identify market position, moat, and key risks
+4. Compare across the cohort with a ranked tear-sheet table
+5. Produce a 10-slide pitch outline summarizing the thesis
+
+Tone: analytical, source-cited, no hype.`,
+        },
+        constraints: { maxIterations: 25, maxToolCalls: 80, allowedDomains: ["*.gov", "*.edu", "techcrunch.com", "crunchbase.com", "*.org", "wikipedia.org"] },
+        metadata: {},
+        tags: ["featured", "research", "investing"],
+      },
+    },
+    {
+      id: "featured-real-estate-kit",
+      name: "Real Estate Listing Kit",
+      description: "Generate a property listing kit with editorial copy and a buyer's handout.",
+      category: "featured",
+      featured: true,
+      agent: {
+        name: "Real Estate Listing Kit",
+        description: "Produces a full listing package from property details.",
+        version: "1.0.0",
+        status: "active",
+        type: "specialist",
+        config: {
+          model: "gpt-5-mini",
+          temperature: 0.7,
+          maxTokens: 4096,
+          responseFormat: "markdown",
+        },
+        tools: [
+          { id: "summarize", name: "Summarizer", description: "Summarize details", type: "builtin", enabled: true, config: {} },
+          { id: "image-gen", name: "Image Generator", description: "Generate marketing imagery", type: "builtin", enabled: true, config: {} },
+        ],
+        memory: {
+          enabled: true,
+          types: ["working", "short_term"],
+          shortTermLimit: 30,
+          longTermEnabled: false,
+          contextWindowSize: 8000,
+          summarizationEnabled: false,
+          summarizationThreshold: 0,
+        },
+        prompts: {
+          system: `You are a luxury real estate copywriter. From the supplied property details produce:
+1. A headline and 100-word editorial description
+2. A bulleted feature sheet (3 sections: interior, exterior, neighborhood)
+3. A one-page buyer's handout (Markdown, print-ready)
+4. Three suggested social captions
+5. A short open-house script for the listing agent
+
+Voice: aspirational but specific. Never invent features that aren't in the brief.`,
+        },
+        constraints: { maxIterations: 8, maxToolCalls: 15 },
+        metadata: {},
+        tags: ["featured", "real-estate", "content"],
+      },
+    },
+    {
+      id: "featured-voice-to-posts",
+      name: "Voice to a Month of Posts",
+      description: "Describe your voice. Get a month of social posts back.",
+      category: "featured",
+      featured: true,
+      agent: {
+        name: "Voice to Posts",
+        description: "Turns a voice/brand brief into a month of platform-native social posts.",
+        version: "1.0.0",
+        status: "active",
+        type: "specialist",
+        config: {
+          model: "gpt-5-mini",
+          temperature: 0.8,
+          maxTokens: 8192,
+          responseFormat: "markdown",
+        },
+        tools: [
+          { id: "summarize", name: "Summarizer", description: "Refine drafts", type: "builtin", enabled: true, config: {} },
+        ],
+        memory: {
+          enabled: true,
+          types: ["working", "short_term"],
+          shortTermLimit: 40,
+          longTermEnabled: false,
+          contextWindowSize: 8000,
+          summarizationEnabled: false,
+          summarizationThreshold: 0,
+        },
+        prompts: {
+          system: `You are a social media ghostwriter. Given a voice brief (audience, tone, themes):
+1. Produce 30 posts (one per day) varying format: hook, story, list, question, takeaway
+2. For each post output: platform (X, LinkedIn, Instagram), copy, suggested visual, hashtags
+3. Cluster by weekly theme and label each cluster
+4. Keep the voice consistent across all 30 posts
+
+Output as a Markdown table. No emojis unless the brief asks for them.`,
+        },
+        constraints: { maxIterations: 6, maxToolCalls: 10 },
+        metadata: {},
+        tags: ["featured", "content", "social"],
+      },
+    },
   ];
   
   for (const t of defaultTemplates) {
@@ -565,7 +947,8 @@ async function saveExecution(execution: AgentExecution) {
 async function executeAgentInternal(
   agent: Agent,
   input: any,
-  context?: Partial<ExecutionContext>
+  context?: Partial<ExecutionContext>,
+  source: AgentExecutionSource = "manual",
 ): Promise<AgentExecution> {
   const executionId = uuidv4();
   const startTime = Date.now();
@@ -575,6 +958,7 @@ async function executeAgentInternal(
     agentId: agent.id,
     agentVersion: agent.version,
     status: "running",
+    source,
     input,
     context: {
       sessionId: context?.sessionId,
@@ -603,7 +987,46 @@ async function executeAgentInternal(
       const session = sessions.get(context.sessionId)!;
       execution.context.memory = [...session.memory];
     }
-    
+
+    // Inject knowledge-base context if the agent has any indexed documents.
+    // We do this once per execution before the iterative loop so the
+    // retrieved passages are available to the LLM-facing prompt builder
+    // (whenever generateAgentThought wires up to a real model). The
+    // retrieval is best-effort — failures are logged but do not abort.
+    try {
+      const queryStr =
+        typeof input === "string" ? input : JSON.stringify(input);
+      if (queryStr && queryStr.length > 0) {
+        // Lazy import to avoid circular module load at top level.
+        const { searchAgentKnowledgeInternal } = await import(
+          "./agent_knowledge_handlers"
+        );
+        const passages = await searchAgentKnowledgeInternal(
+          agent.id,
+          queryStr.slice(0, 1000),
+          5,
+        );
+        if (passages.length > 0) {
+          const formatted = passages
+            .map(
+              (p, i) =>
+                `[${i + 1}] ${p.title ?? "(untitled)"}${p.source ? ` (${p.source})` : ""}\n${p.content}`,
+            )
+            .join("\n\n");
+          execution.context.variables.__kb_context = formatted;
+          execution.steps.push({
+            id: uuidv4(),
+            type: "observation",
+            content: `Retrieved ${passages.length} knowledge-base passage(s)`,
+            timestamp: new Date(),
+          });
+        }
+      }
+    } catch (kbErr) {
+      // Non-fatal: agent runs without KB context.
+      console.warn("[agent-exec] KB injection failed:", kbErr);
+    }
+
     // Execute agent loop
     let iterationCount = 0;
     const maxIterations = agent.constraints.maxIterations || 10;
@@ -790,7 +1213,7 @@ async function executeAgentTool(
       return executeCustomTool(tool, toolInput);
     
     case "mcp":
-      return executeMcpTool(tool, toolInput);
+      return executeMcpTool(tool, toolInput, agent.id);
     
     case "api":
       return executeApiTool(tool, toolInput);
@@ -875,9 +1298,20 @@ async function executeCustomTool(tool: AgentTool, input: any): Promise<any> {
   );
 }
 
-async function executeMcpTool(tool: AgentTool, input: any): Promise<any> {
-  const { serverName, toolName } = tool.config;
-  // Would integrate with MCP client
+async function executeMcpTool(
+  tool: AgentTool,
+  input: any,
+  agentId?: string,
+): Promise<any> {
+  const { serverName, toolName } = tool.config ?? {};
+  // Built-in MCP registry: serverName === "builtin" routes to in-process tools
+  // (web.fetch, vector.search, kb.search, etc.). This avoids spinning up an
+  // external MCP server process for the curated set we ship with the app.
+  if (serverName === "builtin" && typeof toolName === "string") {
+    const { invokeBuiltinMcpTool } = await import("@/lib/builtin_mcp_registry");
+    return invokeBuiltinMcpTool(toolName, input, { agentId });
+  }
+  // External MCP server execution would go here.
   return { success: true, serverName, toolName, input };
 }
 
@@ -1551,8 +1985,39 @@ Return ONLY valid JSON.`;
       const execution = await executeAgentInternal(agent, args.input, {
         sessionId: args.sessionId,
         variables: args.variables,
-      });
-      
+      }, "manual");
+
+      // Fan out per-agent default notifications (Joy Assistant / OpenClaw).
+      if (agent.notifications) {
+        try {
+          const { notifyAgentRun } = await import("@/lib/agent_notifier");
+          const preview =
+            typeof execution.output === "string"
+              ? execution.output
+              : execution.output !== undefined
+                ? JSON.stringify(execution.output)
+                : "";
+          await notifyAgentRun(
+            {
+              executionId: execution.id,
+              agentId: agent.id,
+              agentName: agent.name,
+              status: execution.status === "completed" ? "completed" : "failed",
+              source: "manual",
+              preview,
+              error: execution.error,
+              startedAt: execution.startedAt.toISOString(),
+              completedAt: execution.completedAt
+                ? execution.completedAt.toISOString()
+                : undefined,
+            },
+            agent.notifications,
+          );
+        } catch (notifyErr) {
+          logger.warn("Agent notifier failed:", notifyErr);
+        }
+      }
+
       return {
         success: execution.status === "completed",
         executionId: execution.id,
@@ -1793,6 +2258,16 @@ Return ONLY valid JSON.`;
     }
   });
 
+  ipcMain.handle("agent-builder:list-featured-templates", async () => {
+    try {
+      const result = Array.from(templates.values()).filter(t => t.featured === true);
+      return { success: true, templates: result };
+    } catch (error) {
+      logger.error("List featured templates failed:", error);
+      throw error;
+    }
+  });
+
   ipcMain.handle("agent-builder:get-template", async (_event, templateId: string) => {
     try {
       const template = templates.get(templateId);
@@ -1860,6 +2335,18 @@ Return ONLY valid JSON.`;
     }
   });
 
+  ipcMain.handle("agent-builder:list-builtin-mcp-tools", async () => {
+    try {
+      const { listBuiltinMcpToolDescriptors } = await import(
+        "@/lib/builtin_mcp_registry"
+      );
+      return { success: true, tools: listBuiltinMcpToolDescriptors() };
+    } catch (error) {
+      logger.error("List built-in MCP tools failed:", error);
+      throw error;
+    }
+  });
+
   ipcMain.handle("agent-builder:get-global-stats", async () => {
     try {
       const allAgents = Array.from(agents.values());
@@ -1917,3 +2404,53 @@ Return ONLY valid JSON.`;
 
   logger.info("Agent Builder System handlers registered");
 }
+
+// ============================================================================
+// External helpers (used by the schedule subsystem to invoke agents directly,
+// bypassing the IPC layer when the scheduler fires inside the main process).
+// ============================================================================
+
+/**
+ * Execute an agent by id from inside the main process. Mirrors
+ * `agent-builder:execute-agent` but is callable from other modules
+ * (e.g., the schedule tick loop).
+ */
+export async function executeAgentByIdInternal(
+  agentId: string,
+  input: any,
+  context?: { sessionId?: string; variables?: Record<string, any> },
+  source: AgentExecutionSource = "manual",
+): Promise<{
+  success: boolean;
+  executionId: string;
+  status: string;
+  output?: any;
+  error?: string;
+  agentName: string;
+  startedAt: string;
+  completedAt?: string;
+}> {
+  const agent = agents.get(agentId);
+  if (!agent) throw new Error("Agent not found");
+  if (agent.status !== "active") throw new Error("Agent is not active");
+  const exec = await executeAgentInternal(agent, input, context, source);
+  return {
+    success: exec.status === "completed",
+    executionId: exec.id,
+    status: exec.status,
+    output: exec.output,
+    error: exec.error,
+    agentName: agent.name,
+    startedAt: exec.startedAt.toISOString(),
+    completedAt: exec.completedAt ? exec.completedAt.toISOString() : undefined,
+  };
+}
+
+export function agentExistsInternal(agentId: string): boolean {
+  return agents.has(agentId);
+}
+
+export function getAgentNameInternal(agentId: string): string | undefined {
+  return agents.get(agentId)?.name;
+}
+

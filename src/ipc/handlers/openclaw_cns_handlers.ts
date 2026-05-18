@@ -14,6 +14,10 @@ import { v4 as uuidv4 } from "uuid";
 import { getOpenClawCNS, type CNSConfig, type AIRequest } from "@/lib/openclaw_cns";
 import { getOpenClawOllamaBridge } from "@/lib/openclaw_ollama_bridge";
 import { getOpenClawN8nBridge } from "@/lib/openclaw_n8n_bridge";
+import {
+  attachOpenClawAgentBridge,
+  detachOpenClawAgentBridge,
+} from "@/lib/openclaw_agent_bridge";
 
 const logger = log.scope("openclaw_cns_ipc");
 
@@ -43,6 +47,7 @@ export function registerOpenClawCNSHandlers(): void {
     try {
       const cns = getOpenClawCNS();
       await cns.initialize(config);
+      attachOpenClawAgentBridge();
       return { success: true, status: cns.getStatus() };
     } catch (error) {
       logger.error("CNS initialize failed:", error);
@@ -54,6 +59,7 @@ export function registerOpenClawCNSHandlers(): void {
     try {
       const cns = getOpenClawCNS();
       await cns.shutdown();
+      detachOpenClawAgentBridge();
       return { success: true };
     } catch (error) {
       logger.error("CNS shutdown failed:", error);

@@ -25,6 +25,7 @@ import {
   type IdleMonitor,
 } from "../distillation_scheduler";
 import type { EditLogEntry } from "../edit_logger";
+import type { GeniusCoreDistillationProgressPayload } from "@/lib/events/domain_event_bus";
 
 vi.mock("electron-log", () => {
   const fn = () => ({
@@ -618,6 +619,242 @@ describe("DistillationScheduler — idle path", () => {
   });
 });
 
+// ── Cooldown + min-loss-delta gates ──────────────────────────────────────
+
+describe("DistillationScheduler — cooldown gate", () => {
+  it("idle tick skipped while inside cooldown window", async () => {
+    let now = 1_000_000;
+    const monitor = makeFakeIdleMonitor();
+    const trainer = makeTrainer();
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        idleMonitor: monitor,
+        trainer,
+        editLogExporter: async () => makeEntries(10),
+        clock: () => now,
+        minRunIntervalMs: 60_000,
+      }),
+    );
+    sched.start();
+    monitor.fire();
+    await new Promise((r) => setImmediate(r));
+    expect(trainer.train).toHaveBeenCalledTimes(1);
+
+    // Second tick well inside the cooldown window — must skip.
+    now += 30_000;
+    monitor.fire();
+    await new Promise((r) => setImmediate(r));
+    expect(trainer.train).toHaveBeenCalledTimes(1);
+
+    // Past cooldown — fires again.
+    now += 60_000;
+    monitor.fire();
+    await new Promise((r) => setImmediate(r));
+    expect(trainer.train).toHaveBeenCalledTimes(2);
+  });
+
+  it("manual runNow bypasses cooldown", async () => {
+    let now = 1_000_000;
+    const trainer = makeTrainer();
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        trainer,
+        editLogExporter: async () => makeEntries(10),
+        clock: () => now,
+        minRunIntervalMs: 60_000,
+      }),
+    );
+    await sched.runNow(1);
+    now += 1_000; // still well inside cooldown
+    await sched.runNow(1);
+    expect(trainer.train).toHaveBeenCalledTimes(2);
+  });
+
+  it("minRunIntervalMs=0 disables cooldown entirely", async () => {
+    let now = 1_000_000;
+    const monitor = makeFakeIdleMonitor();
+    const trainer = makeTrainer();
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        idleMonitor: monitor,
+        trainer,
+        editLogExporter: async () => makeEntries(10),
+        clock: () => now,
+        minRunIntervalMs: 0,
+      }),
+    );
+    sched.start();
+    monitor.fire();
+    await new Promise((r) => setImmediate(r));
+    now += 1;
+    monitor.fire();
+    await new Promise((r) => setImmediate(r));
+    expect(trainer.train).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("DistillationScheduler — min-loss-delta gate", () => {
+  it("skips slot promotion when loss does not improve by delta", async () => {
+    const updateContextSlot = vi.fn(async () => ({ cid: "bafy-promoted" }));
+    let nextLoss = 0.5;
+    const trainer = makeTrainer(async (input) => ({
+      adapterId: `a-${nextLoss}`,
+      method: "qlora",
+      sampleCount: input.entries.length,
+      finalLoss: nextLoss,
+      durationMs: 1,
+      baseModelId: input.baseModelId,
+      adapterBytes: new Uint8Array([1, 2, 3]),
+    }));
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        trainer,
+        editLogExporter: async () => makeEntries(10),
+        updateContextSlot,
+        minLossImprovementDelta: 0.05,
+      }),
+    );
+    // First run accepts (no prior baseline).
+    await sched.runNow(1);
+    expect(updateContextSlot).toHaveBeenCalledTimes(1);
+
+    // Second run with only a tiny improvement (0.5 -> 0.49) → skipped.
+    nextLoss = 0.49;
+    await sched.runNow(1);
+    expect(updateContextSlot).toHaveBeenCalledTimes(1);
+
+    // Third run with a clear improvement (0.49 baseline still, 0.4 new) → promoted.
+    // But the gate compares against the LAST ACCEPTED loss (0.5), so 0.4 < 0.5 - 0.05.
+    nextLoss = 0.4;
+    await sched.runNow(1);
+    expect(updateContextSlot).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes completion even when delta gate skips promotion", async () => {
+    const publishCompletion = vi.fn(async () => undefined);
+    const updateContextSlot = vi.fn(async () => ({ cid: "bafy-x" }));
+    let nextLoss = 0.5;
+    const trainer = makeTrainer(async (input) => ({
+      adapterId: `a-${nextLoss}`,
+      method: "qlora",
+      sampleCount: input.entries.length,
+      finalLoss: nextLoss,
+      durationMs: 1,
+      baseModelId: input.baseModelId,
+      adapterBytes: new Uint8Array([1, 2, 3]),
+    }));
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        trainer,
+        editLogExporter: async () => makeEntries(10),
+        updateContextSlot,
+        publishCompletion,
+        minLossImprovementDelta: 0.1,
+      }),
+    );
+    await sched.runNow(1); // accepted
+    nextLoss = 0.49;
+    await sched.runNow(1); // skipped
+    expect(publishCompletion).toHaveBeenCalledTimes(2);
+    expect(updateContextSlot).toHaveBeenCalledTimes(1);
+  });
+
+  it("minLossImprovementDelta=0 accepts every receipt", async () => {
+    const updateContextSlot = vi.fn(async () => ({ cid: "bafy-x" }));
+    let nextLoss = 0.5;
+    const trainer = makeTrainer(async (input) => ({
+      adapterId: `a-${nextLoss}`,
+      method: "qlora",
+      sampleCount: input.entries.length,
+      finalLoss: nextLoss,
+      durationMs: 1,
+      baseModelId: input.baseModelId,
+      adapterBytes: new Uint8Array([1, 2, 3]),
+    }));
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        trainer,
+        editLogExporter: async () => makeEntries(10),
+        updateContextSlot,
+        minLossImprovementDelta: 0,
+      }),
+    );
+    await sched.runNow(1);
+    nextLoss = 0.5; // identical — would normally fail any positive delta.
+    await sched.runNow(1);
+    expect(updateContextSlot).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── Adapter hash propagation ─────────────────────────────────────────────
+
+describe("DistillationScheduler — adapterHash", () => {
+  it("computes sha256 over adapterBytes and includes it in completion + bridge", async () => {
+    const publishCompletion = vi.fn(async () => undefined);
+    const bytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+    const trainer = makeTrainer(async (input) => ({
+      adapterId: "a-hashed",
+      method: "qlora",
+      sampleCount: input.entries.length,
+      finalLoss: 0.1,
+      durationMs: 1,
+      baseModelId: input.baseModelId,
+      adapterBytes: bytes,
+    }));
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        trainer,
+        editLogExporter: async () => makeEntries(10),
+        publishCompletion,
+      }),
+    );
+    await sched.runNow(1);
+    const expected =
+      "5f78c33274e43fa9de5659265c1d917e25c03722dcb0b8d27db8d5feaa813953";
+    expect(publishCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ adapterHash: expected }),
+    );
+  });
+
+  it("emits empty adapterHash when trainer omits bytes", async () => {
+    const publishCompletion = vi.fn(async () => undefined);
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        editLogExporter: async () => makeEntries(10),
+        publishCompletion,
+      }),
+    );
+    await sched.runNow(1);
+    expect(publishCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ adapterHash: "" }),
+    );
+  });
+
+  it("preserves trainer-provided adapterHash", async () => {
+    const publishCompletion = vi.fn(async () => undefined);
+    const trainer = makeTrainer(async (input) => ({
+      adapterId: "a-pre",
+      method: "qlora",
+      sampleCount: input.entries.length,
+      finalLoss: 0.1,
+      durationMs: 1,
+      baseModelId: input.baseModelId,
+      adapterHash: "cafebabe",
+    }));
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        trainer,
+        editLogExporter: async () => makeEntries(10),
+        publishCompletion,
+      }),
+    );
+    await sched.runNow(1);
+    expect(publishCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ adapterHash: "cafebabe" }),
+    );
+  });
+});
+
 // ── Status snapshot ──────────────────────────────────────────────────────
 
 describe("DistillationScheduler — status", () => {
@@ -657,6 +894,205 @@ describe("DistillationScheduler — status", () => {
     const status = sched.getStatus();
     expect(status.lastError?.message).toBe("kaboom");
     expect(status.runCount).toBe(1);
+  });
+});
+
+// ── Federated aggregation ────────────────────────────────────────────────
+
+describe("DistillationScheduler — federated aggregation", () => {
+  function makeAggregator() {
+    const run = vi.fn(async (_args: { projectId: string }) => ({
+      mergedAdapterBytes: new Uint8Array(),
+      contributorCount: 0,
+      skipped: true as const,
+      reason: "no-candidates" as const,
+    }));
+    return { run } as unknown as {
+      run: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  it("invokes aggregator.run when gate is true and adapter promoted", async () => {
+    const agg = makeAggregator();
+    const trainer = makeTrainer(async (input) => ({
+      adapterId: "a-fed",
+      method: "qlora",
+      sampleCount: input.entries.length,
+      finalLoss: 0.1,
+      durationMs: 1,
+      baseModelId: input.baseModelId,
+      adapterBytes: new Uint8Array([1, 2, 3]),
+    }));
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        trainer,
+        editLogExporter: async () => makeEntries(10),
+        federatedAggregator: agg as never,
+        federatedAggregationGate: () => true,
+      }),
+    );
+    await sched.runNow(42);
+    expect(agg.run).toHaveBeenCalledTimes(1);
+    expect(agg.run).toHaveBeenCalledWith({ projectId: "42" });
+  });
+
+  it("skips aggregator when gate returns false", async () => {
+    const agg = makeAggregator();
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        editLogExporter: async () => makeEntries(10),
+        federatedAggregator: agg as never,
+        federatedAggregationGate: () => false,
+      }),
+    );
+    await sched.runNow(1);
+    expect(agg.run).not.toHaveBeenCalled();
+  });
+
+  it("skips aggregator when adapter not accepted (below min-loss-delta)", async () => {
+    const agg = makeAggregator();
+    let nextLoss = 0.5;
+    const trainer = makeTrainer(async (input) => ({
+      adapterId: `a-${input.entries.length}`,
+      method: "qlora",
+      sampleCount: input.entries.length,
+      finalLoss: nextLoss,
+      durationMs: 1,
+      baseModelId: input.baseModelId,
+      adapterBytes: new Uint8Array([1]),
+    }));
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        trainer,
+        editLogExporter: async () => makeEntries(10),
+        federatedAggregator: agg as never,
+        federatedAggregationGate: () => true,
+        minLossImprovementDelta: 0.1,
+      }),
+    );
+    await sched.runNow(1); // first run — always accepted
+    expect(agg.run).toHaveBeenCalledTimes(1);
+    nextLoss = 0.5; // identical loss → rejected by delta gate
+    await sched.runNow(1);
+    expect(agg.run).toHaveBeenCalledTimes(1); // not called again
+  });
+
+  it("swallows aggregator.run failures (local pipeline succeeds)", async () => {
+    const agg = {
+      run: vi.fn(async () => {
+        throw new Error("peer fetch boom");
+      }),
+    };
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        editLogExporter: async () => makeEntries(10),
+        federatedAggregator: agg as never,
+        federatedAggregationGate: () => true,
+      }),
+    );
+    const receipt = await sched.runNow(1);
+    expect(receipt.adapterId).toBeTruthy();
+    expect(agg.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("swallows gate function exceptions (treats as off)", async () => {
+    const agg = makeAggregator();
+    const sched = new DistillationScheduler(
+      makeBaseOpts({
+        editLogExporter: async () => makeEntries(10),
+        federatedAggregator: agg as never,
+        federatedAggregationGate: () => {
+          throw new Error("settings read boom");
+        },
+      }),
+    );
+    await sched.runNow(1);
+    expect(agg.run).not.toHaveBeenCalled();
+  });
+});
+
+// ── Streaming training progress ──────────────────────────────────────────
+
+describe("DistillationScheduler — training progress", () => {
+  it("invokes publishProgress for every onProgress tick with a stable runId", async () => {
+    const publishProgress = vi.fn();
+    const trainer: DistillationTrainer = {
+      train: vi.fn(async (input) => {
+        input.onProgress?.({ step: 1, totalSteps: 3, loss: 0.9 });
+        input.onProgress?.({ step: 2, totalSteps: 3, loss: 0.5 });
+        input.onProgress?.({ step: 3, totalSteps: 3, loss: 0.2 });
+        return {
+          adapterId: "adapter-progress",
+          method: "qlora",
+          sampleCount: input.entries.length,
+          finalLoss: 0.2,
+          durationMs: 10,
+          baseModelId: input.baseModelId,
+        };
+      }),
+    };
+    const sched = new DistillationScheduler(
+      makeBaseOpts({ trainer, publishProgress, clock: () => 42_000 }),
+    );
+    await sched.runNow(1);
+    expect(publishProgress).toHaveBeenCalledTimes(3);
+    const calls = publishProgress.mock.calls.map(
+      (c) => c[0] as GeniusCoreDistillationProgressPayload,
+    );
+    const runIds = new Set(calls.map((c) => c.runId));
+    expect(runIds.size).toBe(1);
+    expect(calls[0]).toMatchObject({
+      projectId: "1",
+      step: 1,
+      totalSteps: 3,
+      loss: 0.9,
+    });
+    expect(calls[2].loss).toBe(0.2);
+  });
+
+  it("does not call publishProgress when none is configured", async () => {
+    const trainer: DistillationTrainer = {
+      train: vi.fn(async (input) => {
+        // Trainer always invokes onProgress regardless — scheduler must
+        // tolerate the no-publisher case without throwing.
+        input.onProgress?.({ step: 1, totalSteps: null, loss: null });
+        return {
+          adapterId: "adapter-noprog",
+          method: "qlora",
+          sampleCount: input.entries.length,
+          finalLoss: 0.1,
+          durationMs: 1,
+          baseModelId: input.baseModelId,
+        };
+      }),
+    };
+    const sched = new DistillationScheduler(makeBaseOpts({ trainer }));
+    await expect(sched.runNow(1)).resolves.toBeDefined();
+  });
+
+  it("swallows publishProgress errors so the trainer keeps running", async () => {
+    const publishProgress = vi.fn(() => {
+      throw new Error("subscriber blew up");
+    });
+    const trainer: DistillationTrainer = {
+      train: vi.fn(async (input) => {
+        input.onProgress?.({ step: 1, totalSteps: 2, loss: 0.7 });
+        input.onProgress?.({ step: 2, totalSteps: 2, loss: 0.3 });
+        return {
+          adapterId: "adapter-throw",
+          method: "qlora",
+          sampleCount: input.entries.length,
+          finalLoss: 0.3,
+          durationMs: 1,
+          baseModelId: input.baseModelId,
+        };
+      }),
+    };
+    const sched = new DistillationScheduler(
+      makeBaseOpts({ trainer, publishProgress }),
+    );
+    await expect(sched.runNow(1)).resolves.toBeDefined();
+    expect(publishProgress).toHaveBeenCalledTimes(2);
   });
 });
 

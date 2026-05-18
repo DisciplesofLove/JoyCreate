@@ -32,6 +32,7 @@
 import { createHash } from "node:crypto";
 
 import log from "electron-log";
+import { mirrorGeniusCoreEvent } from "./hyper_bridge";
 
 const logger = log.scope("genius-core/edit-logger");
 
@@ -69,7 +70,7 @@ export interface EditLogEntry {
   occurredAtMs: number;
 }
 
-export type PrivacyGate = () => boolean;
+export type PrivacyGate = (projectId?: number) => boolean;
 export type EditLogWriter = (entries: EditLogEntry[]) => Promise<void>;
 export type Clock = () => number;
 
@@ -82,12 +83,33 @@ export interface EditLoggerOptions {
   debounceMs?: number;
   /** Hard cap on buffer size; oldest entries are dropped on overflow. */
   maxBufferSize?: number;
+  /**
+   * Optional sink invoked whenever the buffer overflows and old entries
+   * are dropped. Errors thrown by the publisher are caught + logged so
+   * the recording path is never blocked by a misbehaving event bus.
+   * Production wiring publishes `genius_core.edit_log.dropped` here.
+   */
+  publishDropped?: (payload: EditLogDroppedPayload) => void;
   /** Wall-clock ms provider. Defaults to `Date.now`. */
   clock?: Clock;
   /** Schedules a deferred callback. Defaults to `setTimeout`. */
   scheduler?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   /** Cancels a scheduled callback. Defaults to `clearTimeout`. */
   cancel?: (handle: ReturnType<typeof setTimeout>) => void;
+}
+
+/** Payload emitted on overflow — mirrored to the domain event bus. */
+export interface EditLogDroppedPayload {
+  /** Project the dropped entries belonged to, when uniform; else null. */
+  projectId: number | null;
+  /** Entries dropped in *this* overflow event. */
+  droppedCount: number;
+  /** Running total of entries dropped across the logger's lifetime. */
+  totalDropped: number;
+  /** Buffer size cap at the moment of overflow. */
+  bufferSize: number;
+  /** Clock timestamp of the overflow. */
+  atMs: number;
 }
 
 const DEFAULT_DEBOUNCE_MS = 300;
@@ -136,6 +158,7 @@ export class EditLogger {
   private flushing: Promise<void> | null = null;
   private disposed = false;
   private droppedOnOverflow = 0;
+  private readonly publishDropped?: (payload: EditLogDroppedPayload) => void;
 
   constructor(opts: EditLoggerOptions) {
     if (typeof opts?.gate !== "function") {
@@ -151,6 +174,7 @@ export class EditLogger {
     this.clock = opts.clock ?? Date.now;
     this.schedule = opts.scheduler ?? setTimeout;
     this.cancelTimer = opts.cancel ?? clearTimeout;
+    this.publishDropped = opts.publishDropped;
   }
 
   /**
@@ -176,7 +200,7 @@ export class EditLogger {
 
     // Privacy gate is checked AFTER input validation so misuse still
     // surfaces during development regardless of consent state.
-    if (!this.isGateOpen()) return false;
+    if (!this.isGateOpen(input.projectId)) return false;
 
     const text = input.text;
     if (text !== undefined && typeof text !== "string") {
@@ -198,9 +222,27 @@ export class EditLogger {
     if (this.buffer.length > this.maxBufferSize) {
       // Drop oldest — we'd rather lose history than block the editor.
       const overflow = this.buffer.length - this.maxBufferSize;
-      this.buffer.splice(0, overflow);
+      const dropped = this.buffer.splice(0, overflow);
       this.droppedOnOverflow += overflow;
       logger.warn(`buffer overflow: dropped ${overflow} oldest entries`);
+      if (this.publishDropped) {
+        // Determine a single projectId only when *all* dropped entries
+        // came from the same project — otherwise null so the UI
+        // shows a global banner instead of one stuck to a project.
+        const firstProject = dropped[0]?.projectId ?? null;
+        const uniform = dropped.every((e) => e.projectId === firstProject);
+        try {
+          this.publishDropped({
+            projectId: uniform ? firstProject : null,
+            droppedCount: overflow,
+            totalDropped: this.droppedOnOverflow,
+            bufferSize: this.maxBufferSize,
+            atMs: this.clock(),
+          });
+        } catch (err) {
+          logger.warn("publishDropped threw (ignored)", err);
+        }
+      }
     }
 
     this.scheduleFlush();
@@ -224,6 +266,7 @@ export class EditLogger {
     this.flushing = (async () => {
       try {
         await this.writer(batch);
+        mirrorFlushedBatch(batch);
       } catch (err) {
         // Restore the batch at the head so the next flush retries.
         this.buffer = batch.concat(this.buffer);
@@ -273,9 +316,9 @@ export class EditLogger {
     };
   }
 
-  private isGateOpen(): boolean {
+  private isGateOpen(projectId?: number): boolean {
     try {
-      return this.gate() === true;
+      return this.gate(projectId) === true;
     } catch (err) {
       logger.warn("privacy gate threw; treating as closed", err);
       return false;
@@ -323,13 +366,18 @@ export async function setupEditLogger(): Promise<EditLogger> {
     import("@/db/schema"),
   ]);
 
-  const gate: PrivacyGate = () => {
+  const gate: PrivacyGate = (projectId?: number) => {
     try {
       const s = readSettings();
-      return (
-        s.geniusCore?.keystrokeLoggerEnabled === true &&
-        s.telemetryConsent === "opted_in"
-      );
+      // Telemetry consent is an unconditional pre-requisite.
+      if (s.telemetryConsent !== "opted_in") return false;
+      // Per-project override wins both ways (true *and* false) when set.
+      if (typeof projectId === "number") {
+        const override =
+          s.geniusCore?.keystrokeLoggerProjectOverrides?.[String(projectId)];
+        if (typeof override === "boolean") return override;
+      }
+      return s.geniusCore?.keystrokeLoggerEnabled === true;
     } catch (err) {
       logger.warn("settings read failed in privacy gate", err);
       return false;
@@ -353,7 +401,31 @@ export async function setupEditLogger(): Promise<EditLogger> {
     );
   };
 
-  liveLogger = new EditLogger({ gate, writer });
+  liveLogger = new EditLogger({
+    gate,
+    writer,
+    publishDropped: (payload) => {
+      // Best-effort: missing event-bus module must not block the editor
+      // hot path. Resolved lazily so the import graph stays acyclic.
+      void import("@/lib/events/domain_event_bus")
+        .then(({ getDomainEventBus }) => {
+          try {
+            getDomainEventBus().publish(
+              "genius_core.edit_log.dropped",
+              payload,
+            );
+          } catch (err) {
+            logger.warn("edit_log.dropped publish failed (ignored)", err);
+          }
+        })
+        .catch((err) => {
+          logger.warn(
+            "domain_event_bus dynamic import failed (ignored)",
+            err,
+          );
+        });
+    },
+  });
   return liveLogger;
 }
 
@@ -415,4 +487,42 @@ export async function exportSession(
     sequence: r.sequence,
     occurredAtMs: r.occurredAtMs,
   }));
+}
+
+/**
+ * Group a freshly-flushed batch by projectId and best-effort mirror each
+ * group's metadata (count, first/last seq, deterministic batch hash) to
+ * the Hypercore peer layer. Entries themselves are NEVER mirrored.
+ */
+function mirrorFlushedBatch(batch: EditLogEntry[]): void {
+  if (!batch || batch.length === 0) return;
+  const byProject = new Map<number, EditLogEntry[]>();
+  for (const e of batch) {
+    const arr = byProject.get(e.projectId);
+    if (arr) arr.push(e);
+    else byProject.set(e.projectId, [e]);
+  }
+  for (const [projectId, entries] of byProject) {
+    let firstSeq = entries[0].sequence;
+    let lastSeq = firstSeq;
+    let lastTs = entries[0].occurredAtMs;
+    const hash = createHash("sha256");
+    for (const e of entries) {
+      if (e.sequence < firstSeq) firstSeq = e.sequence;
+      if (e.sequence > lastSeq) lastSeq = e.sequence;
+      if (e.occurredAtMs > lastTs) lastTs = e.occurredAtMs;
+      hash.update(
+        `${e.sequence}|${e.fileId}|${e.op}|${e.textHash ?? ""}|${e.textLength}`,
+      );
+    }
+    mirrorGeniusCoreEvent(String(projectId), {
+      type: "edits",
+      projectId: String(projectId),
+      batchHash: hash.digest("hex"),
+      count: entries.length,
+      firstSeq,
+      lastSeq,
+      ts: lastTs,
+    });
+  }
 }

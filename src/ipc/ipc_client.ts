@@ -769,6 +769,82 @@ export class IpcClient {
     );
   }
 
+  public async geniusCoreGetEvalSet(
+    projectId: number,
+  ): Promise<
+    import("../lib/genius_core/adapter_evaluator").EvalSet | null
+  > {
+    return this.ipcRenderer.invoke("genius-core:get-eval-set", projectId);
+  }
+
+  public async geniusCoreSetEvalSet(args: {
+    projectId: number;
+    prompts: string[];
+    expectedKeywords: string[][];
+  }): Promise<
+    import("../lib/genius_core/adapter_evaluator").EvalSet | null
+  > {
+    return this.ipcRenderer.invoke("genius-core:set-eval-set", args);
+  }
+
+  public async geniusCoreListAdapterScores(args: {
+    projectId: number;
+    limit?: number;
+  }): Promise<
+    import("../lib/genius_core/adapter_evaluator").AdapterScoreRow[]
+  > {
+    return this.ipcRenderer.invoke("genius-core:list-adapter-scores", args);
+  }
+
+  public async geniusCoreSetRollbackThreshold(
+    threshold: number,
+  ): Promise<number> {
+    return this.ipcRenderer.invoke(
+      "genius-core:set-rollback-threshold",
+      threshold,
+    );
+  }
+
+  public async geniusCoreGetKeystrokeOverrides(): Promise<
+    Record<string, boolean>
+  > {
+    return this.ipcRenderer.invoke("genius-core:get-keystroke-overrides");
+  }
+
+  /**
+   * Set or clear the per-project keystroke-logger override.
+   * Pass `enabled: null` (or omit) to remove the override and fall back
+   * to the global `keystrokeLoggerEnabled` setting.
+   */
+  public async geniusCoreSetKeystrokeOverride(args: {
+    projectId: number;
+    enabled: boolean | null;
+  }): Promise<Record<string, boolean>> {
+    return this.ipcRenderer.invoke(
+      "genius-core:set-keystroke-override",
+      args,
+    );
+  }
+
+  /**
+   * Subscribe to per-step distillation progress events forwarded from the
+   * main process bus. Returns an unsubscribe function.
+   */
+  public onGeniusCoreDistillationProgress(
+    listener: (
+      payload: import("../lib/events/domain_event_bus").GeniusCoreDistillationProgressPayload,
+    ) => void,
+  ): () => void {
+    return this.ipcRenderer.on(
+      "genius-core:distillation-progress",
+      (payload: unknown) => {
+        listener(
+          payload as import("../lib/events/domain_event_bus").GeniusCoreDistillationProgressPayload,
+        );
+      },
+    );
+  }
+
   // Create a new app with an initial chat
   public async createApp(params: CreateAppParams): Promise<CreateAppResult> {
     return this.ipcRenderer.invoke("create-app", params);
@@ -1902,6 +1978,217 @@ export class IpcClient {
   }
 
   /**
+   * List all agent templates, optionally filtered by category.
+   */
+  async listAgentTemplates(category?: string): Promise<{
+    success: boolean;
+    templates: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      category: string;
+      featured?: boolean;
+      thumbnail?: string;
+      agent: any;
+    }>;
+  }> {
+    return this.ipcRenderer.invoke("agent-builder:list-templates", category);
+  }
+
+  /**
+   * List only the featured agent templates (curated Hyperagent-style tiles).
+   */
+  async listFeaturedAgentTemplates(): Promise<{
+    success: boolean;
+    templates: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      category: string;
+      featured?: boolean;
+      thumbnail?: string;
+      agent: any;
+    }>;
+  }> {
+    return this.ipcRenderer.invoke("agent-builder:list-featured-templates");
+  }
+
+  /**
+   * Create a new agent from a template.
+   */
+  async createAgentFromTemplate(args: {
+    templateId: string;
+    name: string;
+    description?: string;
+    customizations?: any;
+  }): Promise<{
+    success: boolean;
+    agent: { id: string; name: string; description?: string } & Record<string, any>;
+  }> {
+    return this.ipcRenderer.invoke("agent-builder:create-from-template", args);
+  }
+
+  /**
+   * Execute an agent synchronously with the given input.
+   */
+  async executeAgent(args: {
+    agentId: string;
+    input: any;
+    sessionId?: string;
+    variables?: Record<string, any>;
+  }): Promise<{
+    success: boolean;
+    executionId: string;
+    status: string;
+    output?: any;
+    metrics?: any;
+    error?: string;
+  }> {
+    return this.ipcRenderer.invoke("agent-builder:execute-agent", args);
+  }
+
+  /**
+   * Delete an agent by id.
+   */
+  async deleteAgent(agentId: string): Promise<{ success: boolean }> {
+    return this.ipcRenderer.invoke("agent-builder:delete-agent", agentId);
+  }
+
+  /**
+   * Activate an agent (set status to active) so it can be executed.
+   */
+  async activateAgent(agentId: string): Promise<{ success: boolean; agent: any }> {
+    return this.ipcRenderer.invoke("agent-builder:activate-agent", agentId);
+  }
+
+  // ─── Agent Schedules ──────────────────────────────────────────────────────
+
+  async listAgentSchedules(args?: { agentId?: string }): Promise<{
+    success: boolean;
+    schedules: any[];
+  }> {
+    return this.ipcRenderer.invoke("agent-schedules:list", args);
+  }
+
+  async createAgentSchedule(args: {
+    agentId: string;
+    name: string;
+    brief: string;
+    trigger:
+      | { type: "interval"; everyMinutes: number }
+      | { type: "daily"; atHour: number; atMinute: number }
+      | { type: "weekly"; weekday: number; atHour: number; atMinute: number };
+    enabled?: boolean;
+  }): Promise<{ success: boolean; schedule: any }> {
+    return this.ipcRenderer.invoke("agent-schedules:create", args);
+  }
+
+  async updateAgentSchedule(args: {
+    id: string;
+    patch: Record<string, any>;
+  }): Promise<{ success: boolean; schedule: any }> {
+    return this.ipcRenderer.invoke("agent-schedules:update", args);
+  }
+
+  async deleteAgentSchedule(id: string): Promise<{ success: boolean }> {
+    return this.ipcRenderer.invoke("agent-schedules:delete", id);
+  }
+
+  async toggleAgentSchedule(args: {
+    id: string;
+    enabled: boolean;
+  }): Promise<{ success: boolean; schedule: any }> {
+    return this.ipcRenderer.invoke("agent-schedules:toggle", args);
+  }
+
+  async runAgentScheduleNow(id: string): Promise<{
+    success: boolean;
+    schedule: any;
+  }> {
+    return this.ipcRenderer.invoke("agent-schedules:run-now", id);
+  }
+
+  async listAgentScheduleHistory(args?: {
+    scheduleId?: string;
+    limit?: number;
+  }): Promise<{ success: boolean; history: any[] }> {
+    return this.ipcRenderer.invoke("agent-schedules:list-history", args);
+  }
+
+  async readAgentScheduleAudio(
+    audioPath: string,
+  ): Promise<{ success: boolean; dataUrl: string }> {
+    return this.ipcRenderer.invoke("agent-schedules:read-audio", audioPath);
+  }
+
+  // ─── Agent Knowledge Base ─────────────────────────────────────────────────
+
+  async listAgentKbDocs(
+    agentId: string,
+  ): Promise<{ success: boolean; documents: any[] }> {
+    return this.ipcRenderer.invoke("agent-kb:list-docs", { agentId });
+  }
+
+  async addAgentKbText(args: {
+    agentId: string;
+    title: string;
+    content: string;
+    source?: string;
+  }): Promise<{ success: boolean; document: any }> {
+    return this.ipcRenderer.invoke("agent-kb:add-text", args);
+  }
+
+  async addAgentKbUrl(args: {
+    agentId: string;
+    url: string;
+    title?: string;
+  }): Promise<{ success: boolean; document: any }> {
+    return this.ipcRenderer.invoke("agent-kb:add-url", args);
+  }
+
+  async searchAgentKb(args: {
+    agentId: string;
+    query: string;
+    topK?: number;
+  }): Promise<{ success: boolean; results: any[] }> {
+    return this.ipcRenderer.invoke("agent-kb:search", args);
+  }
+
+  async deleteAgentKbDoc(args: {
+    agentId: string;
+    documentId: string;
+  }): Promise<{ success: boolean }> {
+    return this.ipcRenderer.invoke("agent-kb:delete-doc", args);
+  }
+
+  async clearAgentKb(agentId: string): Promise<{ success: boolean }> {
+    return this.ipcRenderer.invoke("agent-kb:clear", { agentId });
+  }
+
+  // ─── Agent Observability ─────────────────────────────────────────────────
+
+  async listAgentExecutions(args?: {
+    agentId?: string;
+    status?: string;
+    limit?: number;
+  }): Promise<{ success: boolean; executions: any[] }> {
+    return this.ipcRenderer.invoke("agent-builder:list-executions", args);
+  }
+
+  async listBuiltinMcpTools(): Promise<{
+    success: boolean;
+    tools: Array<{
+      id: string;
+      name: string;
+      description: string;
+      category: string;
+      inputSchema: any;
+    }>;
+  }> {
+    return this.ipcRenderer.invoke("agent-builder:list-builtin-mcp-tools");
+  }
+
+  /**
    * Subscribe to telemetry events from the main process.
    * Used to forward events to PostHog in the renderer.
    * @returns Unsubscribe function
@@ -2090,6 +2377,22 @@ export class IpcClient {
       return models;
     } catch (error) {
       console.error("[IpcClient] Error fetching LM Studio models:", error);
+      return [];
+    }
+  }
+
+  public async listLocalGeniusCoreModels(): Promise<LocalModel[]> {
+    try {
+      const response = await this.ipcRenderer.invoke(
+        "local-models:list-genius-core",
+      );
+      const models = response?.models || [];
+      console.log(
+        `[IpcClient] Genius Core models fetched: ${models.length} models`,
+      );
+      return models;
+    } catch (error) {
+      console.error("[IpcClient] Error fetching Genius Core models:", error);
       return [];
     }
   }

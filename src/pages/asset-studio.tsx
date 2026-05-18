@@ -5,6 +5,7 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { ImageStudioTab } from "@/components/image-studio/ImageStudioTab";
 import { VideoStudioTab } from "@/components/video-studio/VideoStudioTab";
 import { AssetStudioClient } from "@/ipc/asset_studio_client";
@@ -173,6 +174,22 @@ export default function AssetStudioPage() {
     code: "",
   });
 
+  const [apiForm, setApiForm] = useState({
+    name: "",
+    description: "",
+    apiType: "rest" as const,
+    baseUrl: "",
+    spec: "",
+  });
+
+  const [trainingDataForm, setTrainingDataForm] = useState({
+    name: "",
+    description: "",
+    dataType: "instruction" as const,
+    format: "jsonl" as const,
+    data: "",
+  });
+
   // Fetch stats
   const { data: stats } = useQuery({
     queryKey: ["asset-stats"],
@@ -254,6 +271,69 @@ export default function AssetStudioPage() {
     onError: (error) => toast.error(`Failed to create component: ${error.message}`),
   });
 
+  // Create API mutation
+  const createApiMutation = useMutation({
+    mutationFn: () =>
+      AssetStudioClient.createAPI({
+        name: apiForm.name,
+        description: apiForm.description,
+        apiType: apiForm.apiType,
+        baseUrl: apiForm.baseUrl || undefined,
+        authentication: "none",
+        endpoints: [],
+        spec: apiForm.spec || undefined,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["assets"] });
+      queryClient.invalidateQueries({ queryKey: ["asset-stats"] });
+      toast.success("API asset created successfully");
+      setIsCreateOpen(false);
+      setApiForm({ name: "", description: "", apiType: "rest", baseUrl: "", spec: "" });
+    },
+    onError: (error) => toast.error(`Failed to create API: ${error.message}`),
+  });
+
+  // Create training data mutation
+  const createTrainingDataMutation = useMutation({
+    mutationFn: () => {
+      let parsedData: any[] = [];
+      try {
+        const trimmed = trainingDataForm.data.trim();
+        if (trimmed.startsWith("[")) {
+          parsedData = JSON.parse(trimmed);
+        } else {
+          parsedData = trimmed
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => JSON.parse(line));
+        }
+      } catch (e) {
+        throw new Error(
+          `Invalid data — expected a JSON array or JSONL (one JSON value per line). ${(e as Error).message}`,
+        );
+      }
+      if (!Array.isArray(parsedData) || parsedData.length === 0) {
+        throw new Error("Training data must contain at least one sample.");
+      }
+      return AssetStudioClient.createTrainingData({
+        name: trainingDataForm.name,
+        description: trainingDataForm.description,
+        dataType: trainingDataForm.dataType,
+        format: trainingDataForm.format,
+        data: parsedData,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["assets"] });
+      queryClient.invalidateQueries({ queryKey: ["asset-stats"] });
+      toast.success("Training data created successfully");
+      setIsCreateOpen(false);
+      setTrainingDataForm({ name: "", description: "", dataType: "instruction", format: "jsonl", data: "" });
+    },
+    onError: (error) => toast.error(`Failed to create training data: ${error.message}`),
+  });
+
   // Delete asset mutation
   const deleteAssetMutation = useMutation({
     mutationFn: ({ type, id }: { type: AssetType; id: string }) =>
@@ -316,6 +396,12 @@ export default function AssetStudioPage() {
         break;
       case "ui-component":
         createUIComponentMutation.mutate();
+        break;
+      case "api":
+        createApiMutation.mutate();
+        break;
+      case "training-data":
+        createTrainingDataMutation.mutate();
         break;
       default:
         toast.error("Asset type not yet supported");
@@ -593,12 +679,184 @@ export default function AssetStudioPage() {
           </div>
         );
 
-      default:
+      case "api":
         return (
-          <div className="text-center py-8 text-muted-foreground">
-            <p>Creation form for {assetTypeLabels[createType]} coming soon!</p>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input
+                  placeholder="my-api"
+                  value={apiForm.name}
+                  onChange={(e) => setApiForm({ ...apiForm, name: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>API Type</Label>
+                <Select
+                  value={apiForm.apiType}
+                  onValueChange={(v) => setApiForm({ ...apiForm, apiType: v as any })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="rest">REST</SelectItem>
+                    <SelectItem value="graphql">GraphQL</SelectItem>
+                    <SelectItem value="grpc">gRPC</SelectItem>
+                    <SelectItem value="websocket">WebSocket</SelectItem>
+                    <SelectItem value="trpc">tRPC</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Description</Label>
+              <Input
+                placeholder="What does this API do?"
+                value={apiForm.description}
+                onChange={(e) => setApiForm({ ...apiForm, description: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Base URL</Label>
+              <Input
+                placeholder="https://api.example.com/v1"
+                value={apiForm.baseUrl}
+                onChange={(e) => setApiForm({ ...apiForm, baseUrl: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Spec (OpenAPI / GraphQL SDL / .proto — optional)</Label>
+              <Textarea
+                placeholder="Paste your API spec here"
+                className="font-mono text-sm min-h-[160px]"
+                value={apiForm.spec}
+                onChange={(e) => setApiForm({ ...apiForm, spec: e.target.value })}
+              />
+            </div>
           </div>
         );
+
+      case "training-data":
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input
+                  placeholder="my-training-set"
+                  value={trainingDataForm.name}
+                  onChange={(e) => setTrainingDataForm({ ...trainingDataForm, name: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Data Type</Label>
+                <Select
+                  value={trainingDataForm.dataType}
+                  onValueChange={(v) => setTrainingDataForm({ ...trainingDataForm, dataType: v as any })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="instruction">Instruction</SelectItem>
+                    <SelectItem value="conversation">Conversation</SelectItem>
+                    <SelectItem value="qa">Q&A</SelectItem>
+                    <SelectItem value="classification">Classification</SelectItem>
+                    <SelectItem value="ner">NER</SelectItem>
+                    <SelectItem value="summarization">Summarization</SelectItem>
+                    <SelectItem value="translation">Translation</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Format</Label>
+                <Select
+                  value={trainingDataForm.format}
+                  onValueChange={(v) => setTrainingDataForm({ ...trainingDataForm, format: v as any })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="jsonl">JSONL</SelectItem>
+                    <SelectItem value="parquet">Parquet</SelectItem>
+                    <SelectItem value="csv">CSV</SelectItem>
+                    <SelectItem value="hf-dataset">HF Dataset</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Description</Label>
+                <Input
+                  placeholder="Optional"
+                  value={trainingDataForm.description}
+                  onChange={(e) => setTrainingDataForm({ ...trainingDataForm, description: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Samples (JSON array or JSONL)</Label>
+              <Textarea
+                placeholder={'[\n  {"instruction": "...", "output": "..."},\n  ...\n]'}
+                className="font-mono text-xs min-h-[200px]"
+                value={trainingDataForm.data}
+                onChange={(e) => setTrainingDataForm({ ...trainingDataForm, data: e.target.value })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Paste a JSON array or one JSON object per line (JSONL).
+              </p>
+            </div>
+          </div>
+        );
+
+      default: {
+        // For asset types whose creation flow lives in a dedicated studio,
+        // route users there instead of duplicating the form here.
+        const studioRoutes: Partial<Record<AssetType, { to: string; label: string }>> = {
+          dataset: { to: "/datasets", label: "Open Dataset Studio" },
+          agent: { to: "/agents", label: "Open Agent Builder" },
+          model: { to: "/model-registry", label: "Open Model Registry" },
+          workflow: { to: "/workflows", label: "Open Workflow Builder" },
+          plugin: { to: "/plugin-marketplace", label: "Open Plugin Marketplace" },
+        };
+        const cta = studioRoutes[createType];
+        if (cta) {
+          return (
+            <div className="text-center py-8 space-y-4">
+              <div className="mx-auto w-12 h-12 rounded-full bg-violet-500/10 flex items-center justify-center text-violet-400">
+                {assetTypeIcons[createType]}
+              </div>
+              <div>
+                <p className="text-sm font-medium">
+                  {assetTypeLabels[createType]} creation lives in a dedicated studio
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Use the {assetTypeLabels[createType]} studio to build, then return here to
+                  publish or monetize.
+                </p>
+              </div>
+              <Button asChild onClick={() => setIsCreateOpen(false)}>
+                <Link to={cta.to as any}>{cta.label}</Link>
+              </Button>
+            </div>
+          );
+        }
+        return (
+          <div className="text-center py-8 text-muted-foreground space-y-2">
+            <p>
+              {assetTypeLabels[createType]} authoring tools are not yet available.
+            </p>
+            <p className="text-xs">
+              You can import an existing {assetTypeLabels[createType].toLowerCase()} via{" "}
+              <span className="font-medium">Import</span> to register it here.
+            </p>
+          </div>
+        );
+      }
     }
   };
 

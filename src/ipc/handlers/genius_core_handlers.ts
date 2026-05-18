@@ -12,7 +12,10 @@
  */
 
 import { ipcMain } from "electron";
+import { BrowserWindow } from "electron";
 import log from "electron-log";
+
+import { getDomainEventBus } from "@/lib/events/domain_event_bus";
 
 import {
   GeniusCore,
@@ -43,9 +46,51 @@ import {
   type DistillationReceipt,
   type DistillationStatus,
 } from "@/lib/genius_core/distillation_scheduler";
+import {
+  getAdapterEvaluator,
+  setupAdapterEvaluator,
+  type AdapterScoreRow,
+  type EvalSet,
+} from "@/lib/genius_core/adapter_evaluator";
 import { readSettings, writeSettings } from "@/main/settings";
+import type { UserSettings } from "@/lib/schemas";
 
 const logger = log.scope("genius_core_handlers");
+
+/**
+ * Spread the prior `geniusCore` settings block before applying `updates`.
+ * Fixes a class of bugs where individual writeSettings call-sites built
+ * the object from scratch and silently dropped newer optional fields
+ * (eg. `hyperReplicationEnabled`, `adapterRollbackThreshold`).
+ */
+function patchGeniusCoreSettings(
+  updates: Partial<NonNullable<UserSettings["geniusCore"]>>,
+): void {
+  const current = readSettings();
+  const prior = current.geniusCore;
+  writeSettings({
+    geniusCore: {
+      enabled: prior?.enabled ?? false,
+      vramBudgetGb: prior?.vramBudgetGb ?? 8,
+      baseModelId: prior?.baseModelId ?? "phi-3-mini-4k-int4",
+      executionProvider: prior?.executionProvider ?? "auto",
+      contextSlotsDir: prior?.contextSlotsDir,
+      npuOffloadEnabled: prior?.npuOffloadEnabled ?? false,
+      weightStreamingEnabled: prior?.weightStreamingEnabled ?? false,
+      keystrokeLoggerEnabled: prior?.keystrokeLoggerEnabled ?? false,
+      nightlyDistillationEnabled: prior?.nightlyDistillationEnabled ?? false,
+      hyperReplicationEnabled: prior?.hyperReplicationEnabled ?? false,
+      adapterRollbackThreshold: prior?.adapterRollbackThreshold ?? 0.05,
+      federatedDistillationEnabled:
+        prior?.federatedDistillationEnabled ?? false,
+      slotHistoryKeepLast: prior?.slotHistoryKeepLast,
+      keystrokeLoggerProjectOverrides:
+        prior?.keystrokeLoggerProjectOverrides,
+      toolCallFallback: prior?.toolCallFallback,
+      ...updates,
+    },
+  });
+}
 
 /** Pure validator extracted so unit tests can exercise the branches. */
 export function assertInferRequest(value: unknown): GeniusCoreInferRequest {
@@ -85,6 +130,7 @@ export interface GeniusCoreBaseModelListEntry {
   contextWindow: number;
   executionProviders: string[];
   approxBytes: number;
+  source: "curated" | "registry";
 }
 
 export function listBaseModels(): GeniusCoreBaseModelListEntry[] {
@@ -96,6 +142,7 @@ export function listBaseModels(): GeniusCoreBaseModelListEntry[] {
     contextWindow: m.contextWindow,
     executionProviders: m.supportedProviders.map(String),
     approxBytes: m.approxBytes,
+    source: m.source,
   }));
 }
 
@@ -158,6 +205,15 @@ async function ensureDistillationScheduler() {
     return getDistillationScheduler();
   } catch {
     return setupDistillationScheduler();
+  }
+}
+
+/** Lazy adapter-evaluator access mirroring the other ensure* helpers. */
+async function ensureAdapterEvaluator() {
+  try {
+    return getAdapterEvaluator();
+  } catch {
+    return setupAdapterEvaluator();
   }
 }
 
@@ -303,29 +359,16 @@ export function registerGeniusCoreHandlers(): void {
         throw new Error(`Unknown Genius Core base model: ${modelId}`);
       }
 
-      const current = readSettings();
-      const prior = current.geniusCore;
-      writeSettings({
-        geniusCore: {
-          enabled: prior?.enabled ?? false,
-          vramBudgetGb: prior?.vramBudgetGb ?? 8,
-          baseModelId: target.id,
-          executionProvider: prior?.executionProvider ?? "auto",
-          contextSlotsDir: prior?.contextSlotsDir,
-          npuOffloadEnabled: prior?.npuOffloadEnabled ?? false,
-          weightStreamingEnabled: prior?.weightStreamingEnabled ?? false,
-          keystrokeLoggerEnabled: prior?.keystrokeLoggerEnabled ?? false,
-          nightlyDistillationEnabled: prior?.nightlyDistillationEnabled ?? false,
-        },
-      });
+      patchGeniusCoreSettings({ baseModelId: target.id });
       logger.info("Genius Core base model updated", { modelId: target.id });
 
-      // If the backend is currently live, force it back to uninitialized so
-      // the next inference reloads against the new base.
+      // Hot-swap the runtime so the new base is ready for the next inference
+      // without forcing the user to re-init. Errors here are surfaced but do
+      // not abort — the settings change still persists.
       try {
-        await GeniusCore.shutdown();
+        await GeniusCore.switchBaseModel(target.id);
       } catch (err) {
-        logger.warn("shutdown during base swap threw (ignored)", err);
+        logger.warn("switchBaseModel failed (settings still updated)", err);
       }
       return GeniusCore.status();
     },
@@ -461,21 +504,7 @@ export function registerGeniusCoreHandlers(): void {
           "genius-core:distillation-set-enabled requires a boolean argument",
         );
       }
-      const current = readSettings();
-      const prior = current.geniusCore;
-      writeSettings({
-        geniusCore: {
-          enabled: prior?.enabled ?? false,
-          vramBudgetGb: prior?.vramBudgetGb ?? 8,
-          baseModelId: prior?.baseModelId ?? "phi-3-mini-4k-int4",
-          executionProvider: prior?.executionProvider ?? "auto",
-          contextSlotsDir: prior?.contextSlotsDir,
-          npuOffloadEnabled: prior?.npuOffloadEnabled ?? false,
-          weightStreamingEnabled: prior?.weightStreamingEnabled ?? false,
-          keystrokeLoggerEnabled: prior?.keystrokeLoggerEnabled ?? false,
-          nightlyDistillationEnabled: raw,
-        },
-      });
+      patchGeniusCoreSettings({ nightlyDistillationEnabled: raw });
       const sched = await ensureDistillationScheduler();
       if (raw) sched.start();
       else sched.stop();
@@ -483,7 +512,171 @@ export function registerGeniusCoreHandlers(): void {
     },
   );
 
+  ipcMain.handle(
+    "genius-core:get-eval-set",
+    async (_e, raw: unknown): Promise<EvalSet | null> => {
+      if (!Number.isInteger(raw) || (raw as number) <= 0) {
+        throw new Error(
+          "genius-core:get-eval-set requires a positive integer projectId",
+        );
+      }
+      const evaluator = await ensureAdapterEvaluator();
+      return evaluator.getEvalSet(raw as number);
+    },
+  );
+
+  ipcMain.handle(
+    "genius-core:set-eval-set",
+    async (_e, raw: unknown): Promise<EvalSet | null> => {
+      if (!raw || typeof raw !== "object") {
+        throw new Error("genius-core:set-eval-set expects an options object");
+      }
+      const o = raw as Record<string, unknown>;
+      const projectId = Number(o.projectId);
+      if (!Number.isInteger(projectId) || projectId <= 0) {
+        throw new Error(
+          "genius-core:set-eval-set requires a positive integer projectId",
+        );
+      }
+      const prompts = o.prompts;
+      const expectedKeywords = o.expectedKeywords;
+      if (!Array.isArray(prompts) || !Array.isArray(expectedKeywords)) {
+        throw new Error(
+          "genius-core:set-eval-set requires `prompts` and `expectedKeywords` arrays",
+        );
+      }
+      const evaluator = await ensureAdapterEvaluator();
+      await evaluator.setEvalSet(
+        projectId,
+        prompts as string[],
+        expectedKeywords as string[][],
+      );
+      return evaluator.getEvalSet(projectId);
+    },
+  );
+
+  ipcMain.handle(
+    "genius-core:list-adapter-scores",
+    async (_e, raw: unknown): Promise<AdapterScoreRow[]> => {
+      if (!raw || typeof raw !== "object") {
+        throw new Error(
+          "genius-core:list-adapter-scores expects an options object",
+        );
+      }
+      const o = raw as Record<string, unknown>;
+      const projectId = Number(o.projectId);
+      if (!Number.isInteger(projectId) || projectId <= 0) {
+        throw new Error(
+          "genius-core:list-adapter-scores requires a positive integer projectId",
+        );
+      }
+      const limit =
+        typeof o.limit === "number" && Number.isFinite(o.limit)
+          ? Math.max(1, Math.min(500, Math.floor(o.limit)))
+          : 50;
+      const evaluator = await ensureAdapterEvaluator();
+      return evaluator.listScores(projectId, limit);
+    },
+  );
+
+  ipcMain.handle(
+    "genius-core:set-rollback-threshold",
+    async (_e, raw: unknown): Promise<number> => {
+      if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > 1) {
+        throw new Error(
+          "genius-core:set-rollback-threshold requires a number in [0, 1]",
+        );
+      }
+      patchGeniusCoreSettings({ adapterRollbackThreshold: raw });
+      return raw;
+    },
+  );
+
+  ipcMain.handle(
+    "genius-core:get-keystroke-overrides",
+    (): Record<string, boolean> => {
+      return (
+        readSettings().geniusCore?.keystrokeLoggerProjectOverrides ?? {}
+      );
+    },
+  );
+
+  ipcMain.handle(
+    "genius-core:set-keystroke-override",
+    async (
+      _e,
+      raw: unknown,
+    ): Promise<Record<string, boolean>> => {
+      if (!raw || typeof raw !== "object") {
+        throw new Error(
+          "genius-core:set-keystroke-override expects { projectId, enabled? }",
+        );
+      }
+      const v = raw as { projectId?: unknown; enabled?: unknown };
+      if (
+        !Number.isInteger(v.projectId) ||
+        (v.projectId as number) <= 0
+      ) {
+        throw new Error(
+          "genius-core:set-keystroke-override requires a positive integer projectId",
+        );
+      }
+      if (
+        v.enabled !== undefined &&
+        v.enabled !== null &&
+        typeof v.enabled !== "boolean"
+      ) {
+        throw new Error(
+          "genius-core:set-keystroke-override `enabled` must be boolean | null",
+        );
+      }
+      const key = String(v.projectId);
+      const prior =
+        readSettings().geniusCore?.keystrokeLoggerProjectOverrides ?? {};
+      const next: Record<string, boolean> = { ...prior };
+      if (v.enabled === undefined || v.enabled === null) {
+        delete next[key];
+      } else {
+        next[key] = v.enabled as boolean;
+      }
+      patchGeniusCoreSettings({ keystrokeLoggerProjectOverrides: next });
+      return next;
+    },
+  );
+
   logger.info("Genius Core IPC handlers registered", {
     catalogueSize: GENIUS_CORE_BASE_MODELS.length,
   });
+
+  // Forward distillation progress events to all renderers exactly once.
+  if (!distillationProgressForwarderInstalled) {
+    distillationProgressForwarderInstalled = true;
+    try {
+      getDomainEventBus().on(
+        "genius_core.distillation.progress",
+        (envelope) => {
+          try {
+            for (const win of BrowserWindow.getAllWindows()) {
+              if (win.isDestroyed()) continue;
+              const wc = win.webContents;
+              if (wc.isDestroyed()) continue;
+              wc.send("genius-core:distillation-progress", envelope.payload);
+            }
+          } catch (err) {
+            logger.warn(
+              "Failed to forward genius_core.distillation.progress",
+              err,
+            );
+          }
+        },
+      );
+    } catch (err) {
+      logger.warn(
+        "Failed to subscribe to genius_core.distillation.progress",
+        err,
+      );
+    }
+  }
 }
+
+let distillationProgressForwarderInstalled = false;

@@ -96,6 +96,8 @@ import { registerSecretsVaultHandlers } from "./handlers/secrets_vault_handlers"
 import { registerOfflineDocsHandlers } from "./handlers/offline_docs_handlers";
 import { registerAILearningHandlers } from "./handlers/ai_learning_handlers";
 import { registerAgentSwarmHandlers } from "./handlers/agent_swarm_handlers";
+import { registerOpenClawCommandCenterHandlers } from "./handlers/openclaw_command_center_handlers";
+import { registerIdentityHandlers } from "./handlers/identity_handlers";
 import { registerAutonomousAgentHandlers } from "./handlers/autonomous_agent_handlers";
 import { registerAutonomousAgentProductionHandlers } from "./handlers/autonomous_agent_production_handlers";
 import { registerModelFactoryHandlers } from "./handlers/model_factory_handlers";
@@ -332,6 +334,12 @@ export function registerIpcHandlers() {
   
   // Agent Swarm System - Self-replicating agent orchestration
   registerAgentSwarmHandlers();
+
+  // OpenClaw Agent Command Center — aliases sessions/subagents/cron/
+  // celestia/joycreate-agents channels onto existing real backends.
+  // Must run AFTER agent_swarm + agent_schedule handlers because it
+  // calls into them via the registered ipcMain listeners.
+  registerOpenClawCommandCenterHandlers();
   
   // Autonomous Agent System - Fully autonomous AI agents
   registerAutonomousAgentHandlers();
@@ -602,6 +610,9 @@ export function registerIpcHandlers() {
 
   // DEAI Phase 1C — Studio publish (image/video → publishAndForget).
   registerStudioPublishHandlers();
+
+  // Unified Identity hub — DID + ENS + JNS + audit-event log.
+  registerIdentityHandlers();
 
   // Stub handlers — safe no-op responders for channels whose main-side
   // service has not yet been implemented. MUST be registered LAST so real

@@ -79,6 +79,7 @@ export class OnnxRuntimeMain implements GeniusCoreBackend {
   private session: SessionRefs | null = null;
   private executionProvider: string | null = null;
   private vramBudgetGb = 8;
+  private lastInference: GeniusCoreStatusReport["lastInference"] = null;
   private loadedContextSlots = new Set<string>();
 
   async init(): Promise<void> {
@@ -168,6 +169,24 @@ export class OnnxRuntimeMain implements GeniusCoreBackend {
       this.lastError = err instanceof Error ? err.message : String(err);
       throw err;
     }
+  }
+
+  async switchBaseModel(modelId: string): Promise<void> {
+    const meta = findBaseModel(modelId);
+    if (!meta) {
+      throw new Error(`Unknown Genius Core base model: ${modelId}`);
+    }
+    if (this.session?.modelId === modelId && this.state === "ready") {
+      return;
+    }
+    // Free the previous session so the new base does not double-count
+    // against the VRAM budget while it is loading.
+    this.session = null;
+    if (this.state === "error") this.lastError = undefined;
+    if (this.state !== "uninitialized") this.state = "ready";
+    // loadBase() reads `geniusCore.baseModelId` from settings; caller patched
+    // it before invoking us, so the right model gets loaded.
+    await this.loadBase();
   }
 
   async loadContextSlot(projectId: string): Promise<void> {
@@ -269,6 +288,12 @@ export class OnnxRuntimeMain implements GeniusCoreBackend {
 
       const durationMs = Date.now() - t0;
       this.state = "ready";
+      this.lastInference = {
+        usedShardStream: false,
+        tokensOut: newTokens.length,
+        durationMs,
+        atMs: Date.now(),
+      };
       await getDomainEventBus().publish("genius_core.inference.completed", {
         projectId: req.projectId,
         modelId: this.session.modelId,
@@ -306,6 +331,7 @@ export class OnnxRuntimeMain implements GeniusCoreBackend {
       vramBudgetGb: this.vramBudgetGb,
       vramUsedBytes: this.session?.residentBytes ?? 0,
       lastError: this.lastError,
+      lastInference: this.lastInference,
     };
   }
 

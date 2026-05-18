@@ -118,6 +118,34 @@ export interface GeniusCoreDistillationCompletedPayload {
   sampleCount: number;
   finalLoss: number;
   durationMs: number;
+  /**
+   * Hex-encoded SHA-256 over the adapter weight bytes. Empty string when
+   * the trainer did not produce raw bytes (eg. delta-only updates).
+   * Consumers can use this to independently verify peer-published
+   * adapters before merging or pinning.
+   */
+  adapterHash: string;
+}
+
+/**
+ * Streaming per-step training progress emitted *during* a distillation
+ * run. UI subscribers can render a live loss curve / progress bar. The
+ * scheduler generates a `runId` per training invocation so multiple
+ * concurrent runs (different projects) can be demultiplexed. Best-effort
+ * — listeners must NOT block the trainer.
+ */
+export interface GeniusCoreDistillationProgressPayload {
+  projectId: string;
+  /** Unique id for this training invocation (stable across the run). */
+  runId: string;
+  /** 1-based step index. */
+  step: number;
+  /** Total planned steps when known; null when streaming open-ended. */
+  totalSteps: number | null;
+  /** Training loss at this step, when available. */
+  loss: number | null;
+  /** Wall-clock timestamp of the progress sample. */
+  atMs: number;
 }
 
 export interface GeniusCoreAdapterPublishedPayload {
@@ -129,6 +157,70 @@ export interface GeniusCoreAdapterPublishedPayload {
   mintTxHash?: string;
   /** Celestia anchor tx, when DA submission succeeded. */
   celestiaTxHash?: string;
+}
+
+export interface GeniusCoreAdapterRolledBackPayload {
+  projectId: string;
+  /** Adapter id that was rejected. */
+  adapterId: string;
+  /** Score of the rejected adapter, in [0, 1]. */
+  score: number;
+  /** Score of the previous applied adapter (baseline). */
+  baselineScore: number;
+  /** New head context slot CID after rollback; null if cleared. */
+  revertedToCid: string | null;
+}
+
+export interface GeniusCoreAdapterAggregatedPayload {
+  projectId: string;
+  /** Number of peer candidates considered (after eval/ACL filtering). */
+  candidatesUsed: number;
+  /** Sum of (sampleCount / max(0.01, finalLoss)) across used candidates. */
+  totalWeight: number;
+  /** Adapter ids that contributed to the merge. */
+  sourceAdapterIds: string[];
+  /** New context slot CID created from the merged adapter, if persisted. */
+  newSlotCid: string | null;
+}
+
+/**
+ * Edit logger backpressure event — fired when the in-memory buffer
+ * overflows and the oldest entries are dropped. The control panel
+ * consumes this to surface a banner so users know they are losing
+ * training signal (typically because the disk writer is stalled).
+ */
+export interface GeniusCoreEditLogDroppedPayload {
+  /** Project id when all dropped entries shared one; null when mixed. */
+  projectId: number | null;
+  /** Entries dropped in this overflow event. */
+  droppedCount: number;
+  /** Running total dropped across the logger's lifetime. */
+  totalDropped: number;
+  /** Buffer-size cap at the moment of overflow. */
+  bufferSize: number;
+  /** Wall-clock timestamp of the overflow. */
+  atMs: number;
+}
+
+/**
+ * Emitted when a chat turn that originally targeted Genius Core was
+ * routed to a capable fallback model because the turn required tool /
+ * function calling. Lets the control panel surface "this turn was
+ * answered by <fallback>" so the user knows their selection was
+ * temporarily bypassed.
+ */
+export interface GeniusCoreToolFallbackInvokedPayload {
+  /** Chat id the swap happened in. */
+  chatId: number;
+  /** App id, if known, for per-app aggregation. */
+  appId: number | null;
+  /** The base model id the user originally selected on Genius Core. */
+  originalModel: string;
+  /** Provider+model the turn was actually routed to. */
+  fallbackProvider: string;
+  fallbackModel: string;
+  /** Wall-clock ms at the swap. */
+  atMs: number;
 }
 
 export interface DomainEventMap {
@@ -143,7 +235,12 @@ export interface DomainEventMap {
   "genius_core.context_slot.loaded": GeniusCoreContextSlotLoadedPayload;
   "genius_core.inference.completed": GeniusCoreInferenceCompletedPayload;
   "genius_core.distillation.completed": GeniusCoreDistillationCompletedPayload;
+  "genius_core.distillation.progress": GeniusCoreDistillationProgressPayload;
   "genius_core.adapter.published": GeniusCoreAdapterPublishedPayload;
+  "genius_core.adapter.rolled_back": GeniusCoreAdapterRolledBackPayload;
+  "genius_core.adapter.aggregated": GeniusCoreAdapterAggregatedPayload;
+  "genius_core.edit_log.dropped": GeniusCoreEditLogDroppedPayload;
+  "genius_core.tool_fallback.invoked": GeniusCoreToolFallbackInvokedPayload;
 }
 
 export type DomainEventType = keyof DomainEventMap;

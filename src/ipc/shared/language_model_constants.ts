@@ -624,6 +624,10 @@ export const LOCAL_PROVIDERS: Record<
     displayName: "LM Studio",
     hasFreeTier: true,
   },
+  "genius-core": {
+    displayName: "Genius Core",
+    hasFreeTier: true,
+  },
   OpenClaw: {
     displayName: "OpenClaw Gateway",
     hasFreeTier: true,

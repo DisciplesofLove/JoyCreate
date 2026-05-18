@@ -420,6 +420,14 @@ export const UserSettingsSchema = z.object({
       ]),
       /** Absolute path under userData for per-project IPLD context slot cache. */
       contextSlotsDir: z.string().optional(),
+      /**
+       * Max number of historical context slots to keep per project after a
+       * successful adapter promotion. The current head + most-recent N
+       * slots are kept; older slots are unpinned (best-effort). Slots
+       * with `metadata.published === true` are always preserved.
+       * Default: 10. Set to 0 to disable auto-prune.
+       */
+      slotHistoryKeepLast: z.number().int().min(0).optional(),
       /** Route lightweight background work (telemetry, indexing) to NPU when available. */
       npuOffloadEnabled: z.boolean(),
       /** Allow live P2P weight-shard streaming for off-local-cache inference steps. */
@@ -430,8 +438,105 @@ export const UserSettingsSchema = z.object({
        * When true, also requires `telemetryConsent === "opted_in"` to actually capture.
        */
       keystrokeLoggerEnabled: z.boolean(),
+      /**
+       * Per-project privacy overrides for the keystroke/edit logger.
+       * Map of `projectId.toString()` → boolean. When a project has an
+       * explicit entry it WINS (both true and false) over the global
+       * `keystrokeLoggerEnabled` flag. Projects without an entry fall
+       * through to the global flag. Always still gated by
+       * `telemetryConsent === "opted_in"`.
+       */
+      keystrokeLoggerProjectOverrides: z
+        .record(z.string(), z.boolean())
+        .optional(),
       /** Nightly idle-triggered QLoRA distillation. Off by default. */
       nightlyDistillationEnabled: z.boolean(),
+      /**
+       * Mirror Genius Core metadata events (slot CIDs, edit-log batch hashes,
+       * distillation receipts) to the Hypercore peer layer under scope
+       * "genius-core". Metadata only — NEVER raw edits or adapter bytes.
+       * Runtime-gated by global `hyperEnabled`. Off by default.
+       */
+      hyperReplicationEnabled: z.boolean().optional(),
+      /**
+       * Absolute drop in eval score (0..1) that triggers auto-rollback of
+       * a freshly distilled adapter. Set to 0 to disable. Default 0.05.
+       */
+      adapterRollbackThreshold: z.number().min(0).max(1).optional(),
+      /**
+       * Opt in to federated distillation: merge peer adapter receipts
+       * observed on the Hypercore `genius-core` log into local context
+       * slots. Requires `hyperReplicationEnabled` and `hyperEnabled`.
+       */
+      federatedDistillationEnabled: z.boolean().optional(),
+      /**
+       * Capable model used as a one-turn fallback when a Genius Core
+       * turn requires tool/function calling (which Genius Core does not
+       * natively support). When unset, tool-requiring turns simply
+       * proceed against Genius Core and the model emits a plain-text
+       * apology in place of tool calls.
+       */
+      toolCallFallback: z
+        .object({
+          provider: z.string(),
+          modelName: z.string(),
+        })
+        .optional(),
+    })
+    .optional(),
+
+  /**
+   * Unified local-provider settings. Forward-looking home for per-provider
+   * config (base URLs, enabled flags) that today lives scattered across
+   * env vars and the top-level `geniusCore` block. All sub-blocks are
+   * optional; absence means "fall back to the current behavior".
+   *
+   * When `localProviders.geniusCore` is set it WINS over the legacy
+   * top-level `geniusCore` block — see `getGeniusCoreSettings()` in
+   * `src/main/settings.ts`.
+   */
+  localProviders: z
+    .object({
+      ollama: z
+        .object({
+          enabled: z.boolean().optional(),
+          baseUrl: z.string().optional(),
+        })
+        .optional(),
+      lmstudio: z
+        .object({
+          enabled: z.boolean().optional(),
+          baseUrl: z.string().optional(),
+        })
+        .optional(),
+      geniusCore: z
+        .object({
+          enabled: z.boolean().optional(),
+          vramBudgetGb: z.number().min(1).max(96).optional(),
+          baseModelId: z.string().optional(),
+          executionProvider: z
+            .enum(["auto", "webgpu", "directml", "coreml", "cuda", "cpu"])
+            .optional(),
+          contextSlotsDir: z.string().optional(),
+          slotHistoryKeepLast: z.number().int().min(0).optional(),
+          npuOffloadEnabled: z.boolean().optional(),
+          weightStreamingEnabled: z.boolean().optional(),
+          keystrokeLoggerEnabled: z.boolean().optional(),
+          keystrokeLoggerProjectOverrides: z
+            .record(z.string(), z.boolean())
+            .optional(),
+          nightlyDistillationEnabled: z.boolean().optional(),
+          hyperReplicationEnabled: z.boolean().optional(),
+          adapterRollbackThreshold: z.number().min(0).max(1).optional(),
+          federatedDistillationEnabled: z.boolean().optional(),
+          toolCallFallback: z
+            .object({
+              provider: z.string(),
+              modelName: z.string(),
+            })
+            .optional(),
+        })
+        .optional(),
     })
     .optional(),
 

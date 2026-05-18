@@ -46,6 +46,20 @@ const DEFAULT_SETTINGS: UserSettings = {
     weightStreamingEnabled: false,
     keystrokeLoggerEnabled: false,
     nightlyDistillationEnabled: false,
+    hyperReplicationEnabled: false,
+    /**
+     * Auto-rollback newly-trained adapter when its eval score is at least
+     * this many points (absolute, [0, 1] scale) worse than the previous
+     * applied score. 0 disables rollback. Default 0.05 (5 percentage points).
+     */
+    adapterRollbackThreshold: 0.05,
+    /**
+     * Opt in to federated distillation — periodically merge peer adapter
+     * receipts observed on the Hypercore peer layer into the local
+     * context slot. Requires `hyperReplicationEnabled` + `hyperEnabled`.
+     * Off by default.
+     */
+    federatedDistillationEnabled: false,
   },
 };
 
@@ -188,6 +202,42 @@ export function readSettings(): UserSettings {
     logger.error("Error reading settings:", error);
     return DEFAULT_SETTINGS;
   }
+}
+
+/**
+ * Resolve the effective Genius Core configuration, preferring the new
+ * unified `localProviders.geniusCore` block when present and falling back
+ * to the legacy top-level `geniusCore` block otherwise. Fields are
+ * merged shallowly with the new block winning per-key so partial
+ * overrides work — eg. flipping just `enabled` on the new block.
+ *
+ * Always returns a defined object (never undefined) so callers can read
+ * `getGeniusCoreSettings().enabled` without optional chaining.
+ */
+export function getGeniusCoreSettings(): NonNullable<
+  UserSettings["geniusCore"]
+> {
+  const s = readSettings();
+  const legacy = s.geniusCore;
+  const next = s.localProviders?.geniusCore;
+  const merged = { ...(legacy ?? {}), ...(next ?? {}) };
+  return {
+    enabled: merged.enabled ?? false,
+    vramBudgetGb: merged.vramBudgetGb ?? 8,
+    baseModelId: merged.baseModelId ?? "phi-3-mini-4k-instruct-int4-onnx",
+    executionProvider: merged.executionProvider ?? "auto",
+    contextSlotsDir: merged.contextSlotsDir,
+    slotHistoryKeepLast: merged.slotHistoryKeepLast,
+    npuOffloadEnabled: merged.npuOffloadEnabled ?? false,
+    weightStreamingEnabled: merged.weightStreamingEnabled ?? false,
+    keystrokeLoggerEnabled: merged.keystrokeLoggerEnabled ?? false,
+    keystrokeLoggerProjectOverrides: merged.keystrokeLoggerProjectOverrides,
+    nightlyDistillationEnabled: merged.nightlyDistillationEnabled ?? false,
+    hyperReplicationEnabled: merged.hyperReplicationEnabled,
+    adapterRollbackThreshold: merged.adapterRollbackThreshold,
+    federatedDistillationEnabled: merged.federatedDistillationEnabled,
+    toolCallFallback: merged.toolCallFallback,
+  };
 }
 
 export function writeSettings(settings: Partial<UserSettings>): void {

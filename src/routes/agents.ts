@@ -12,6 +12,13 @@ export const agentsRoute = createRoute({
   component: lazyRouteComponent(() => import("../pages/agents")),
 });
 
+// Featured agent template gallery
+export const agentGalleryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/agents/gallery",
+  component: lazyRouteComponent(() => import("../pages/agent-gallery")),
+});
+
 // Agent editor route
 export const agentEditorRoute = createRoute({
   getParentRoute: () => rootRoute,

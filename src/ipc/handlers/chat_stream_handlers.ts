@@ -38,6 +38,7 @@ import {
 import { streamTestResponse } from "./testing_chat_handlers";
 import { getTestResponse } from "./testing_chat_handlers";
 import { getModelClient, ModelClient } from "../utils/get_model_client";
+import { getDomainEventBus } from "@/lib/events/domain_event_bus";
 import log from "electron-log";
 import { sendTelemetryEvent } from "../utils/telemetry";
 import {
@@ -130,7 +131,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 // Local model providers that may not support function calling
-const LOCAL_MODEL_PROVIDERS = ["ollama", "lmstudio"];
+const LOCAL_MODEL_PROVIDERS = ["ollama", "lmstudio", "genius-core"];
 
 /**
  * Check if the selected model is a local model (Ollama, LM Studio, etc.)
@@ -528,8 +529,40 @@ ${componentSnippet}
         );
       } else {
         // Normal AI processing for non-test prompts
+        // Tool-call fallback: Genius Core has no native function calling.
+        // When the user has selected agent mode (which needs tools) AND
+        // configured a fallback model, swap the selection for this turn
+        // only and publish a domain event so the UI can surface it.
+        let effectiveModel = settings.selectedModel;
+        const fallback = settings.geniusCore?.toolCallFallback;
+        if (
+          effectiveModel.provider === "genius-core" &&
+          settings.selectedChatMode === "agent" &&
+          fallback &&
+          fallback.provider &&
+          fallback.modelName
+        ) {
+          logger.info(
+            `Genius Core tool-call fallback: routing this turn to ${fallback.provider}/${fallback.modelName}`,
+          );
+          void getDomainEventBus()
+            .publish("genius_core.tool_fallback.invoked", {
+              chatId: req.chatId,
+              appId: updatedChat.app?.id ?? null,
+              originalModel: effectiveModel.name,
+              fallbackProvider: fallback.provider,
+              fallbackModel: fallback.modelName,
+              atMs: Date.now(),
+            })
+            .catch((err) => logger.warn("publish tool_fallback failed", err));
+          effectiveModel = {
+            provider: fallback.provider,
+            name: fallback.modelName,
+          };
+        }
+
         const { modelClient, isEngineEnabled, isSmartContextEnabled } =
-          await getModelClient(settings.selectedModel, settings);
+          await getModelClient(effectiveModel, settings);
 
         const appPath = getJoyAppPath(updatedChat.app.path);
         // When we don't have smart context enabled, we

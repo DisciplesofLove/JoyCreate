@@ -632,7 +632,7 @@ const menuCategories = [
         activeText: "text-violet-600 dark:text-violet-400",
       },
       {
-        title: "Web3 Deploy",
+        title: "Publish & Deploy",
         to: "/decentralized-deploy",
         icon: Layers,
         gradient: "from-cyan-500 to-blue-500",

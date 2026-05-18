@@ -1,11 +1,9 @@
 import { useState } from "react";
 import { useAtomValue } from "jotai";
 import { Link } from "@tanstack/react-router";
-import { Layers, ExternalLink, Rocket, CheckCircle2, XCircle, Loader2, ChevronDown } from "lucide-react";
+import { Rocket, CheckCircle2, XCircle, Loader2, ChevronDown, ExternalLink } from "lucide-react";
 import { selectedAppIdAtom } from "@/atoms/appAtoms";
 import { useLoadApp } from "@/hooks/useLoadApp";
-import { GitHubConnector } from "@/components/GitHubConnector";
-import { VercelConnector } from "@/components/VercelConnector";
 import { PortalMigrate } from "@/components/PortalMigrate";
 import { IpcClient } from "@/ipc/ipc_client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -235,128 +233,25 @@ export const PublishPanel = () => {
         {/* Portal Section - Show only if app has neon project */}
         {app.neonProjectId && <PortalMigrate appId={selectedAppId} />}
 
-        {/* GitHub Section */}
+        {/* Unified Publish & Deploy entry point */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path
-                  fillRule="evenodd"
-                  d="M10 0C4.477 0 0 4.484 0 10.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0110 4.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.203 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.942.359.31.678.921.678 1.856 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0020 10.017C20 4.484 15.522 0 10 0z"
-                  clipRule="evenodd"
-                />
-              </svg>
-              GitHub
+              <Rocket className="w-5 h-5 text-indigo-500" />
+              All Providers
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-3">
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Sync your code to GitHub for collaboration.
+              Configure credentials and deploy to any provider — Vercel, GitHub,
+              4everland, Fleek, IPFS (Pinata / web3.storage), Arweave, Spheron,
+              and more — all from one page. Choose whichever host you want for
+              this particular deployment.
             </p>
-            <GitHubConnector
-              appId={selectedAppId}
-              folderName={app.name}
-              expanded={true}
-            />
-          </CardContent>
-        </Card>
-
-        {/* Vercel Section */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2">
-              <button
-                onClick={() => {
-                  const ipcClient = IpcClient.getInstance();
-                  ipcClient.openExternalUrl("https://vercel.com/dashboard");
-                }}
-                className="flex items-center gap-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors cursor-pointer bg-transparent border-none p-0"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path d="M24 22.525H0l12-21.05 12 21.05z" />
-                </svg>
-                Vercel
-              </button>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Publish your app by deploying it to Vercel.
-            </p>
-
-            {!app?.githubOrg || !app?.githubRepo ? (
-              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <svg
-                    className="w-5 h-5 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"
-                    />
-                  </svg>
-                  <div>
-                    <h3 className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                      GitHub Required for Vercel Deployment
-                    </h3>
-                    <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-                      Deploying to Vercel requires connecting to GitHub first.
-                      Please set up your GitHub repository above.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <VercelConnector appId={selectedAppId} folderName={app.name} />
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Web3 Decentralized Deploy Section */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2">
-              <Layers className="w-5 h-5 text-purple-500" />
-              Web3 Deploy
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Deploy to decentralized platforms like IPFS, Arweave, 4everland, and more.
-            </p>
-            <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <Layers className="w-5 h-5 text-purple-600 dark:text-purple-400 mt-0.5 flex-shrink-0" />
-                <div className="flex-1">
-                  <h3 className="text-sm font-medium text-purple-800 dark:text-purple-200">
-                    Permanent, Censorship-Resistant Hosting
-                  </h3>
-                  <p className="text-sm text-purple-700 dark:text-purple-300 mt-1">
-                    Deploy your app to decentralized storage networks. Your app will be available forever without any central point of failure.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <span className="text-xs px-2 py-1 rounded-full bg-purple-100 dark:bg-purple-800/50 text-purple-700 dark:text-purple-300">4everland</span>
-                    <span className="text-xs px-2 py-1 rounded-full bg-purple-100 dark:bg-purple-800/50 text-purple-700 dark:text-purple-300">Fleek</span>
-                    <span className="text-xs px-2 py-1 rounded-full bg-purple-100 dark:bg-purple-800/50 text-purple-700 dark:text-purple-300">IPFS</span>
-                    <span className="text-xs px-2 py-1 rounded-full bg-purple-100 dark:bg-purple-800/50 text-purple-700 dark:text-purple-300">Arweave</span>
-                    <span className="text-xs px-2 py-1 rounded-full bg-purple-100 dark:bg-purple-800/50 text-purple-700 dark:text-purple-300">Spheron</span>
-                  </div>
-                </div>
-              </div>
-            </div>
             <Link to="/decentralized-deploy" className="block">
-              <Button className="w-full bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600">
-                <Layers className="w-4 h-4 mr-2" />
-                Open Web3 Deploy
+              <Button className="w-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 hover:from-blue-600 hover:via-indigo-600 hover:to-purple-600">
+                <Rocket className="w-4 h-4 mr-2" />
+                Open Publish &amp; Deploy
                 <ExternalLink className="w-4 h-4 ml-2" />
               </Button>
             </Link>

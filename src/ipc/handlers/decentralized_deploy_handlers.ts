@@ -225,57 +225,71 @@ async function deployTo4Everland(
   }
 }
 
-// Fleek Deployment
+// Fleek Deployment — uses the official @fleek-platform/sdk to upload a
+// virtual directory to Fleek's IPFS storage and then register that CID as
+// a custom IPFS deployment against the site identified by
+// `credentials.projectId`. Requires a Personal Access Token + projectId.
 async function deployToFleek(
   outputPath: string,
   credentials: PlatformCredentials,
   metadata?: any
 ): Promise<DecentralizedDeployResult> {
   try {
-    // Fleek uses GraphQL API
-    const mutation = `
-      mutation DeploySite($input: DeploySiteInput!) {
-        deploySite(input: $input) {
-          id
-          status
-          ipfsHash
-          url
-        }
-      }
-    `;
-
-    const response = await fetch(`${API_ENDPOINTS["fleek"]}/graphql`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${credentials.apiKey}`,
-      },
-      body: JSON.stringify({
-        query: mutation,
-        variables: {
-          input: {
-            siteId: credentials.projectId,
-          },
-        },
-      }),
-    });
-
-    const result = await response.json();
-    const deployment = result.data?.deploySite;
-
-    if (!deployment) {
-      throw new Error("Fleek deployment failed");
+    if (!credentials.apiKey) {
+      throw new Error(
+        "Fleek requires a Personal Access Token in `apiKey`",
+      );
     }
+    if (!credentials.projectId) {
+      throw new Error(
+        "Fleek requires `projectId` set to the target site id",
+      );
+    }
+
+    const { FleekSdk, PersonalAccessTokenService } = await import(
+      "@fleek-platform/sdk/node"
+    );
+
+    const accessTokenService = new PersonalAccessTokenService({
+      personalAccessToken: credentials.apiKey,
+      projectId: credentials.projectId,
+    });
+    const fleek = new FleekSdk({ accessTokenService });
+
+    const fileList = await getAllFiles(outputPath);
+    const files = await Promise.all(
+      fileList.map(async (absPath) => {
+        const relativePath = path
+          .relative(outputPath, absPath)
+          .split(path.sep)
+          .join("/");
+        const content = await fs.readFile(absPath);
+        return { path: relativePath, content };
+      }),
+    );
+
+    const upload = await fleek.storage().uploadVirtualDirectory({
+      files,
+      directoryName:
+        (metadata?.name as string) || `joycreate-${Date.now()}`,
+    });
+    const cid = upload.pin.cid;
+
+    const deployment = await fleek.sites().createCustomIpfsDeployment({
+      siteId: credentials.projectId,
+      cid,
+    });
 
     return {
       success: true,
       platform: "fleek",
       deploymentId: deployment.id,
-      cid: deployment.ipfsHash,
-      url: deployment.url,
+      cid,
+      url: `https://ipfs.io/ipfs/${cid}`,
       gatewayUrls: [
-        deployment.url,
-        `https://ipfs.io/ipfs/${deployment.ipfsHash}`,
+        `https://${cid}.ipfs.flk-ipfs.xyz`,
+        `https://ipfs.io/ipfs/${cid}`,
+        `https://dweb.link/ipfs/${cid}`,
       ],
       timestamp: Date.now(),
     };
@@ -287,7 +301,7 @@ async function deployToFleek(
       url: "",
       gatewayUrls: [],
       timestamp: Date.now(),
-      error: String(error),
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 }
@@ -362,103 +376,140 @@ async function deployToPinata(
 }
 
 // web3.storage Deployment
+//
+// The legacy `api.web3.storage/upload` endpoint was deprecated in 2024 in
+// favour of the w3up protocol (`@web3-storage/w3up-client`), which requires
+// an interactive email-based agent authorization flow that does not fit
+// the "paste an API token" credentials model used by the other providers
+// in this surface. Rather than silently uploading bytes that web3.storage
+// can no longer pin, we return a structured error pointing users to
+// Pinata or 4everland (both fully wired below) until a w3up onboarding
+// flow is added to the renderer.
 async function deployToWeb3Storage(
-  outputPath: string,
-  credentials: PlatformCredentials,
-  metadata?: any
+  _outputPath: string,
+  _credentials: PlatformCredentials,
+  _metadata?: any
 ): Promise<DecentralizedDeployResult> {
-  try {
-    // Use the web3.storage HTTP API
-    const files = await getAllFiles(outputPath);
-    const carFile = await createCarFile(outputPath, files);
-
-    const response = await fetch(`${API_ENDPOINTS["ipfs-web3storage"]}/upload`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${credentials.apiKey}`,
-        "Content-Type": "application/car",
-      },
-      body: carFile as unknown as BodyInit,
-    });
-
-    if (!response.ok) {
-      throw new Error(`web3.storage upload failed: ${response.statusText}`);
-    }
-
-    const result = await response.json();
-
-    return {
-      success: true,
-      platform: "ipfs-web3storage",
-      deploymentId: result.cid,
-      cid: result.cid,
-      url: `https://w3s.link/ipfs/${result.cid}`,
-      gatewayUrls: [
-        `https://w3s.link/ipfs/${result.cid}`,
-        `https://ipfs.io/ipfs/${result.cid}`,
-        `https://dweb.link/ipfs/${result.cid}`,
-      ],
-      timestamp: Date.now(),
-    };
-  } catch (error) {
-    return {
-      success: false,
-      platform: "ipfs-web3storage",
-      deploymentId: "",
-      url: "",
-      gatewayUrls: [],
-      timestamp: Date.now(),
-      error: String(error),
-    };
-  }
+  return {
+    success: false,
+    platform: "ipfs-web3storage",
+    deploymentId: "",
+    url: "",
+    gatewayUrls: [],
+    timestamp: Date.now(),
+    error:
+      "web3.storage's legacy upload API is no longer supported. Use Pinata or 4everland for IPFS pinning, or migrate to w3up-client (not yet wired in this build).",
+  };
 }
 
-// Arweave Deployment
+// Arweave Deployment — signs and posts each file plus a path manifest
+// using arweave-js with a JWK provided in credentials.accessToken (the
+// renderer stores the JWK JSON there to keep `apiKey` reserved for simple
+// bearer strings on other providers). Each file becomes its own permaweb
+// tx; the manifest tx is what the user serves at `https://arweave.net/<id>`.
 async function deployToArweave(
   outputPath: string,
   credentials: PlatformCredentials,
   metadata?: any
 ): Promise<DecentralizedDeployResult> {
   try {
-    // For Arweave, we need to create a transaction with the wallet key
-    // This is a simplified version - full implementation would use arweave-js
-    
-    const files = await getAllFiles(outputPath);
-    const manifest = createArweaveManifest(outputPath, files);
-    
-    // Upload via Bundlr/Irys for easier bundled transactions
-    const response = await fetch("https://node1.bundlr.network/tx/arweave", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${credentials.apiKey}`,
-      },
-      body: JSON.stringify({
-        data: manifest,
-        tags: [
-          { name: "Content-Type", value: "application/x.arweave-manifest+json" },
-          { name: "App-Name", value: "JoyCreate" },
-          { name: "App-Version", value: metadata?.version || "1.0.0" },
-        ],
-      }),
+    const jwkRaw = credentials.accessToken || credentials.apiKey;
+    if (!jwkRaw) {
+      throw new Error(
+        "Arweave requires a JWK wallet JSON in `accessToken` (or `apiKey`)",
+      );
+    }
+    let jwk: Record<string, unknown>;
+    try {
+      jwk = typeof jwkRaw === "string" ? JSON.parse(jwkRaw) : (jwkRaw as Record<string, unknown>);
+    } catch {
+      throw new Error(
+        "Arweave JWK in credentials is not valid JSON — paste the full wallet file contents",
+      );
+    }
+
+    const ArweaveModule = await import("arweave");
+    const Arweave = ArweaveModule.default ?? ArweaveModule;
+    // arweave-js's `init` is a static factory on the default export.
+    const arweave = (Arweave as any).init({
+      host: "arweave.net",
+      port: 443,
+      protocol: "https",
     });
 
-    const result = await response.json();
+    const files = await getAllFiles(outputPath);
+    const paths: Record<string, { id: string }> = {};
+    let totalCostWinston = 0n;
 
+    for (const absPath of files) {
+      const relativePath = path
+        .relative(outputPath, absPath)
+        .split(path.sep)
+        .join("/");
+      const data = await fs.readFile(absPath);
+      const contentType = guessContentType(relativePath);
+
+      const tx = await arweave.createTransaction({ data }, jwk);
+      tx.addTag("Content-Type", contentType);
+      tx.addTag("App-Name", "JoyCreate");
+      tx.addTag("App-Version", (metadata?.version as string) || "1.0.0");
+      await arweave.transactions.sign(tx, jwk);
+      try {
+        totalCostWinston += BigInt(tx.reward || "0");
+      } catch {
+        /* reward parse best-effort */
+      }
+      const post = await arweave.transactions.post(tx);
+      if (post.status >= 300) {
+        throw new Error(
+          `Arweave upload failed for ${relativePath}: HTTP ${post.status}`,
+        );
+      }
+      paths[relativePath] = { id: tx.id };
+    }
+
+    const manifest = {
+      manifest: "arweave/paths",
+      version: "0.1.0",
+      index: { path: paths["index.html"] ? "index.html" : Object.keys(paths)[0] },
+      paths,
+    };
+    const manifestTx = await arweave.createTransaction(
+      { data: JSON.stringify(manifest) },
+      jwk,
+    );
+    manifestTx.addTag(
+      "Content-Type",
+      "application/x.arweave-manifest+json",
+    );
+    manifestTx.addTag("App-Name", "JoyCreate");
+    manifestTx.addTag("App-Version", (metadata?.version as string) || "1.0.0");
+    await arweave.transactions.sign(manifestTx, jwk);
+    try {
+      totalCostWinston += BigInt(manifestTx.reward || "0");
+    } catch {
+      /* reward parse best-effort */
+    }
+    const manifestPost = await arweave.transactions.post(manifestTx);
+    if (manifestPost.status >= 300) {
+      throw new Error(
+        `Arweave manifest upload failed: HTTP ${manifestPost.status}`,
+      );
+    }
+
+    const arAmount = (Number(totalCostWinston) / 1e12).toFixed(6);
     return {
       success: true,
       platform: "arweave",
-      deploymentId: result.id,
-      txId: result.id,
-      url: `https://arweave.net/${result.id}`,
+      deploymentId: manifestTx.id,
+      txId: manifestTx.id,
+      url: `https://arweave.net/${manifestTx.id}`,
       gatewayUrls: [
-        `https://arweave.net/${result.id}`,
-        `https://arweave.dev/${result.id}`,
+        `https://arweave.net/${manifestTx.id}`,
+        `https://arweave.dev/${manifestTx.id}`,
       ],
       timestamp: Date.now(),
-      cost: result.cost
-        ? { amount: result.cost, currency: "AR" }
-        : undefined,
+      cost: totalCostWinston > 0n ? { amount: arAmount, currency: "AR" } : undefined,
     };
   } catch (error) {
     return {
@@ -468,8 +519,49 @@ async function deployToArweave(
       url: "",
       gatewayUrls: [],
       timestamp: Date.now(),
-      error: String(error),
+      error: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+function guessContentType(relativePath: string): string {
+  const ext = path.extname(relativePath).toLowerCase();
+  switch (ext) {
+    case ".html":
+    case ".htm":
+      return "text/html";
+    case ".css":
+      return "text/css";
+    case ".js":
+    case ".mjs":
+      return "application/javascript";
+    case ".json":
+      return "application/json";
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".ico":
+      return "image/x-icon";
+    case ".woff":
+      return "font/woff";
+    case ".woff2":
+      return "font/woff2";
+    case ".ttf":
+      return "font/ttf";
+    case ".txt":
+      return "text/plain";
+    case ".wasm":
+      return "application/wasm";
+    default:
+      return "application/octet-stream";
   }
 }
 
@@ -546,42 +638,6 @@ async function getAllFiles(dir: string): Promise<string[]> {
   }
 
   return files;
-}
-
-async function createCarFile(basePath: string, files: string[]): Promise<Uint8Array> {
-  // Simplified CAR file creation
-  // In production, use @ipld/car library
-  const fileContents: { path: string; content: Buffer }[] = [];
-  
-  for (const file of files) {
-    const relativePath = path.relative(basePath, file);
-    const content = await fs.readFile(file);
-    fileContents.push({ path: relativePath, content });
-  }
-
-  // For now, return a tar-like buffer
-  // Full implementation would create proper CAR format
-  const jsonStr = JSON.stringify(fileContents.map(f => ({ path: f.path, size: f.content.length })));
-  return new Uint8Array(Buffer.from(jsonStr));
-}
-
-function createArweaveManifest(
-  basePath: string,
-  files: string[]
-): { manifest: string; version: string; index: { path: string }; paths: Record<string, { id: string }> } {
-  const paths: Record<string, { id: string }> = {};
-  
-  for (const file of files) {
-    const relativePath = path.relative(basePath, file);
-    paths[relativePath] = { id: "" }; // Will be filled with actual tx IDs
-  }
-
-  return {
-    manifest: "arweave/paths",
-    version: "0.1.0",
-    index: { path: "index.html" },
-    paths,
-  };
 }
 
 // ============================================================================

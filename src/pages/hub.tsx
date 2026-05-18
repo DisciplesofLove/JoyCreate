@@ -220,7 +220,7 @@ const systemNavCategories: {
     items: [
       { title: "Publish", to: "/deploy", icon: Rocket, gradient: "from-violet-500 to-fuchsia-500" },
       { title: "App Publishing", to: "/app-publishing", icon: Package, gradient: "from-indigo-500 to-violet-500" },
-      { title: "Web3 Deploy", to: "/decentralized-deploy", icon: Layers, gradient: "from-cyan-500 to-blue-500" },
+      { title: "Publish & Deploy", to: "/decentralized-deploy", icon: Layers, gradient: "from-cyan-500 to-blue-500" },
       { title: "On-Chain Market", to: "/on-chain-marketplace", icon: Coins, gradient: "from-purple-500 to-indigo-500" },
       { title: "Federation", to: "/federation", icon: Globe, gradient: "from-cyan-500 to-teal-500" },
       { title: "P2P Chat", to: "/decentralized-chat", icon: Radio, gradient: "from-green-500 to-emerald-500" },

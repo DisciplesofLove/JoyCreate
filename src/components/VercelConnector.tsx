@@ -618,7 +618,44 @@ function UnconnectedVercelConnector({
           </form>
 
           {createProjectError && (
-            <p className="text-red-600 mt-2">{createProjectError}</p>
+            <div className="mt-2 space-y-2">
+              <p className="text-red-600">{createProjectError}</p>
+              {/**
+               * When the failure was the "Vercel GitHub App not installed"
+               * case (recognized by the URL the backend embeds in the
+               * message), surface a one-click button that opens the
+               * install page in the user's default browser AND a retry
+               * button so they don't have to refill the form.
+               */}
+              {createProjectError.includes("github.com/apps/vercel") && (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="default"
+                    onClick={() =>
+                      IpcClient.getInstance().openExternalUrl(
+                        "https://github.com/apps/vercel",
+                      )
+                    }
+                  >
+                    Install Vercel GitHub App
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isCreatingProject}
+                    onClick={() => {
+                      setCreateProjectError(null);
+                      void handleSetupProject({
+                        preventDefault: () => {},
+                      } as React.FormEvent);
+                    }}
+                  >
+                    Retry
+                  </Button>
+                </div>
+              )}
+            </div>
           )}
           {createProjectSuccess && (
             <p className="text-green-600 mt-2">

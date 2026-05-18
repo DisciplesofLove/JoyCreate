@@ -413,7 +413,26 @@ async function handleCreateProject(
     }
   } catch (err: any) {
     logger.error("[Vercel Handler] Failed to create project:", err);
-    throw new Error(err.message || "Failed to create Vercel project.");
+    // Vercel returns a 400 "bad_request" with an actionable message + link
+    // when the Vercel GitHub App is not installed on the target repo. The
+    // raw SDK error is something like:
+    //   "API error occurred: Status 400 Content-Type ... Body: {\"error\":{\"code\":\"bad_request\",\"message\":\"To link a GitHub repository, you need to install the GitHub integration first. ...\",\"action\":\"Install GitHub App\",\"link\":\"https://github.com/apps/vercel\",\"repo\":\"...\"}}"
+    // Detect that pattern and rethrow a friendly message so the UI can
+    // render an actionable "Install Vercel GitHub App" CTA.
+    const raw = err?.message ?? String(err);
+    if (
+      typeof raw === "string" &&
+      (raw.includes("install the GitHub integration") ||
+        raw.includes("Install GitHub App") ||
+        raw.includes("github.com/apps/vercel"))
+    ) {
+      throw new Error(
+        "Vercel needs the Vercel GitHub App installed on this repository before it can link it. " +
+          "Install it here and grant access to the repo, then click Create Project again: " +
+          "https://github.com/apps/vercel",
+      );
+    }
+    throw new Error(raw || "Failed to create Vercel project.");
   }
 }
 

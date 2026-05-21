@@ -21,6 +21,7 @@ import { VercelConnector } from "@/components/VercelConnector";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   Card,
@@ -475,6 +476,11 @@ function CredentialsDialog({
           </div>
         ) : (
           <div className="space-y-4">
+            {credentialHintFor(platform.id) && (
+              <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg text-xs text-blue-200 whitespace-pre-wrap">
+                {credentialHintFor(platform.id)}
+              </div>
+            )}
             {credentials?.hasApiKey && (
               <div className="p-3 bg-green-500/10 border border-green-500/30 rounded-lg flex items-center gap-2">
                 <Check className="h-4 w-4 text-green-500" />
@@ -486,11 +492,11 @@ function CredentialsDialog({
 
             {platform.requiresApiKey && (
               <div className="space-y-2">
-                <Label htmlFor="apiKey">API Key</Label>
+                <Label htmlFor="apiKey">{apiKeyLabelFor(platform.id)}</Label>
                 <Input
                   id="apiKey"
                   type="password"
-                  placeholder="Enter your API key"
+                  placeholder={apiKeyPlaceholderFor(platform.id)}
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                 />
@@ -498,21 +504,32 @@ function CredentialsDialog({
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="accessToken">Access Token (optional)</Label>
-              <Input
-                id="accessToken"
-                type="password"
-                placeholder="Enter access token if required"
-                value={accessToken}
-                onChange={(e) => setAccessToken(e.target.value)}
-              />
+              <Label htmlFor="accessToken">{accessTokenLabelFor(platform.id)}</Label>
+              {platform.id === "arweave" ? (
+                <Textarea
+                  id="accessToken"
+                  rows={6}
+                  placeholder='{"kty":"RSA","n":"...","e":"AQAB",...}'
+                  value={accessToken}
+                  onChange={(e) => setAccessToken(e.target.value)}
+                  className="font-mono text-xs"
+                />
+              ) : (
+                <Input
+                  id="accessToken"
+                  type="password"
+                  placeholder="Enter access token if required"
+                  value={accessToken}
+                  onChange={(e) => setAccessToken(e.target.value)}
+                />
+              )}
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="projectId">Project ID (optional)</Label>
+              <Label htmlFor="projectId">{projectIdLabelFor(platform.id)}</Label>
               <Input
                 id="projectId"
-                placeholder="Enter project ID"
+                placeholder={projectIdPlaceholderFor(platform.id)}
                 value={projectId}
                 onChange={(e) => setProjectId(e.target.value)}
               />
@@ -772,4 +789,71 @@ function DeploymentList({
       </div>
     </ScrollArea>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Per-platform credential field labels + hints.
+//
+// Different providers expect very different credential shapes (Fleek wants a
+// Personal Access Token + Site ID; Arweave wants the raw JWK wallet JSON;
+// Pinata wants a JWT). The generic dialog above stays simple by deferring
+// the copy to these helpers.
+// ---------------------------------------------------------------------------
+
+function credentialHintFor(platformId: string): string | null {
+  switch (platformId) {
+    case "arweave":
+      return "Paste your Arweave wallet JWK (the full JSON file contents) into the Access Token field. Each file in your build will be signed and posted to the permaweb, and the manifest transaction id becomes your deployment URL.";
+    case "fleek":
+      return "Generate a Personal Access Token in Fleek\u2192Settings\u2192Personal Access Tokens and paste it as API Key. Set Project / Site ID to the target site\u2019s id (Fleek dashboard URL).";
+    case "ipfs-pinata":
+      return "Use a Pinata JWT (Account\u2192API Keys) as the API Key. Bearer-style auth.";
+    case "ipfs-web3storage":
+      return "web3.storage\u2019s legacy upload API is deprecated. Use Pinata or 4everland for IPFS pinning instead.";
+    case "spheron":
+      return "Use a Spheron access token (Dashboard\u2192Settings\u2192Tokens) as the API Key.";
+    case "4everland":
+      return "Use a 4EVERLAND Hosting API token as the API Key.";
+    default:
+      return null;
+  }
+}
+
+function apiKeyLabelFor(platformId: string): string {
+  switch (platformId) {
+    case "fleek":
+      return "Personal Access Token";
+    case "ipfs-pinata":
+      return "Pinata JWT";
+    case "arweave":
+      return "API Key (unused for Arweave \u2014 leave blank)";
+    default:
+      return "API Key";
+  }
+}
+
+function apiKeyPlaceholderFor(platformId: string): string {
+  switch (platformId) {
+    case "fleek":
+      return "pat_...";
+    case "ipfs-pinata":
+      return "eyJhbGciOi...";
+    default:
+      return "Enter your API key";
+  }
+}
+
+function accessTokenLabelFor(platformId: string): string {
+  if (platformId === "arweave") return "Wallet JWK (JSON)";
+  return "Access Token (optional)";
+}
+
+function projectIdLabelFor(platformId: string): string {
+  if (platformId === "fleek") return "Site ID (required)";
+  return "Project ID (optional)";
+}
+
+function projectIdPlaceholderFor(platformId: string): string {
+  if (platformId === "fleek") return "site_...";
+  return "Enter project ID";
 }

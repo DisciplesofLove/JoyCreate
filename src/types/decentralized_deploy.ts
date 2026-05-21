@@ -31,6 +31,8 @@ export interface PlatformConfig {
   supportsIPNS: boolean;
   requiresApiKey: boolean;
   chainSupport?: string[];
+  /** If set, the platform is no longer operational. The string explains why. */
+  deprecated?: string;
 }
 
 // Platform credentials
@@ -246,6 +248,7 @@ export const PLATFORM_CONFIGS: Record<DecentralizedPlatform, PlatformConfig> = {
     supportsENS: false,
     supportsIPNS: false,
     requiresApiKey: true,
+    deprecated: "web3.storage retired its legacy upload API. Use Pinata or 4everland for IPFS pinning instead.",
   },
   "arweave": {
     id: "arweave",
@@ -276,6 +279,7 @@ export const PLATFORM_CONFIGS: Record<DecentralizedPlatform, PlatformConfig> = {
     supportsIPNS: false,
     requiresApiKey: true,
     chainSupport: ["filecoin"],
+    deprecated: "Estuary shut down in 2024. Pin via Pinata or 4everland and let them replicate to Filecoin.",
   },
   "skynet": {
     id: "skynet",
@@ -290,6 +294,7 @@ export const PLATFORM_CONFIGS: Record<DecentralizedPlatform, PlatformConfig> = {
     supportsENS: false,
     supportsIPNS: false,
     requiresApiKey: false,
+    deprecated: "The siasky.net public portal shut down in 2023. Try Arweave for permanent storage.",
   },
   "spheron": {
     id: "spheron",

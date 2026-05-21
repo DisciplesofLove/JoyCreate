@@ -10,6 +10,8 @@ import { app } from "electron";
 import log from "electron-log";
 import { getJoyAppPath } from "@/paths/paths";
 import { guarded } from "@/ipc/utils/guarded_handle";
+import { encrypt, decrypt } from "@/main/settings";
+import type { Secret } from "@/lib/schemas";
 import { db } from "../../db";
 import { apps } from "../../db/schema";
 import { eq } from "drizzle-orm";
@@ -58,13 +60,107 @@ async function ensureDirectories(): Promise<void> {
 
 // ============================================================================
 // Credential Management
+//
+// Credentials are persisted to `credentials.json` under userData. Sensitive
+// string fields (apiKey, apiSecret, accessToken, privateKey) are wrapped in
+// the same `Secret` envelope used by `src/main/settings.ts` and encrypted
+// with Electron's `safeStorage` when available. Non-sensitive fields
+// (platform, projectId, bucketName, walletAddress) stay plaintext so an
+// operator can still eyeball the file.
+//
+// On load we transparently decrypt and also upgrade any legacy plaintext
+// strings to encrypted form on the next save, so existing installs migrate
+// without losing data.
 // ============================================================================
+
+type SecretField = "apiKey" | "apiSecret" | "accessToken" | "privateKey";
+const SECRET_FIELDS: ReadonlyArray<SecretField> = [
+  "apiKey",
+  "apiSecret",
+  "accessToken",
+  "privateKey",
+];
+
+interface StoredCredentials {
+  platform: DecentralizedPlatform;
+  apiKey?: Secret;
+  apiSecret?: Secret;
+  accessToken?: Secret;
+  privateKey?: Secret;
+  projectId?: string;
+  bucketName?: string;
+  walletAddress?: string;
+  additionalConfig?: Record<string, string>;
+}
+
+function isSecretEnvelope(value: unknown): value is Secret {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "value" in (value as Record<string, unknown>) &&
+    "encryptionType" in (value as Record<string, unknown>)
+  );
+}
+
+function decryptStored(stored: StoredCredentials): PlatformCredentials {
+  const out: PlatformCredentials = {
+    platform: stored.platform,
+    projectId: stored.projectId,
+    bucketName: stored.bucketName,
+    walletAddress: stored.walletAddress,
+    additionalConfig: stored.additionalConfig,
+  };
+  for (const key of SECRET_FIELDS) {
+    const raw = (stored as Record<string, unknown>)[key];
+    if (raw == null) continue;
+    if (typeof raw === "string") {
+      // Legacy plaintext — surface as-is; next save will re-encrypt.
+      (out as Record<string, unknown>)[key] = raw;
+    } else if (isSecretEnvelope(raw)) {
+      try {
+        (out as Record<string, unknown>)[key] = decrypt(raw);
+      } catch (err) {
+        logger.warn(
+          `Failed to decrypt ${key} for ${stored.platform}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+  return out;
+}
+
+function encryptForStorage(creds: PlatformCredentials): StoredCredentials {
+  const stored: StoredCredentials = {
+    platform: creds.platform,
+    projectId: creds.projectId,
+    bucketName: creds.bucketName,
+    walletAddress: creds.walletAddress,
+    additionalConfig: creds.additionalConfig,
+  };
+  for (const key of SECRET_FIELDS) {
+    const value = (creds as Record<string, unknown>)[key];
+    if (typeof value === "string" && value.length > 0) {
+      (stored as Record<string, unknown>)[key] = encrypt(value);
+    }
+  }
+  return stored;
+}
 
 async function loadCredentials(): Promise<Record<DecentralizedPlatform, PlatformCredentials>> {
   await ensureDirectories();
   try {
     const data = await fs.readFile(CREDENTIALS_FILE, "utf-8");
-    return JSON.parse(data);
+    const parsed = JSON.parse(data) as Record<
+      DecentralizedPlatform,
+      StoredCredentials
+    >;
+    const decrypted = {} as Record<DecentralizedPlatform, PlatformCredentials>;
+    for (const [platform, stored] of Object.entries(parsed) as Array<
+      [DecentralizedPlatform, StoredCredentials]
+    >) {
+      decrypted[platform] = decryptStored(stored);
+    }
+    return decrypted;
   } catch {
     return {} as Record<DecentralizedPlatform, PlatformCredentials>;
   }
@@ -74,7 +170,13 @@ async function saveCredentials(
   credentials: Record<DecentralizedPlatform, PlatformCredentials>
 ): Promise<void> {
   await ensureDirectories();
-  await fs.writeFile(CREDENTIALS_FILE, JSON.stringify(credentials, null, 2));
+  const stored = {} as Record<DecentralizedPlatform, StoredCredentials>;
+  for (const [platform, creds] of Object.entries(credentials) as Array<
+    [DecentralizedPlatform, PlatformCredentials]
+  >) {
+    stored[platform] = encryptForStorage(creds);
+  }
+  await fs.writeFile(CREDENTIALS_FILE, JSON.stringify(stored, null, 2));
 }
 
 async function getCredentials(platform: DecentralizedPlatform): Promise<PlatformCredentials | null> {
@@ -123,6 +225,32 @@ async function updateDeployment(
 // Build & Package App
 // ============================================================================
 
+// Defence-in-depth against command injection. Even though build commands
+// originate from the user's own renderer process, we still reject obvious
+// shell metacharacters so a compromised renderer (e.g. XSS in an embedded
+// preview) cannot pivot into arbitrary host-shell execution. We permit
+// `&&` and `||` because real-world build scripts chain steps that way
+// (`next build && next export`), but everything else that lets a shell
+// branch out is rejected.
+function assertSafeBuildCommand(command: string): void {
+  if (typeof command !== "string" || command.trim().length === 0) {
+    throw new Error("Build command must be a non-empty string");
+  }
+  if (command.length > 1024) {
+    throw new Error("Build command is suspiciously long (>1024 chars)");
+  }
+  if (/[\r\n\x00]/.test(command)) {
+    throw new Error("Build command may not contain newlines or null bytes");
+  }
+  // Reject `;`, redirection, command substitution, backticks, lone `|`/`&`.
+  const stripped = command.replace(/&&/g, "").replace(/\|\|/g, "");
+  if (/[;`<>]/.test(stripped) || /\$\(/.test(stripped) || /[|&]/.test(stripped)) {
+    throw new Error(
+      "Build command contains disallowed shell metacharacters (`;`, `|`, `&`, `<`, `>`, backticks, or `$(`)",
+    );
+  }
+}
+
 async function buildApp(
   appPath: string,
   config: DecentralizedBuildConfig
@@ -137,6 +265,7 @@ async function buildApp(
 
     // Install dependencies
     if (config.installCommand) {
+      assertSafeBuildCommand(config.installCommand);
       logs.push(`Running: ${config.installCommand}`);
       const { stdout, stderr } = await execAsync(config.installCommand, { cwd: appPath });
       if (stdout) logs.push(stdout);
@@ -144,6 +273,7 @@ async function buildApp(
     }
 
     // Build the app
+    assertSafeBuildCommand(config.buildCommand);
     logs.push(`Running: ${config.buildCommand}`);
     const { stdout, stderr } = await execAsync(config.buildCommand, {
       cwd: appPath,
@@ -649,7 +779,9 @@ export async function deployToPlatform(
 ): Promise<DecentralizedDeployResult> {
   const credentials = await getCredentials(request.platform);
   
-  if (!credentials && request.platform !== "arweave" && request.platform !== "skynet") {
+  // Arweave reads its JWK from credentials.accessToken; if missing the
+  // arweave handler itself surfaces a friendly error, so let it through.
+  if (!credentials && request.platform !== "arweave") {
     return {
       success: false,
       platform: request.platform,
@@ -720,6 +852,36 @@ export async function deployToPlatform(
       break;
     case "spheron":
       result = await deployToSpheron(outputPath, credentials!, request.metadata);
+      break;
+    case "filecoin":
+      // Estuary (api.estuary.tech) shut down in April 2024. Direct
+      // Filecoin storage requires a Lotus node or a SaaS like web3.storage
+      // / Pinata-with-Filecoin-add-on; neither fits the simple bearer-token
+      // model used here. Fail fast with a clear message.
+      result = {
+        success: false,
+        platform: "filecoin",
+        deploymentId: "",
+        url: "",
+        gatewayUrls: [],
+        timestamp: Date.now(),
+        error:
+          "Direct Filecoin deploys via Estuary are no longer available (Estuary shut down 2024). Pin via Pinata or 4everland and let them replicate to Filecoin instead.",
+      };
+      break;
+    case "skynet":
+      // Siasky.net shut down its public portal in 2023. There is no
+      // drop-in replacement that accepts arbitrary uploads.
+      result = {
+        success: false,
+        platform: "skynet",
+        deploymentId: "",
+        url: "",
+        gatewayUrls: [],
+        timestamp: Date.now(),
+        error:
+          "Skynet (siasky.net) is no longer operating. Pick another platform — Arweave gives the closest \"permanent storage\" semantics.",
+      };
       break;
     default:
       result = {
@@ -868,10 +1030,18 @@ export function registerDecentralizedDeployHandlers(): void {
     }
   );
 
-  // Get supported platforms
+  // Get supported platforms (deprecated ones are filtered out so the UI
+  // never offers them; the deploy switch still returns a useful error if
+  // somehow a stored deployment references one).
   ipcMain.handle("decentralized:get-platforms", async () => {
     const { PLATFORM_CONFIGS } = await import("../../types/decentralized_deploy");
-    return PLATFORM_CONFIGS;
+    const active: typeof PLATFORM_CONFIGS = {} as typeof PLATFORM_CONFIGS;
+    for (const [id, cfg] of Object.entries(PLATFORM_CONFIGS) as Array<
+      [DecentralizedPlatform, (typeof PLATFORM_CONFIGS)[DecentralizedPlatform]]
+    >) {
+      if (!cfg.deprecated) active[id] = cfg;
+    }
+    return active;
   });
 
   logger.info("Decentralized deployment handlers registered");

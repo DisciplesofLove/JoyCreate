@@ -23,7 +23,7 @@ import { useEffect, type ReactNode } from "react";
 import { PrivyProvider } from "@privy-io/react-auth";
 import { ThirdwebProvider } from "thirdweb/react";
 import { http, createConfig, WagmiProvider } from "wagmi";
-import { polygonAmoy } from "wagmi/chains";
+import { polygonAmoy, arbitrumSepolia } from "wagmi/chains";
 import { JoyPrivyBridge } from "../components/wallet/JoyPrivyBridge";
 import { initWalletRegistry } from "../lib/wallet/registry";
 
@@ -42,12 +42,16 @@ const PRIVY_APP_ID =
     ? RAW_PRIVY_APP_ID
     : null;
 
-// Single app-wide wagmi config. Thirdweb manages its own provider tree
-// internally so we just mount <ThirdwebProvider> without explicit config.
+// Single app-wide wagmi config. Both Polygon Amoy and Arbitrum Sepolia are
+// registered so users can switch between marketplace chains in Settings →
+// Marketplace network without re-mounting the provider tree. Thirdweb manages
+// its own provider tree internally so we just mount <ThirdwebProvider>
+// without explicit config.
 export const wagmiConfig = createConfig({
-  chains: [polygonAmoy],
+  chains: [polygonAmoy, arbitrumSepolia],
   transports: {
     [polygonAmoy.id]: http(),
+    [arbitrumSepolia.id]: http(),
   },
 });
 

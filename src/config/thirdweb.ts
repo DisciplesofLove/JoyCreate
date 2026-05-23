@@ -35,37 +35,87 @@ export const THIRDWEB_CONTRACTS = {
 } as const;
 
 // =============================================================================
-// Goldsky Subgraph Endpoints (Polygon Amoy Testnet)
+// Goldsky Subgraph Endpoints (per-chain)
 // =============================================================================
 
 /**
- * Goldsky subgraph endpoints. The MarketplaceV3 subgraph (`joy-marketplace-amoy`)
- * was retired in the 2026-05-02 architecture pivot — all browse / detail /
- * ownership queries now hit the DropERC1155 + Stores subgraphs only.
- * See `briefs/droperc1155-read-layer-surgery.md` and
- * `src/lib/joymarketplace/drop_subgraph.ts`.
+ * Per-chain Goldsky subgraph endpoints. Must mirror the marketplace's
+ * `joy-marketplace-80/src/config/endpoints.ts` so JoyCreate reads from the
+ * same indexers the marketplace UI uses.
+ *
+ * The MarketplaceV3 subgraph (`joy-marketplace-amoy`) was retired in the
+ * 2026-05-02 architecture pivot — all browse/detail/ownership queries hit
+ * the DropERC1155 + Stores subgraphs only.
+ *
+ * Override defaults via env vars:
+ *   VITE_DROP_SUBGRAPH_AMOY / _STORES_SUBGRAPH_AMOY
+ *   VITE_DROP_SUBGRAPH_ARB_SEPOLIA / _STORES_SUBGRAPH_ARB_SEPOLIA
+ *   VITE_DROP_SUBGRAPH_ARB_ONE / _STORES_SUBGRAPH_ARB_ONE
  */
+const env = (typeof import.meta !== "undefined" ? import.meta.env : undefined) as
+  | Record<string, string | undefined>
+  | undefined;
+
 export const GOLDSKY_SUBGRAPHS = {
-  /** Joy Stores subgraph — store metadata, creator profiles. */
-  stores:
-    "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-amoy/0.0.3/gn",
-  /** Joy Drop subgraph — edition drops, claims, mints. */
-  drop:
-    "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-amoy/0.0.1/gn",
+  polygonAmoy: {
+    drop:
+      env?.VITE_DROP_SUBGRAPH_AMOY ??
+      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-amoy/0.0.3/gn",
+    stores:
+      env?.VITE_STORES_SUBGRAPH_AMOY ??
+      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-amoy/0.0.3/gn",
+  },
+  arbitrumSepolia: {
+    drop:
+      env?.VITE_DROP_SUBGRAPH_ARB_SEPOLIA ??
+      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-arbitrum-sepolia/0.0.3/gn",
+    stores:
+      env?.VITE_STORES_SUBGRAPH_ARB_SEPOLIA ??
+      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.2/gn",
+  },
+  arbitrumOne: {
+    drop: env?.VITE_DROP_SUBGRAPH_ARB_ONE ?? "",
+    stores: env?.VITE_STORES_SUBGRAPH_ARB_ONE ?? "",
+  },
 } as const;
+
+export type SubgraphChainId = keyof typeof GOLDSKY_SUBGRAPHS;
+export type SubgraphKind = "drop" | "stores";
 
 /**
  * Query a Goldsky subgraph with a GraphQL query.
- * @param subgraph Key from GOLDSKY_SUBGRAPHS (marketplace | stores | drop)
- * @param query GraphQL query string
- * @param variables Optional query variables
+ *
+ * Backwards-compatible: legacy callers may pass `"drop" | "stores"` as the
+ * first argument; these default to the Polygon Amoy endpoints. New code
+ * SHOULD pass the active `MarketplaceChainId` first:
+ *   `querySubgraph("arbitrumSepolia", "drop", query, vars)`
  */
 export async function querySubgraph(
-  subgraph: keyof typeof GOLDSKY_SUBGRAPHS,
-  query: string,
-  variables?: Record<string, unknown>,
+  chainOrKind: SubgraphChainId | SubgraphKind,
+  kindOrQuery: SubgraphKind | string,
+  queryOrVars?: string | Record<string, unknown>,
+  maybeVars?: Record<string, unknown>,
 ): Promise<any> {
-  const url = GOLDSKY_SUBGRAPHS[subgraph];
+  let url: string;
+  let query: string;
+  let variables: Record<string, unknown> | undefined;
+
+  if (chainOrKind === "drop" || chainOrKind === "stores") {
+    // Legacy 2-arg form: (kind, query, variables?)
+    url = GOLDSKY_SUBGRAPHS.polygonAmoy[chainOrKind];
+    query = kindOrQuery as string;
+    variables = queryOrVars as Record<string, unknown> | undefined;
+  } else {
+    // New 3-arg form: (chainId, kind, query, variables?)
+    const chain = GOLDSKY_SUBGRAPHS[chainOrKind];
+    if (!chain) throw new Error(`Unknown subgraph chain: ${chainOrKind}`);
+    const kind = kindOrQuery as SubgraphKind;
+    url = chain[kind];
+    if (!url) throw new Error(`No ${kind} subgraph configured for ${chainOrKind}`);
+    query = queryOrVars as string;
+    variables = maybeVars;
+  }
+
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

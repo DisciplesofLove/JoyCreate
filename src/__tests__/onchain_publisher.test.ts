@@ -20,10 +20,12 @@ vi.mock("electron-log", () => ({
 import { OnchainPublisher } from "@/lib/joymarketplace/onchain_publisher";
 import {
   AMOY_ENS_CONTRACTS,
+  ARB_SEPOLIA_ENS_CONTRACTS,
   CONTRACT_ABIS,
   CONTRACT_ADDRESSES,
   POLYGON_AMOY,
 } from "@/config/joymarketplace";
+import { getMarketplaceChain } from "@/lib/onchain/chain_registry";
 
 // Build a wallet with a stub provider whose `send` we can drive deterministically.
 function buildStubWallet(sendImpl: (method: string, params: unknown[]) => Promise<unknown>): ethers.Wallet {
@@ -130,5 +132,34 @@ describe("OnchainPublisher", () => {
     expect(decoded?.args[0]).toBe(7n);
     expect(decoded?.args[1]).toBe(1_000_000n);
     expect(decoded?.args[2].toLowerCase()).toBe(CONTRACT_ADDRESSES.USDC_POLYGON.toLowerCase());
+  });
+
+  it("lazyMintDrop targets the per-chain creatorGate when marketplaceChain is supplied (Arb Sepolia)", async () => {
+    const arbCfg = getMarketplaceChain("arbitrumSepolia");
+    const send = vi.fn(async (method: string, params: unknown[]) => {
+      if (method === "eth_chainId") return `0x${POLYGON_AMOY.chainId.toString(16)}`;
+      if (method === "eth_call") {
+        const call = params[0] as { to?: string };
+        // Match against the Arb Sepolia platformDrop, not the Amoy one.
+        if (call?.to?.toLowerCase() === ARB_SEPOLIA_ENS_CONTRACTS.platformDrop.toLowerCase()) {
+          return "0x0000000000000000000000000000000000000000000000000000000000000003";
+        }
+        return "0x0000000000000000000000000000000000000000000000000000000000000000";
+      }
+      if (method === "eth_estimateGas") return "0x5208";
+      throw new Error(`unexpected ${method}`);
+    });
+    const wallet = buildStubWallet(send);
+    const publisher = new OnchainPublisher(wallet, POLYGON_AMOY, arbCfg);
+    const r = await publisher.lazyMintDrop("ipfs://bafyArb", 2, { dryRun: true });
+    expect(r.dryRun).toBe(true);
+    expect(r.tokenId).toBe("3");
+    // Critical: the gate address comes from the Arb Sepolia config, NOT Amoy.
+    expect(r.to?.toLowerCase()).toBe(
+      ARB_SEPOLIA_ENS_CONTRACTS.JoyCreatorGate.toLowerCase(),
+    );
+    expect(r.to?.toLowerCase()).not.toBe(
+      AMOY_ENS_CONTRACTS.JoyCreatorGate.toLowerCase(),
+    );
   });
 });

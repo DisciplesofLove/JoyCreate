@@ -608,9 +608,11 @@ export const ARBITRUM_ONE = {
 } as const;
 
 /**
- * Stylus DropEdition contract addresses.
- * Sepolia: filled in after Phase E deploy. Until then the renderer/listener
- * will refuse to switch to Arbitrum (chain_registry guards against zero addr).
+ * LEGACY — Stylus DropEdition on Arbitrum Sepolia.
+ * Do NOT use for new listings. Kept only so pre-cutover tokens minted via the
+ * OpenZeppelin Stylus Erc1155 v0.3.0 contract remain readable. New publish
+ * flow goes through `ARB_SEPOLIA_ENS_CONTRACTS.JoyCreatorGate` → DropERC1155
+ * proxy `ARB_SEPOLIA_ENS_CONTRACTS.platformDrop` (mirrors Amoy).
  */
 export const ARBITRUM_SEPOLIA_STYLUS_CONTRACTS = {
   // Audited build: backed by OpenZeppelin Stylus Erc1155 v0.3.0.
@@ -618,6 +620,31 @@ export const ARBITRUM_SEPOLIA_STYLUS_CONTRACTS = {
   // Owner: 0x5939229582A5b42A6C5f55Fe55eC47523Cd5B9FE, mintPrice 0, mintActive true.
   dropEdition: "0x016950006648752f7ce8ca63d9beaba197b003e8" as const,
 } as const;
+
+// =============================================================================
+// ENS / IDENTITY CONTRACTS (Arbitrum Sepolia – Chain ID 421614)
+// Marketplace canonical — must match joy-marketplace-80/src/config/sharedContracts.ts
+// so listings published from JoyCreate land on the same DropERC1155 proxy that
+// the marketplace's joy-drop-arbitrum-sepolia subgraph indexes.
+// =============================================================================
+export const ARB_SEPOLIA_ENS_CONTRACTS = {
+  ENSRegistry: "0xc8c72a682905e7fc02ba4b991132df833f6fac0f" as const,
+  BaseRegistrar: "0x0eb35745a6fa890da0d9364df7f81201622ec3a8" as const,
+  JoyResolver: "0x8ed45d1bc39cb2d2138b668e343a1dc0aff67f60" as const,
+  JoyRegistrarController: "0xc7fe10924360459fd09528df41701f1444997ede" as const,
+  JoyCreatorGate: "0x70e575b3546852808e742d21c16aabeeccd5d424" as const,
+  /** DropERC1155 ERC1967 proxy — the address the subgraph indexes. */
+  platformDrop: "0x61672aa9c97342183481455834e6e944ea64e552" as const,
+  Treasury: "0x5939229582A5b42A6C5f55Fe55eC47523Cd5B9FE" as const,
+} as const;
+
+/** ENS parent domain per chain (different from the .joy 2LD on Amoy). */
+export const ARB_SEPOLIA_PARENT_DOMAIN = "joymarketplace.io" as const;
+
+/** Native-currency sentinel used by Thirdweb claim conditions on chains
+ *  whose pricing currency is the network's native coin (ETH/MATIC). */
+export const NATIVE_TOKEN_SENTINEL =
+  "0xEEEeEEeEeEeEeEeEEEeEEEEEEEEeeEeEEEeEeeEE" as const;
 
 export const ARBITRUM_ONE_STYLUS_CONTRACTS = {
   dropEdition: "0x0000000000000000000000000000000000000000" as const,

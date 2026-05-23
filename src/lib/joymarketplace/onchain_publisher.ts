@@ -137,14 +137,16 @@ export class OnchainPublisher {
    */
   async verifyCreatorGate(signerAddress: string): Promise<VerifyResult> {
     try {
+      const gateAddr =
+        this.marketplaceChain?.contracts.creatorGate ?? AMOY_ENS_CONTRACTS.JoyCreatorGate;
       const gate = new ethers.Contract(
-        AMOY_ENS_CONTRACTS.JoyCreatorGate,
+        gateAddr,
         CONTRACT_ABIS.JOY_CREATOR_GATE,
         this.provider,
       );
       const can = await gate.canMint(signerAddress);
       if (can) return { canMint: true };
-      return { canMint: false, reason: "JoyCreatorGate.canMint returned false (no .joy name on this wallet?)" };
+      return { canMint: false, reason: "JoyCreatorGate.canMint returned false (no joy name on this wallet?)" };
     } catch (err) {
       return {
         canMint: false,
@@ -171,12 +173,13 @@ export class OnchainPublisher {
     if (!metadataUri || quantity <= 0) {
       throw new Error(`invalid mint inputs: uri=${metadataUri} qty=${quantity}`);
     }
+    const dropAddr =
+      this.marketplaceChain?.contracts.dropEdition ?? AMOY_ENS_CONTRACTS.platformDrop;
+    const gateAddr =
+      this.marketplaceChain?.contracts.creatorGate ?? AMOY_ENS_CONTRACTS.JoyCreatorGate;
+
     // 1. Derive nextTokenId
-    const drop = new ethers.Contract(
-      AMOY_ENS_CONTRACTS.platformDrop,
-      DROP_ERC1155_ABI,
-      this.provider,
-    );
+    const drop = new ethers.Contract(dropAddr, DROP_ERC1155_ABI, this.provider);
     let nextTokenId: bigint;
     try {
       nextTokenId = await drop.nextTokenIdToMint();
@@ -190,7 +193,7 @@ export class OnchainPublisher {
     //    `data` is opaque — we pass the metadata URI as utf-8 so the gate
     //    contract can persist it as the token's URI if its hook does so.
     const gate = new ethers.Contract(
-      AMOY_ENS_CONTRACTS.JoyCreatorGate,
+      gateAddr,
       CONTRACT_ABIS.JOY_CREATOR_GATE,
       this.wallet,
     );
@@ -207,7 +210,7 @@ export class OnchainPublisher {
     try {
       gasEstimate = await this.provider.estimateGas({
         from: this.wallet.address,
-        to: AMOY_ENS_CONTRACTS.JoyCreatorGate,
+        to: gateAddr,
         data: calldata,
       });
     } catch (err) {
@@ -219,7 +222,7 @@ export class OnchainPublisher {
         tokenId: nextTokenId.toString(),
         gasEstimate,
         dryRun: true,
-        to: AMOY_ENS_CONTRACTS.JoyCreatorGate,
+        to: gateAddr,
         data: calldata,
       };
     }

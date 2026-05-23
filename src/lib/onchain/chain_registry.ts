@@ -12,14 +12,17 @@
 
 import {
   AMOY_ENS_CONTRACTS,
+  ARB_SEPOLIA_ENS_CONTRACTS,
+  ARB_SEPOLIA_PARENT_DOMAIN,
   ARBITRUM_ONE,
   ARBITRUM_ONE_STYLUS_CONTRACTS,
   ARBITRUM_SEPOLIA,
-  ARBITRUM_SEPOLIA_STYLUS_CONTRACTS,
   CONTRACT_ADDRESSES,
+  NATIVE_TOKEN_SENTINEL,
   POLYGON_AMOY,
   STYLUS_DROP_ABI,
 } from "@/config/joymarketplace";
+import { GOLDSKY_SUBGRAPHS } from "@/config/thirdweb";
 
 export type MarketplaceChainId = "polygonAmoy" | "arbitrumSepolia" | "arbitrumOne";
 
@@ -36,23 +39,40 @@ export interface MarketplaceChainConfig {
     nativeCurrency: { name: string; symbol: string; decimals: number };
   };
   contracts: {
-    /** Drop / edition ERC-1155 contract — the mint target. */
+    /** DropERC1155 proxy — the address subgraph events come from. */
     dropEdition: string;
+    /** JoyCreatorGate — the address creators ACTUALLY call to mint. */
+    creatorGate: string;
+    /** ENS parent domain (e.g. "joy" on Amoy, "joymarketplace.io" on Arb). */
+    ensParentDomain: string;
+    /** ENS BaseRegistrar ERC-721 — owns 2LD tokens. */
+    ensBaseRegistrar: string;
   };
   abi: readonly string[];
+  /** Goldsky subgraph URLs for this chain. */
+  subgraph: {
+    drop: string;
+    stores: string;
+  };
   /** Pricing currency for new mints / listings. */
   currency: "USDC" | "ETH";
-  /** ERC-20 address for the currency, or null when paying in native ETH. */
-  currencyAddress: string | null;
+  /**
+   * ERC-20 address for the currency, or the native-token sentinel
+   * (`0xEEEe…eeEE`) when paying in the chain's native coin.
+   */
+  currencyAddress: string;
   /** Decimals used to scale UI dollar / ether amounts to base units. */
   currencyDecimals: number;
   /** True when JoyCreatorGate (.joy ENS) gating must be enforced before mint. */
   enforceJoyCreatorGate: boolean;
+  /** Testnet flag — drives UI banners / disables mainnet warnings. */
+  isTestnet: boolean;
 }
 
-// Polygon Amoy ABI used by the existing listener — kept inline so this module
-// does not introduce a circular import with drop_event_listener.ts.
-const AMOY_DROP_ABI = [
+// DropERC1155 ABI used by the listener — kept inline so this module does not
+// introduce a circular import with drop_event_listener.ts. Used by BOTH Amoy
+// and Arbitrum Sepolia (both chains now mint via DropERC1155 proxies).
+const DROP_ERC1155_EVENT_ABI = [
   "event TokensClaimed(uint256 indexed claimConditionIndex, address indexed claimer, address indexed receiver, uint256 tokenId, uint256 quantityClaimed)",
   "event TokensLazyMinted(uint256 startTokenId, uint256 endTokenId, string baseURI, bytes encryptedBaseURI)",
   "event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)",
@@ -70,47 +90,83 @@ export function getMarketplaceChain(id: MarketplaceChainId): MarketplaceChainCon
       return {
         id: "polygonAmoy",
         chain: POLYGON_AMOY,
-        contracts: { dropEdition: AMOY_ENS_CONTRACTS.platformDrop },
-        abi: AMOY_DROP_ABI,
+        contracts: {
+          dropEdition: AMOY_ENS_CONTRACTS.platformDrop,
+          creatorGate: AMOY_ENS_CONTRACTS.JoyCreatorGate,
+          ensParentDomain: "joy",
+          ensBaseRegistrar: AMOY_ENS_CONTRACTS.BaseRegistrar,
+        },
+        abi: DROP_ERC1155_EVENT_ABI,
+        subgraph: {
+          drop: GOLDSKY_SUBGRAPHS.polygonAmoy.drop,
+          stores: GOLDSKY_SUBGRAPHS.polygonAmoy.stores,
+        },
         currency: "USDC",
         currencyAddress: CONTRACT_ADDRESSES.USDC_POLYGON,
         currencyDecimals: 6,
         enforceJoyCreatorGate: true,
+        isTestnet: true,
       };
     case "arbitrumSepolia":
       return {
         id: "arbitrumSepolia",
         chain: ARBITRUM_SEPOLIA,
-        contracts: { dropEdition: ARBITRUM_SEPOLIA_STYLUS_CONTRACTS.dropEdition },
-        abi: STYLUS_DROP_ABI,
+        contracts: {
+          // Marketplace canonical — DropERC1155 proxy + gate, NOT the legacy
+          // Stylus EditionDrop contract (0x016950…003e8).
+          dropEdition: ARB_SEPOLIA_ENS_CONTRACTS.platformDrop,
+          creatorGate: ARB_SEPOLIA_ENS_CONTRACTS.JoyCreatorGate,
+          ensParentDomain: ARB_SEPOLIA_PARENT_DOMAIN,
+          ensBaseRegistrar: ARB_SEPOLIA_ENS_CONTRACTS.BaseRegistrar,
+        },
+        abi: DROP_ERC1155_EVENT_ABI,
+        subgraph: {
+          drop: GOLDSKY_SUBGRAPHS.arbitrumSepolia.drop,
+          stores: GOLDSKY_SUBGRAPHS.arbitrumSepolia.stores,
+        },
         currency: "ETH",
-        currencyAddress: null,
+        currencyAddress: NATIVE_TOKEN_SENTINEL,
         currencyDecimals: 18,
-        enforceJoyCreatorGate: false,
+        enforceJoyCreatorGate: true,
+        isTestnet: true,
       };
     case "arbitrumOne":
       return {
         id: "arbitrumOne",
         chain: ARBITRUM_ONE,
-        contracts: { dropEdition: ARBITRUM_ONE_STYLUS_CONTRACTS.dropEdition },
+        contracts: {
+          dropEdition: ARBITRUM_ONE_STYLUS_CONTRACTS.dropEdition,
+          creatorGate: ZERO_ADDRESS,
+          ensParentDomain: "joymarketplace.io",
+          ensBaseRegistrar: ZERO_ADDRESS,
+        },
         abi: STYLUS_DROP_ABI,
+        subgraph: {
+          drop: GOLDSKY_SUBGRAPHS.arbitrumOne.drop,
+          stores: GOLDSKY_SUBGRAPHS.arbitrumOne.stores,
+        },
         currency: "ETH",
-        currencyAddress: null,
+        currencyAddress: NATIVE_TOKEN_SENTINEL,
         currencyDecimals: 18,
         enforceJoyCreatorGate: false,
+        isTestnet: false,
       };
   }
 }
 
 /**
- * True when the resolved drop contract has been deployed (i.e. is not the
- * placeholder zero-address). Callers SHOULD refuse to publish/listen on a
- * chain whose contract is not yet wired.
+ * True when the resolved drop contract AND creator gate have been deployed
+ * (i.e. are not placeholder zero-addresses). Callers SHOULD refuse to
+ * publish/listen on a chain whose contracts are not yet wired.
  */
 export function isMarketplaceChainReady(id: MarketplaceChainId): boolean {
   const cfg = getMarketplaceChain(id);
-  return (
+  const dropOk =
     typeof cfg.contracts.dropEdition === "string" &&
-    cfg.contracts.dropEdition.toLowerCase() !== ZERO_ADDRESS
-  );
+    cfg.contracts.dropEdition.toLowerCase() !== ZERO_ADDRESS;
+  if (!cfg.enforceJoyCreatorGate) return dropOk;
+  const gateOk =
+    typeof cfg.contracts.creatorGate === "string" &&
+    cfg.contracts.creatorGate.toLowerCase() !== ZERO_ADDRESS;
+  return dropOk && gateOk;
 }

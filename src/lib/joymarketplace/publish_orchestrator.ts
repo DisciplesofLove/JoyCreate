@@ -198,9 +198,9 @@ export class PublishOrchestrator {
     const marketplaceChain = this.resolveMarketplaceChain();
     const publisher = new OnchainPublisher(wallet, marketplaceChain.chain, marketplaceChain);
 
-    if (marketplaceChain.id !== "polygonAmoy" && !isMarketplaceChainReady(marketplaceChain.id)) {
+    if (!isMarketplaceChainReady(marketplaceChain.id)) {
       outcome.errors!.push(
-        `marketplace chain ${marketplaceChain.id} has no deployed dropEdition contract \u2014 deploy contracts/drop_edition_stylus first`,
+        `marketplace chain ${marketplaceChain.id} is not ready \u2014 dropEdition or creatorGate is the zero address. Update chain_registry / config.`,
       );
       outcome.blockedAt = "mint-failed";
       await this.persistBundle(bundleId, outcome);
@@ -228,10 +228,16 @@ export class PublishOrchestrator {
     const quantity = Math.max(1, input.quantity ?? 1);
     let mint: { tokenId: string; txHash?: string; gasEstimate?: bigint };
     try {
-      if (marketplaceChain.currency === "ETH") {
+      if (marketplaceChain.enforceJoyCreatorGate) {
+        // Gate-first path (Amoy + Arbitrum Sepolia). The gate forwards
+        // mint(creator, tokenId, qty, data) into the platformDrop proxy and
+        // the drop subgraph indexes it as Token.creator = tx.from.
+        mint = await publisher.lazyMintDrop(metadataUri!, quantity, { dryRun });
+      } else {
+        // Legacy Stylus EditionDrop path (Arbitrum One placeholder only).
         if (!input.priceWei) {
           throw new Error(
-            `priceWei is required when publishing to ${marketplaceChain.id} (native-ETH chain)`,
+            `priceWei is required when publishing to ${marketplaceChain.id} (native-ETH Stylus chain)`,
           );
         }
         const tokenId = await this.allocateNextTokenId(marketplaceChain.contracts.dropEdition);
@@ -243,8 +249,6 @@ export class PublishOrchestrator {
           },
           { dryRun },
         );
-      } else {
-        mint = await publisher.lazyMintDrop(metadataUri!, quantity, { dryRun });
       }
       outcome.tokenId = mint.tokenId;
       if (mint.txHash) outcome.mintTxHash = mint.txHash;

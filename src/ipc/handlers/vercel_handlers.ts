@@ -29,6 +29,321 @@ const handle = createLoggedHandler(logger);
 // Use test server URLs when in test mode
 const TEST_SERVER_BASE = "http://localhost:3500";
 
+export const VERCEL_GITHUB_APP_INSTALL_URL = "https://github.com/apps/vercel";
+
+/**
+ * Structured deploy errors. The renderer parses `Error.message` as JSON
+ * (looking for the `joy: true` marker) and renders an actionable CTA.
+ * IPC strips custom Error fields, so we ship metadata in the message itself.
+ */
+export interface JoyDeployErrorMeta {
+  joy: true;
+  code:
+    | "vercel_token_missing"
+    | "vercel_token_invalid"
+    | "vercel_github_app_missing"
+    | "vercel_project_name_taken"
+    | "vercel_forbidden"
+    | "vercel_not_found"
+    | "github_not_connected"
+    | "vercel_unknown";
+  message: string;
+  installUrl?: string;
+  repo?: string;
+  details?: string;
+}
+
+function joyDeployError(meta: Omit<JoyDeployErrorMeta, "joy">): Error {
+  const payload: JoyDeployErrorMeta = { joy: true, ...meta };
+  return new Error(JSON.stringify(payload));
+}
+
+export { joyDeployError };
+
+/**
+ * Best-effort parse of a raw Vercel SDK / fetch error into a structured
+ * Joy deploy error. Falls back to `vercel_unknown` when no pattern matches.
+ */
+export function mapVercelError(
+  err: unknown,
+  context: { repo?: string } = {},
+): Error {
+  const raw =
+    err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+
+  // GitHub App not installed (the primary issue we're fixing)
+  if (
+    raw.includes("install the GitHub integration") ||
+    raw.includes("Install GitHub App") ||
+    raw.includes("github.com/apps/vercel")
+  ) {
+    return joyDeployError({
+      code: "vercel_github_app_missing",
+      message:
+        "The Vercel GitHub App isn't installed on this repository yet. Install it and grant access to the repo, then retry.",
+      installUrl: VERCEL_GITHUB_APP_INSTALL_URL,
+      repo: context.repo,
+      details: raw,
+    });
+  }
+
+  if (raw.includes("name_already_in_use") || raw.includes("already exists")) {
+    return joyDeployError({
+      code: "vercel_project_name_taken",
+      message:
+        "A Vercel project with this name already exists. Pick a different name or connect to the existing project.",
+      details: raw,
+    });
+  }
+
+  if (raw.includes("Status 401") || raw.includes("unauthorized") || raw.includes("forbidden")) {
+    return joyDeployError({
+      code: "vercel_token_invalid",
+      message:
+        "Your Vercel access token was rejected. Re-connect Vercel with a fresh token.",
+      details: raw,
+    });
+  }
+
+  if (raw.includes("Status 403")) {
+    return joyDeployError({
+      code: "vercel_forbidden",
+      message:
+        "Vercel rejected the request (403). Check that your token has access to this team and project.",
+      details: raw,
+    });
+  }
+
+  if (raw.includes("Status 404") || raw.includes("not_found")) {
+    return joyDeployError({
+      code: "vercel_not_found",
+      message: "Vercel resource not found. The project or team may have been deleted.",
+      details: raw,
+    });
+  }
+
+  return joyDeployError({
+    code: "vercel_unknown",
+    message: raw || "Vercel request failed.",
+    details: raw,
+  });
+}
+
+/**
+ * Check whether the Vercel GitHub integration is installed on the user's
+ * account/team. Returns the install URL plus the list of org slugs the
+ * integration is currently authorized for.
+ *
+ * Used as a pre-flight before `createProject({ gitRepository })` so we can
+ * surface an actionable "Install Vercel GitHub App" CTA in the renderer
+ * instead of bubbling a generic 400 from the SDK.
+ */
+async function fetchVercelGithubAppStatus(token: string): Promise<{
+  installed: boolean;
+  installUrl: string;
+  configurations: Array<{ id?: string; ownerType?: string; slug?: string }>;
+}> {
+  const url = `${VERCEL_API_BASE}/v1/integrations/configuration?slug=github`;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      // 404 means no configuration; treat as not installed rather than throwing.
+      if (response.status === 404) {
+        return {
+          installed: false,
+          installUrl: VERCEL_GITHUB_APP_INSTALL_URL,
+          configurations: [],
+        };
+      }
+      const body = await response.text();
+      throw new Error(
+        `Vercel integration check failed: ${response.status} ${response.statusText} - ${body}`,
+      );
+    }
+    const data = (await response.json()) as
+      | { configurations?: Array<{ id?: string; ownerType?: string; slug?: string }> }
+      | Array<{ id?: string; ownerType?: string; slug?: string }>;
+    const configurations = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.configurations)
+        ? data.configurations
+        : [];
+    return {
+      installed: configurations.length > 0,
+      installUrl: VERCEL_GITHUB_APP_INSTALL_URL,
+      configurations,
+    };
+  } catch (err) {
+    logger.warn("fetchVercelGithubAppStatus failed:", err);
+    // Don't block the deploy on a flaky check; report unknown and let the
+    // downstream create-project error mapping handle it.
+    return {
+      installed: true,
+      installUrl: VERCEL_GITHUB_APP_INSTALL_URL,
+      configurations: [],
+    };
+  }
+}
+
+export async function checkVercelGithubAppForRepo(
+  token: string,
+  repo: { org: string; repo: string },
+): Promise<{ installed: boolean; installUrl: string; configuredOrgs: string[] }> {
+  const status = await fetchVercelGithubAppStatus(token);
+  const configuredOrgs = status.configurations
+    .map((c) => c.slug)
+    .filter((s): s is string => typeof s === "string" && s.length > 0);
+  // If the integration is installed at all, trust the create-project call
+  // to surface a repo-specific error (the configuration API doesn't always
+  // return per-repo grants for personal accounts).
+  return {
+    installed: status.installed,
+    installUrl: status.installUrl,
+    configuredOrgs,
+  };
+}
+
+/**
+ * List every Vercel team the token can see. Used by `findTeamForGithubRepo`
+ * to discover where the Vercel GitHub App is installed when the token's
+ * default scope is a different team than the one that owns the repo —
+ * which otherwise causes `createProject` to reject with a misleading
+ * "Install GitHub App" error even when the app IS installed.
+ */
+async function listVercelTeams(
+  token: string,
+): Promise<Array<{ id: string; slug?: string }>> {
+  const teams: Array<{ id: string; slug?: string }> = [];
+  let next: string | null = null;
+  // Vercel paginates teams; cap iterations defensively.
+  for (let i = 0; i < 10; i++) {
+    const url = new URL(`${VERCEL_API_BASE}/v2/teams`);
+    url.searchParams.set("limit", "100");
+    if (next) url.searchParams.set("until", next);
+    const res = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!res.ok) break;
+    const data = (await res.json()) as {
+      teams?: Array<{ id: string; slug?: string }>;
+      pagination?: { next?: string | null };
+    };
+    if (Array.isArray(data.teams)) teams.push(...data.teams);
+    next = data.pagination?.next ?? null;
+    if (!next) break;
+  }
+  return teams;
+}
+
+/**
+ * Find the Vercel team where the GitHub integration is configured for the
+ * given GitHub org. Returns `null` if no team in the token's scope has the
+ * integration for that org (typical when the user hasn't installed the
+ * Vercel GitHub App yet). Returns `{ teamId: null }` when the personal
+ * account (no team) has the integration installed for that org.
+ */
+export async function findTeamForGithubRepo(
+  token: string,
+  repo: { org: string; repo: string },
+): Promise<{ teamId: string | null; teamSlug?: string } | null> {
+  const orgLower = repo.org.toLowerCase();
+
+  // 1. Check the token's default scope (personal account or default team).
+  const personal = await fetchVercelGithubAppStatus(token);
+  if (
+    personal.installed &&
+    personal.configurations.some(
+      (c) => (c.slug ?? "").toLowerCase() === orgLower,
+    )
+  ) {
+    return { teamId: null };
+  }
+
+  // 2. Walk every team the token can see and probe each with `teamId=`.
+  const teams = await listVercelTeams(token);
+  for (const team of teams) {
+    try {
+      const url = new URL(
+        `${VERCEL_API_BASE}/v1/integrations/configuration`,
+      );
+      url.searchParams.set("slug", "github");
+      url.searchParams.set("teamId", team.id);
+      const res = await fetch(url.toString(), {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+      if (!res.ok) continue;
+      const data = (await res.json()) as
+        | {
+            configurations?: Array<{ slug?: string }>;
+          }
+        | Array<{ slug?: string }>;
+      const configs = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.configurations)
+          ? data.configurations
+          : [];
+      if (
+        configs.some((c) => (c.slug ?? "").toLowerCase() === orgLower)
+      ) {
+        return { teamId: team.id, teamSlug: team.slug };
+      }
+    } catch (err) {
+      logger.warn(
+        `findTeamForGithubRepo: probing team ${team.id} failed:`,
+        err,
+      );
+    }
+  }
+
+  // 3. Fall back: if the integration is installed *somewhere* but we couldn't
+  // match the org (e.g. private API quirks), default to the first team that
+  // has any github configuration; that's usually correct for single-team
+  // accounts. Return null when nothing is installed at all.
+  for (const team of teams) {
+    try {
+      const url = new URL(
+        `${VERCEL_API_BASE}/v1/integrations/configuration`,
+      );
+      url.searchParams.set("slug", "github");
+      url.searchParams.set("teamId", team.id);
+      const res = await fetch(url.toString(), {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+      if (!res.ok) continue;
+      const data = (await res.json()) as
+        | { configurations?: Array<unknown> }
+        | Array<unknown>;
+      const configs = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.configurations)
+          ? data.configurations
+          : [];
+      if (configs.length > 0) {
+        return { teamId: team.id, teamSlug: team.slug };
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (personal.installed) return { teamId: null };
+  return null;
+}
+
 const VERCEL_API_BASE = IS_TEST_BUILD
   ? `${TEST_SERVER_BASE}/vercel/api`
   : "https://api.vercel.com";
@@ -119,6 +434,24 @@ async function validateVercelToken(token: string): Promise<boolean> {
   } catch (error) {
     logger.error("Error validating Vercel token:", error);
     return false;
+  }
+}
+
+export async function getVercelUser(
+  token: string,
+): Promise<{ username?: string; email?: string } | null> {
+  try {
+    const vercel = createVercelClient(token);
+    const res: any = await vercel.user.getAuthUser();
+    const user = res?.user ?? res;
+    if (!user) return null;
+    return {
+      username: user.username || user.name,
+      email: user.email,
+    };
+  } catch (error) {
+    logger.warn("getVercelUser failed:", error);
+    return null;
   }
 }
 
@@ -324,19 +657,52 @@ async function handleCreateProject(
     );
   }
 
+  // Hoisted so the catch block can include repo context.
+  let app: typeof apps.$inferSelect | undefined;
   try {
     logger.info(`Creating Vercel project: ${sanitizedName} for app ${appId}`);
 
     // Get app details to determine the framework
-    const app = await db.query.apps.findFirst({ where: eq(apps.id, appId) });
+    app = await db.query.apps.findFirst({ where: eq(apps.id, appId) });
     if (!app) {
       throw new Error("App not found.");
     }
 
     // Check if app has GitHub repository configured
     if (!app.githubOrg || !app.githubRepo) {
-      throw new Error(
-        "App must be connected to a GitHub repository before creating a Vercel project.",
+      throw joyDeployError({
+        code: "github_not_connected",
+        message:
+          "This app isn't connected to a GitHub repository yet. Connect GitHub first, then deploy to Vercel.",
+      });
+    }
+
+    // Pre-flight: locate the Vercel team that has the GitHub integration
+    // installed for this repo's owning org. The integration is scoped per
+    // team; when the user's token defaults to a different team than the one
+    // where they installed the app, `createProject` rejects with a
+    // misleading "Install GitHub App" error. Passing the correct `teamId`
+    // makes Vercel use that team's integration grant.
+    let scopedTeamId: string | null = null;
+    try {
+      const match = await findTeamForGithubRepo(accessToken, {
+        org: app.githubOrg,
+        repo: app.githubRepo,
+      });
+      if (!match) {
+        logger.warn(
+          `No Vercel team in this token's scope has the GitHub App installed for ${app.githubOrg}; proceeding optimistically.`,
+        );
+      } else {
+        scopedTeamId = match.teamId;
+        logger.info(
+          `Using Vercel team ${match.teamSlug ?? match.teamId ?? "<personal>"} for createProject (GitHub App grant for ${app.githubOrg}).`,
+        );
+      }
+    } catch (preflightErr) {
+      logger.warn(
+        "Vercel GitHub App team-discovery failed; proceeding to createProject without explicit teamId:",
+        preflightErr,
       );
     }
 
@@ -350,6 +716,7 @@ async function handleCreateProject(
     const vercel = createVercelClient(accessToken);
 
     const projectData = await vercel.projects.createProject({
+      ...(scopedTeamId ? { teamId: scopedTeamId } : {}),
       requestBody: {
         name: sanitizedName,
         gitRepository: {
@@ -363,11 +730,14 @@ async function handleCreateProject(
       throw new Error("Failed to create project: No project ID returned.");
     }
 
-    // Get the default team ID
-    const teamId = await getDefaultTeamId(accessToken);
+    // Prefer the team we already scoped createProject to so every follow-up
+    // call hits the same Vercel team. Only fall back to the default team
+    // lookup when the project was created in the personal (no-team) scope.
+    const teamId = scopedTeamId ?? (await getDefaultTeamId(accessToken));
 
     const projectDomains = await vercel.projects.getProjectDomains({
       idOrName: projectData.id,
+      ...(scopedTeamId ? { teamId: scopedTeamId } : {}),
     });
     const projectUrl = "https://" + projectDomains.domains[0].name;
 
@@ -389,6 +759,7 @@ async function handleCreateProject(
     try {
       // Create deployment via Vercel SDK using the project settings we just created
       const deploymentData = await vercel.deployments.createDeployment({
+        ...(scopedTeamId ? { teamId: scopedTeamId } : {}),
         requestBody: {
           name: projectData.name,
           project: projectData.id,
@@ -413,26 +784,20 @@ async function handleCreateProject(
     }
   } catch (err: any) {
     logger.error("[Vercel Handler] Failed to create project:", err);
-    // Vercel returns a 400 "bad_request" with an actionable message + link
-    // when the Vercel GitHub App is not installed on the target repo. The
-    // raw SDK error is something like:
-    //   "API error occurred: Status 400 Content-Type ... Body: {\"error\":{\"code\":\"bad_request\",\"message\":\"To link a GitHub repository, you need to install the GitHub integration first. ...\",\"action\":\"Install GitHub App\",\"link\":\"https://github.com/apps/vercel\",\"repo\":\"...\"}}"
-    // Detect that pattern and rethrow a friendly message so the UI can
-    // render an actionable "Install Vercel GitHub App" CTA.
-    const raw = err?.message ?? String(err);
+    // If we already threw a structured Joy error above, rethrow as-is so the
+    // renderer can parse the code/installUrl.
     if (
-      typeof raw === "string" &&
-      (raw.includes("install the GitHub integration") ||
-        raw.includes("Install GitHub App") ||
-        raw.includes("github.com/apps/vercel"))
+      err instanceof Error &&
+      typeof err.message === "string" &&
+      err.message.startsWith("{\"joy\":true")
     ) {
-      throw new Error(
-        "Vercel needs the Vercel GitHub App installed on this repository before it can link it. " +
-          "Install it here and grant access to the repo, then click Create Project again: " +
-          "https://github.com/apps/vercel",
-      );
+      throw err;
     }
-    throw new Error(raw || "Failed to create Vercel project.");
+    const repo =
+      app && app.githubOrg && app.githubRepo
+        ? `${app.githubOrg}/${app.githubRepo}`
+        : undefined;
+    throw mapVercelError(err, { repo });
   }
 }
 
@@ -560,6 +925,45 @@ async function handleDisconnectVercelProject(
     .where(eq(apps.id, appId));
 }
 
+// --- Vercel Pre-flight Handlers (read-only) ---
+async function handleCheckGithubApp(): Promise<{
+  installed: boolean;
+  installUrl: string;
+  configuredOrgs: string[];
+}> {
+  const settings = readSettings();
+  const accessToken = settings.vercelAccessToken?.value;
+  if (!accessToken) {
+    throw joyDeployError({
+      code: "vercel_token_missing",
+      message: "Connect Vercel first.",
+    });
+  }
+  const status = await fetchVercelGithubAppStatus(accessToken);
+  const configuredOrgs = status.configurations
+    .map((c) => c.slug)
+    .filter((s): s is string => typeof s === "string" && s.length > 0);
+  return {
+    installed: status.installed,
+    installUrl: status.installUrl,
+    configuredOrgs,
+  };
+}
+
+async function handleValidateToken(): Promise<{
+  valid: boolean;
+  user?: { username?: string; email?: string };
+}> {
+  const settings = readSettings();
+  const accessToken = settings.vercelAccessToken?.value;
+  if (!accessToken) {
+    return { valid: false };
+  }
+  const user = await getVercelUser(accessToken);
+  if (!user) return { valid: false };
+  return { valid: true, user };
+}
+
 // --- Registration ---
 export function registerVercelHandlers() {
   // DO NOT LOG this handler because tokens are sensitive
@@ -572,6 +976,8 @@ export function registerVercelHandlers() {
   handle("vercel:connect-existing-project", handleConnectToExistingProject);
   handle("vercel:get-deployments", handleGetVercelDeployments);
   handle("vercel:disconnect", handleDisconnectVercelProject);
+  handle("vercel:check-github-app", handleCheckGithubApp);
+  handle("vercel:validate-token", handleValidateToken);
 }
 
 export async function updateAppVercelProject({

@@ -10,6 +10,9 @@ import { mcpHubRoute } from "./routes/mcp-hub";
 import { libraryRoute } from "./routes/library";
 import { agentsRoute, agentEditorRoute, agentTestRoute, agentPreviewRoute, agentGalleryRoute } from "./routes/agents";
 import { featuredTasksRoute } from "./routes/featured-tasks";
+import { commandCenterRoute } from "./routes/command-center";
+import { brandKitRoute } from "./routes/brand-kit";
+import { socialRoute } from "./routes/social";
 import { agentSchedulesRoute } from "./routes/agent-schedules";
 import { agentKnowledgeRoute } from "./routes/agent-knowledge";
 import { agentObservabilityRoute } from "./routes/agent-observability";
@@ -83,6 +86,7 @@ import { marketplaceExplorerRoute } from "./routes/marketplace-explorer";
 import { scrapingRoute } from "./routes/scraping";
 import { gauntletRoute } from "./routes/gauntlet";
 import { smartBrowserRoute } from "./routes/smart-browser";
+import { joySearchRoute } from "./routes/joy-search";
 import { notificationsRoute } from "./routes/notifications";
 import { profileRoute } from "./routes/profile";
 import { adminRoute } from "./routes/admin";
@@ -120,6 +124,9 @@ const routeTree = rootRoute.addChildren([
   agentsRoute,
   agentGalleryRoute,
   featuredTasksRoute,
+  commandCenterRoute,
+  brandKitRoute,
+  socialRoute,
   agentSchedulesRoute,
   agentKnowledgeRoute,
   agentObservabilityRoute,
@@ -196,6 +203,7 @@ const routeTree = rootRoute.addChildren([
   scrapingRoute,
   gauntletRoute,
   smartBrowserRoute,
+  joySearchRoute,
   notificationsRoute,
   profileRoute,
   adminRoute,

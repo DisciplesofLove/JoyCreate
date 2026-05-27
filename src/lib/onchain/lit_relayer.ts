@@ -123,8 +123,10 @@ async function processPending(): Promise<void> {
 export function startLitRelayer(): void {
   if (pollTimer) return;
   logger.info("starting Lit relayer poll every", POLL_INTERVAL_MS, "ms");
-  // Fire once immediately so freshly-purchased leases provision fast.
-  void processPending();
+  // Schedule the first poll after one interval. We can't fire immediately
+  // because registerIpcHandlers() runs before initializeDatabase() in main.ts,
+  // so the DB isn't ready when this function is invoked. The interval gives
+  // the DB time to initialize during onReady().
   pollTimer = setInterval(processPending, POLL_INTERVAL_MS);
 }
 

@@ -230,6 +230,7 @@
     "esbuild-register": "^3.6.0",
     "ethers": "^6.16.0",
     "fastest-levenshtein": "^1.0.16",
+    "ffmpeg-static": "^5.3.0",
     "fix-path": "^4.0.0",
     "form-data": "^4.0.5",
     "framer-motion": "^12.6.3",
@@ -322,7 +323,9 @@
       "protobufjs@<7.5.5": ">=7.5.5",
       "happy-dom@<20.0.0": ">=20.0.0",
       "zod": "3.25.76",
-      "@langchain/core": "^1.1.44"
+      "@langchain/core": "^1.1.44",
+      "@n8n/ai-workflow-builder>@langchain/core": "^1.1.44",
+      "@n8n/ai-utilities>@langchain/core": "^1.1.44"
     },
     "onlyBuiltDependencies": [
       "electron",

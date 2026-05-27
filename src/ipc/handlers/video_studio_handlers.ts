@@ -445,6 +445,23 @@ async function generateWithGoogleVeo(params: GenerateVideoParams): Promise<{ fil
   const ratio = params.width && params.height ? params.width / params.height : 16 / 9;
   const aspectRatio = ratio >= 1.5 ? "16:9" : ratio <= 0.7 ? "9:16" : "1:1";
 
+  // Veo requires durationSeconds in [4, 8] (inclusive). Clamp so UI presets
+  // like 3s or 10s don't get rejected by the API.
+  const veoDuration = Math.max(4, Math.min(8, Math.round(params.duration ?? 5)));
+
+  // personGeneration values are model-family specific:
+  //   - Veo 3.x  → "allow_all" | "dont_allow"
+  //   - Veo 2.x  → "allow_adult" | "dont_allow"
+  // For image-to-video, Veo locks person generation regardless, so omit it
+  // to avoid "not supported" errors.
+  const isVeo3 = /^veo-3/.test(model);
+  const isImageToVideo = Boolean(instance.image);
+  const personGeneration = isImageToVideo
+    ? undefined
+    : isVeo3
+      ? "allow_all"
+      : "allow_adult";
+
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:predictLongRunning?key=${apiKey}`,
     {
@@ -454,8 +471,8 @@ async function generateWithGoogleVeo(params: GenerateVideoParams): Promise<{ fil
         instances: [instance],
         parameters: {
           aspectRatio,
-          durationSeconds: params.duration ?? 5,
-          personGeneration: "allow_adult",
+          durationSeconds: veoDuration,
+          ...(personGeneration ? { personGeneration } : {}),
           ...(params.negativePrompt ? { negativePrompt: params.negativePrompt } : {}),
         },
       }),
@@ -464,7 +481,7 @@ async function generateWithGoogleVeo(params: GenerateVideoParams): Promise<{ fil
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Google Veo error: ${err}`);
+    throw friendlyGoogleVeoError(err, model);
   }
 
   const { name } = await res.json();
@@ -485,11 +502,40 @@ async function generateWithGoogleVeo(params: GenerateVideoParams): Promise<{ fil
       return { filePath, thumbnailPath: null };
     }
     if (op.error) {
-      throw new Error(`Google Veo failed: ${op.error.message}`);
+      throw friendlyGoogleVeoError(
+        typeof op.error === "string" ? op.error : JSON.stringify(op.error),
+        model,
+      );
     }
   }
 
   throw new Error("Google Veo timed out after 600 seconds");
+}
+
+/**
+ * Veo is paid-tier on the Generative Language API. Surface an actionable
+ * message pointing the user at the free local video providers (Replicate
+ * free quota or ComfyUI/AnimateDiff when available) instead of a raw JSON
+ * dump.
+ */
+function friendlyGoogleVeoError(rawBody: string, model: string): Error {
+  let parsed: { error?: { message?: string } } | null = null;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    /* keep raw */
+  }
+  const msg = parsed?.error?.message ?? rawBody;
+  const isPaidTier =
+    /paid plan|billed users|billing|upgrade your account|only available on paid/i.test(msg);
+  if (isPaidTier) {
+    return new Error(
+      `${model} requires a paid Google AI Studio plan. ` +
+        `Try a different Video Studio provider (Replicate, Fal.ai, Luma, Runway) or upgrade at https://ai.dev/projects. ` +
+        `Raw error: ${msg}`,
+    );
+  }
+  return new Error(`Google Veo error: ${msg}`);
 }
 
 async function generateWithOpenAI(params: GenerateVideoParams): Promise<{ filePath: string; thumbnailPath: string | null }> {
@@ -587,6 +633,7 @@ interface ProviderModel {
   supportsVideoExtend?: boolean;
   supportsVideo2Video?: boolean;
   maxDurationSeconds?: number;
+  minDurationSeconds?: number;
   defaultFps?: number;
   comingSoon?: boolean;
 }
@@ -663,10 +710,10 @@ function getProviderCatalog(): Record<string, ProviderCatalogEntry> {
       website: "https://aistudio.google.com/app/apikey",
       apiKeyEnvVars: ["GOOGLE_AI_API_KEY", "GEMINI_API_KEY"],
       models: [
-        { id: "veo-3.0-generate-001", label: "Veo 3", supportsImg2Video: true, maxDurationSeconds: 8, defaultFps: 24 },
-        { id: "veo-3.0-fast-generate-001", label: "Veo 3 Fast", supportsImg2Video: true, maxDurationSeconds: 8, defaultFps: 24 },
-        { id: "veo-2.0-generate-001", label: "Veo 2", supportsImg2Video: true, maxDurationSeconds: 8, defaultFps: 24 },
-        { id: "veo-002", label: "Veo 2 (legacy alias)", supportsImg2Video: true, maxDurationSeconds: 8, defaultFps: 24 },
+        { id: "veo-3.0-generate-001", label: "Veo 3", supportsImg2Video: true, minDurationSeconds: 4, maxDurationSeconds: 8, defaultFps: 24 },
+        { id: "veo-3.0-fast-generate-001", label: "Veo 3 Fast", supportsImg2Video: true, minDurationSeconds: 4, maxDurationSeconds: 8, defaultFps: 24 },
+        { id: "veo-2.0-generate-001", label: "Veo 2", supportsImg2Video: true, minDurationSeconds: 4, maxDurationSeconds: 8, defaultFps: 24 },
+        { id: "veo-002", label: "Veo 2 (legacy alias)", supportsImg2Video: true, minDurationSeconds: 4, maxDurationSeconds: 8, defaultFps: 24 },
       ],
     },
     openai: {

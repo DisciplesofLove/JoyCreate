@@ -5,7 +5,9 @@ import type Konva from "konva";
 import { IpcClient } from "@/ipc/ipc_client";
 import type { ImageStudioImage, ImageStudioProvider, ImageStudioProviderModel } from "@/ipc/ipc_types";
 import { UnifiedModelPicker } from "@/components/studio/UnifiedModelPicker";
+import { ProviderCarousel } from "@/components/studio/ProviderCarousel";
 import { PublishContextMenu } from "@/components/studio/PublishContextMenu";
+import { AddToDatasetDialog } from "@/components/image-studio/AddToDatasetDialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -62,6 +64,7 @@ import {
   Undo2,
   Redo2,
   Maximize2,
+  Database,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -304,6 +307,13 @@ function GeneratePanel({
       </div>
 
       {/* Provider + Model — unified picker */}
+      <ProviderCarousel
+        mode="image"
+        providers={providers}
+        selectedProvider={provider}
+        selectedModel={model}
+        onSelect={handleModelPick}
+      />
       <UnifiedModelPicker
         mode="image"
         providers={providers}
@@ -633,6 +643,7 @@ function Gallery({
   availableProviders: ImageStudioProvider[];
 }) {
   const [infoImageId, setInfoImageId] = useState<number | null>(null);
+  const [datasetImageIds, setDatasetImageIds] = useState<number[] | null>(null);
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
@@ -765,6 +776,11 @@ function Gallery({
                           Show in Folder
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setDatasetImageIds([img.id]); }}>
+                          <Database className="w-3 h-3 mr-2" />
+                          Add to Dataset…
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem
                           className="text-red-500"
                           disabled={isDeleting}
@@ -792,6 +808,13 @@ function Gallery({
           onClose={() => setInfoImageId(null)}
         />
       )}
+
+      {/* Add to Dataset Dialog */}
+      <AddToDatasetDialog
+        open={datasetImageIds !== null}
+        onOpenChange={(v) => { if (!v) setDatasetImageIds(null); }}
+        imageIds={datasetImageIds ?? []}
+      />
     </div>
   );
 }

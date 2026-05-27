@@ -23,6 +23,11 @@ import {
   SUPABASE_AVAILABLE_SYSTEM_PROMPT,
   SUPABASE_NOT_AVAILABLE_SYSTEM_PROMPT,
 } from "../../prompts/supabase_prompt";
+import { getDataLayerPrompts } from "../../prompts/data_layer";
+import {
+  deriveLegacyDataLayerConfig,
+  type DataLayerConfig,
+} from "../../shared/data_layer_types";
 import { getJoyAppPath } from "../../paths/paths";
 import { readSettings } from "../../main/settings";
 import type { ChatResponseEnd, ChatStreamParams } from "../ipc_types";
@@ -82,12 +87,20 @@ import { prompts as promptsTable } from "../../db/schema";
 import { inArray } from "drizzle-orm";
 import { replacePromptReference } from "../utils/replacePromptReference";
 import { buildMcpToolSet } from "../../lib/mcp_ai_bridge";
-import { buildMemoryContext, autoExtractMemories, flushShortTermToLongTerm, setShortTermMemory } from "../../lib/agent_memory_engine";
+import { buildMemoryContext, autoExtractMemories, flushShortTermToLongTerm, setShortTermMemory, ingestConversationTurn } from "../../lib/agent_memory_engine";
 import { captureTrainingPair, isAutoCaptureEnabled } from "../../lib/data_flywheel";
 import { agents as agentsTable } from "../../db/schema";
 import { checkAgentIntentInStream } from "./agent_creation_handlers";
 import z from "zod";
-import { isSupabaseConnected, isTurboEditsV2Enabled } from "@/lib/schemas";
+import {
+  ChatModeSchema,
+  isSupabaseConnected,
+  isTurboEditsV2Enabled,
+  type ChatMode,
+} from "@/lib/schemas";
+import { parseChatPlanFromText } from "@/lib/chat_plan_parser";
+import { parsePhaseCompleteFromText } from "@/lib/chat_plan_parser";
+import { upsertChatPlan, applyPhaseCompleteToPlan } from "./chat_plan_handlers";
 import { AI_STREAMING_ERROR_MESSAGE_PREFIX } from "@/shared/texts";
 import { getCurrentCommitHash } from "../utils/git_utils";
 import {
@@ -489,6 +502,13 @@ ${componentSnippet}
         throw new Error(`Chat not found: ${req.chatId}`);
       }
 
+      // Per-chat sticky chat mode overrides the global setting when set.
+      // When chats.chatMode is null we fall back to settings.selectedChatMode.
+      const chatModeParsed = ChatModeSchema.safeParse(updatedChat.chatMode);
+      const effectiveChatMode: ChatMode = chatModeParsed.success
+        ? chatModeParsed.data
+        : (settings.selectedChatMode ?? "build");
+
       // Send the messages right away so that the loading state is shown for the message.
       safeSend(event.sender, "chat:response:chunk", {
         chatId: req.chatId,
@@ -705,9 +725,9 @@ ${componentSnippet}
         let systemPrompt = constructSystemPrompt({
           aiRules,
           chatMode:
-            settings.selectedChatMode === "agent"
+            effectiveChatMode === "agent"
               ? "build"
-              : settings.selectedChatMode,
+              : effectiveChatMode,
           enableTurboEditsV2: isTurboEditsV2Enabled(settings),
         });
 
@@ -767,31 +787,87 @@ Every file you create or change MUST use a separate <joy-write> tag with the ful
           }
         }
 
-        if (
-          updatedChat.app?.supabaseProjectId &&
-          isSupabaseConnected(settings)
-        ) {
+        // Resolve the Data + Backend Layer config: prefer the explicit
+        // per-app config; fall back to deriving it from legacy columns so
+        // pre-existing apps keep their current behaviour.
+        const dataLayerConfig: DataLayerConfig | null =
+          (updatedChat.app?.dataLayerConfig as DataLayerConfig | null) ??
+          (updatedChat.app
+            ? deriveLegacyDataLayerConfig({
+                supabaseProjectId: updatedChat.app.supabaseProjectId,
+                neonProjectId: updatedChat.app.neonProjectId,
+              })
+            : null);
+
+        const supabaseConnected = isSupabaseConnected(settings);
+        const isLegacyConfig = !updatedChat.app?.dataLayerConfig;
+
+        if (isLegacyConfig) {
+          // Legacy path: preserve the exact original supabase behaviour
+          // so existing apps stream unchanged prompts.
+          if (
+            updatedChat.app?.supabaseProjectId &&
+            supabaseConnected
+          ) {
+            systemPrompt +=
+              "\n\n" +
+              SUPABASE_AVAILABLE_SYSTEM_PROMPT +
+              "\n\n" +
+              (settings.selectedChatMode === "local-agent"
+                ? ""
+                : await getSupabaseContext({
+                    supabaseProjectId: updatedChat.app.supabaseProjectId,
+                    organizationSlug:
+                      updatedChat.app.supabaseOrganizationSlug ?? null,
+                  }));
+          } else if (
+            !updatedChat.app?.neonProjectId &&
+            settings.selectedChatMode !== "local-agent" &&
+            !isSecurityReviewIntent
+          ) {
+            systemPrompt += "\n\n" + SUPABASE_NOT_AVAILABLE_SYSTEM_PROMPT;
+          }
+        } else if (dataLayerConfig && !isSecurityReviewIntent) {
+          // New path: aggregate all four knobs through the data-layer registry.
+          // Readiness is best-effort here — handlers that know per-provider
+          // status will be added in a follow-up; for now we treat the primary
+          // store as configured iff supabase+connected, server runtime as
+          // configured iff we have credentials we can detect, and others as not
+          // yet configured (so the model emits <joy-add-integration>).
+          const primaryConfigured =
+            dataLayerConfig.primaryStore === "none" ||
+            (dataLayerConfig.primaryStore === "supabase" &&
+              !!updatedChat.app?.supabaseProjectId &&
+              supabaseConnected);
+          const serverConfigured =
+            dataLayerConfig.serverRuntime === "none" ||
+            (dataLayerConfig.serverRuntime === "supabase-edge" &&
+              !!updatedChat.app?.supabaseProjectId &&
+              supabaseConnected);
           systemPrompt +=
             "\n\n" +
-            SUPABASE_AVAILABLE_SYSTEM_PROMPT +
-            "\n\n" +
-            // For local agent, we will explicitly fetch the database context when needed.
-            (settings.selectedChatMode === "local-agent"
-              ? ""
-              : await getSupabaseContext({
-                  supabaseProjectId: updatedChat.app.supabaseProjectId,
-                  organizationSlug:
-                    updatedChat.app.supabaseOrganizationSlug ?? null,
-                }));
-        } else if (
-          // Neon projects don't need Supabase.
-          !updatedChat.app?.neonProjectId &&
-          // In local agent mode, we will suggest supabase as part of the add-integration tool
-          settings.selectedChatMode !== "local-agent" &&
-          // If in security review mode, we don't need to mention supabase is available.
-          !isSecurityReviewIntent
-        ) {
-          systemPrompt += "\n\n" + SUPABASE_NOT_AVAILABLE_SYSTEM_PROMPT;
+            getDataLayerPrompts(dataLayerConfig, {
+              primaryConfigured,
+              serverConfigured,
+              indexConfigured: false,
+              blobConfigured: false,
+            });
+          // Supabase has a dynamic schema/context block — load it when
+          // primary store is supabase and a project is connected.
+          if (
+            dataLayerConfig.primaryStore === "supabase" &&
+            updatedChat.app?.supabaseProjectId &&
+            supabaseConnected &&
+            settings.selectedChatMode !== "local-agent"
+          ) {
+            systemPrompt +=
+              "\n\n" +
+              (await getSupabaseContext({
+                supabaseProjectId: updatedChat.app.supabaseProjectId,
+                organizationSlug:
+                  updatedChat.app.supabaseOrganizationSlug ?? null,
+              }));
+          }
         }
         const isSummarizeIntent = req.prompt.startsWith(
           "Summarize from chat-id=",
@@ -991,7 +1067,14 @@ This conversation includes one or more image attachments. When the user uploads 
         let chatMessages: ModelMessage[] = buildCompressedChatMessages(
           [...codebasePrefix, ...otherCodebasePrefix],
           limitedHistoryChatMessages,
-          3_000, // max ~3k tokens for history (compressed to fit under 30k rate limit)
+          // Keep recent dialog verbatim so the agent can actually follow the
+          // conversation. Earlier versions capped at 3k tokens / 2 messages,
+          // which reduced multi-turn builds to one-line summaries and made
+          // the agent forget what was being built. Compression only kicks in
+          // for very long histories; the deeper limiter above (maxChatTurns)
+          // and per-provider context windows still apply.
+          30_000, // max ~30k tokens for history portion
+          12, // keep last 12 messages (≈6 turns) verbatim
         );
 
         // Check if the last message should include attachments
@@ -1203,7 +1286,21 @@ This conversation includes one or more image attachments. When the user uploads 
             temperature: await getTemperature(settings.selectedModel),
             maxRetries: 0, // Disabled — we handle rate-limit retries ourselves with proper backoff
             model: modelClient.model,
-            stopWhen: [stepCountIs(20), hasToolCall("edit-code")],
+            stopWhen: [
+              stepCountIs(
+                settings.modeTokenBudgets?.[effectiveChatMode as
+                  | "agent"
+                  | "autonomous"
+                  | "mcp"
+                  | "local-agent"] ??
+                  (effectiveChatMode === "autonomous"
+                    ? 60
+                    : effectiveChatMode === "mcp"
+                      ? 30
+                      : 20),
+              ),
+              hasToolCall("edit-code"),
+            ],
             providerOptions,
             system: isAnthropic ? undefined : systemPromptOverride,
             tools,
@@ -2027,6 +2124,53 @@ ${problemReport.problems
           .set({ content: fullResponse })
           .where(eq(messages.id, placeholderAssistantMessage.id));
 
+        // Autonomous mode: extract `<joy-plan>` block (if present) and persist
+        // the plan so the ChatPlanPanel can render it. Errors here are
+        // non-fatal — the message is already saved.
+        if (effectiveChatMode === "autonomous") {
+          try {
+            const parsed = parseChatPlanFromText(fullResponse);
+            if (parsed) {
+              await upsertChatPlan({
+                chatId: req.chatId,
+                goal: parsed.draft.goal,
+                phases: parsed.phases,
+              });
+              logger.info(
+                `Autonomous mode: persisted plan with ${parsed.phases.length} phases for chat ${req.chatId}`,
+              );
+            }
+          } catch (planErr) {
+            logger.warn("Autonomous mode plan persistence failed (non-fatal)", {
+              error: planErr,
+            });
+          }
+
+          // Phase-execution turns end with `<joy-phase-complete .../>`. Apply
+          // that update so the ChatPlanPanel + auto-advance loop see the new
+          // phase status. Non-fatal on error.
+          try {
+            const phaseComplete = parsePhaseCompleteFromText(fullResponse);
+            if (phaseComplete) {
+              await applyPhaseCompleteToPlan({
+                chatId: req.chatId,
+                phaseId: phaseComplete.phaseId,
+                status: phaseComplete.status,
+                summary: phaseComplete.summary,
+                error: phaseComplete.error,
+              });
+              logger.info(
+                `Autonomous mode: phase ${phaseComplete.phaseId} → ${phaseComplete.status} for chat ${req.chatId}`,
+              );
+            }
+          } catch (phaseErr) {
+            logger.warn(
+              "Autonomous mode phase-complete update failed (non-fatal)",
+              { error: phaseErr },
+            );
+          }
+        }
+
         // --- Auto-extract agent memories from conversation ---
         if (chatAgentId) {
           autoExtractMemories(chatAgentId, req.prompt, fullResponse).catch(
@@ -2045,6 +2189,32 @@ ${problemReport.problems
             value: req.prompt.slice(0, 500),
           }).catch((err) =>
             logger.warn("STM capture failed (non-fatal)", { error: err }),
+          );
+
+          // Index this conversation turn into long-term, vector-searchable
+          // memory so the agent can semantically recall past chats.
+          const turnIdx = Date.now();
+          ingestConversationTurn({
+            agentId: chatAgentId,
+            chatId: String(req.chatId),
+            role: "user",
+            content: req.prompt,
+            turnIdx,
+          }).catch((err) =>
+            logger.warn("Conversation ingest (user) failed (non-fatal)", {
+              error: err,
+            }),
+          );
+          ingestConversationTurn({
+            agentId: chatAgentId,
+            chatId: String(req.chatId),
+            role: "assistant",
+            content: fullResponse,
+            turnIdx,
+          }).catch((err) =>
+            logger.warn("Conversation ingest (assistant) failed (non-fatal)", {
+              error: err,
+            }),
           );
 
           // Flush STM → LTM (consolidate session knowledge)

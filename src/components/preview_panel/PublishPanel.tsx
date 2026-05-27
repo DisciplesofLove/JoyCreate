@@ -1,7 +1,16 @@
 import { useState } from "react";
 import { useAtomValue } from "jotai";
 import { Link } from "@tanstack/react-router";
-import { Rocket, CheckCircle2, XCircle, Loader2, ChevronDown, ExternalLink } from "lucide-react";
+import {
+  Rocket,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  ChevronDown,
+  ExternalLink,
+  AlertTriangle,
+  Settings as SettingsIcon,
+} from "lucide-react";
 import { selectedAppIdAtom } from "@/atoms/appAtoms";
 import { useLoadApp } from "@/hooks/useLoadApp";
 import { PortalMigrate } from "@/components/PortalMigrate";
@@ -9,6 +18,8 @@ import { IpcClient } from "@/ipc/ipc_client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useAutoDeploy, type AutoDeployStep } from "@/hooks/useAutoDeploy";
+import { useDeployProviderStatus } from "@/hooks/useDeployProviderStatus";
+import { parseDeployError, type ParsedDeployError } from "@/lib/deploy_errors";
 
 type DeployTarget = "vercel" | "4everland" | "fleek" | "ipfs-pinata" | "ipfs-web3storage" | "arweave" | "spheron";
 
@@ -54,8 +65,22 @@ function OneClickDeployCard({ appId }: { appId: number }) {
   const [target, setTarget] = useState<DeployTarget>("vercel");
   const [showTargets, setShowTargets] = useState(false);
   const { deploy, isDeploying, steps, deployResult, error } = useAutoDeploy(appId);
+  const { status: providerStatus } = useDeployProviderStatus();
 
   const selectedTarget = DEPLOY_TARGETS.find((t) => t.id === target)!;
+  const parsedError: ParsedDeployError | null = error ? parseDeployError(error) : null;
+  const ipc = IpcClient.getInstance();
+
+  const targetReadiness = providerStatus[target];
+  const githubReady = providerStatus.github.ready;
+  // Vercel/GitHub providers can be deployed without per-provider creds via the
+  // shared GitHub flow, but Web3 platforms need explicit credentials.
+  const requiresProviderCreds = target !== "vercel";
+  const canDeploy =
+    !isDeploying &&
+    githubReady &&
+    (target !== "vercel" || providerStatus.vercel.configured) &&
+    (!requiresProviderCreds || (targetReadiness?.configured ?? false));
 
   return (
     <Card className="border-2 border-blue-200 dark:border-blue-800">
@@ -83,17 +108,28 @@ function OneClickDeployCard({ appId }: { appId: number }) {
           </button>
           {showTargets && (
             <div className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-800 border rounded-lg shadow-lg max-h-48 overflow-y-auto">
-              {DEPLOY_TARGETS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => { setTarget(t.id); setShowTargets(false); }}
-                  className="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 first:rounded-t-lg last:rounded-b-lg"
-                >
-                  <span className="text-sm font-medium">{t.label}</span>
-                  <span className="block text-xs text-gray-500">{t.description}</span>
-                </button>
-              ))}
+              {DEPLOY_TARGETS.map((t) => {
+                const r = providerStatus[t.id];
+                const isReady = t.id === "vercel" ? r?.configured : r?.configured;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => { setTarget(t.id); setShowTargets(false); }}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 first:rounded-t-lg last:rounded-b-lg"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium">{t.label}</span>
+                      {isReady ? (
+                        <span className="text-[10px] uppercase tracking-wide text-green-600 dark:text-green-400">Configured</span>
+                      ) : (
+                        <span className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Configure →</span>
+                      )}
+                    </div>
+                    <span className="block text-xs text-gray-500">{t.description}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -101,7 +137,7 @@ function OneClickDeployCard({ appId }: { appId: number }) {
         {/* Deploy button */}
         <Button
           className="w-full bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600"
-          disabled={isDeploying}
+          disabled={!canDeploy}
           onClick={() => deploy(target)}
         >
           {isDeploying ? (
@@ -116,6 +152,48 @@ function OneClickDeployCard({ appId }: { appId: number }) {
             </>
           )}
         </Button>
+
+        {/* Inline readiness hints when the user can't deploy yet */}
+        {!isDeploying && !canDeploy && (
+          <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg space-y-2">
+            <div className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>
+                {!githubReady
+                  ? providerStatus.github.reason
+                  : targetReadiness?.reason || `Configure ${selectedTarget.label} to enable deploys.`}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {!githubReady && (
+                <Link to="/integrations">
+                  <Button size="sm" variant="outline">
+                    <SettingsIcon className="w-3.5 h-3.5 mr-1.5" />
+                    Connect GitHub
+                  </Button>
+                </Link>
+              )}
+              {githubReady && (
+                <Link to="/decentralized-deploy" search={{ provider: target }}>
+                  <Button size="sm" variant="outline">
+                    <SettingsIcon className="w-3.5 h-3.5 mr-1.5" />
+                    Configure {selectedTarget.label}
+                  </Button>
+                </Link>
+              )}
+              {targetReadiness?.installUrl && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => ipc.openExternalUrl(targetReadiness.installUrl!)}
+                >
+                  <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                  Open setup
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Progress steps */}
         {steps.length > 0 && (
@@ -145,9 +223,59 @@ function OneClickDeployCard({ appId }: { appId: number }) {
         )}
 
         {/* Error */}
-        {error && (
-          <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-            <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+        {parsedError && (
+          <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg space-y-2">
+            <div className="flex items-start gap-2">
+              <XCircle className="w-4 h-4 mt-0.5 text-red-500 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-red-700 dark:text-red-300">
+                  {parsedError.message}
+                </p>
+                {parsedError.repo && (
+                  <p className="text-xs text-red-600/80 dark:text-red-400/80 mt-0.5">
+                    Repository: {parsedError.repo}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 pl-6">
+              {parsedError.code === "vercel_github_app_missing" && parsedError.installUrl && (
+                <>
+                  <Button
+                    size="sm"
+                    className="bg-red-600 hover:bg-red-700 text-white"
+                    onClick={() => ipc.openExternalUrl(parsedError.installUrl!)}
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                    Install Vercel GitHub App
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => deploy(target)}
+                  >
+                    Retry deploy
+                  </Button>
+                </>
+              )}
+              {(parsedError.code === "vercel_token_missing" ||
+                parsedError.code === "vercel_token_invalid") && (
+                <Link to="/decentralized-deploy" search={{ provider: "vercel" }}>
+                  <Button size="sm" variant="outline">
+                    <SettingsIcon className="w-3.5 h-3.5 mr-1.5" />
+                    Connect Vercel
+                  </Button>
+                </Link>
+              )}
+              {parsedError.code === "github_not_connected" && (
+                <Link to="/integrations">
+                  <Button size="sm" variant="outline">
+                    <SettingsIcon className="w-3.5 h-3.5 mr-1.5" />
+                    Connect GitHub
+                  </Button>
+                </Link>
+              )}
+            </div>
           </div>
         )}
       </CardContent>

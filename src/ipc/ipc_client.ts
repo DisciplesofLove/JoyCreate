@@ -1401,6 +1401,21 @@ export class IpcClient {
   ): Promise<void> {
     await this.ipcRenderer.invoke("vercel:disconnect", params);
   }
+
+  public async checkVercelGithubApp(): Promise<{
+    installed: boolean;
+    installUrl: string;
+    configuredOrgs: string[];
+  }> {
+    return this.ipcRenderer.invoke("vercel:check-github-app");
+  }
+
+  public async validateVercelToken(): Promise<{
+    valid: boolean;
+    user?: { username?: string; email?: string };
+  }> {
+    return this.ipcRenderer.invoke("vercel:validate-token");
+  }
   // --- End Vercel Project Management ---
 
   // Get the main app version
@@ -2061,6 +2076,138 @@ export class IpcClient {
     return this.ipcRenderer.invoke("agent-builder:activate-agent", agentId);
   }
 
+  // ─── Unified Command Center ───────────────────────────────────────────────
+  /**
+   * Single aggregator call that powers the `/command-center` dashboard.
+   * Returns active-agent counts, 24h run stats, token spend by model,
+   * upcoming scheduled jobs, and MCP server / call counts.
+   */
+  async getCommandCenterOverview(): Promise<import("./handlers/command_center_handlers").CommandCenterOverview> {
+    return this.ipcRenderer.invoke("command-center:get-overview");
+  }
+
+  // ─── Brand Kit ────────────────────────────────────────────────────────────────────
+
+  async listBrandKits(): Promise<
+    Array<import("./handlers/brand_kit_handlers").BrandKitDto>
+  > {
+    return this.ipcRenderer.invoke("brand-kit:list");
+  }
+
+  async getBrandKit(
+    id: number,
+  ): Promise<import("./handlers/brand_kit_handlers").BrandKitDto | null> {
+    return this.ipcRenderer.invoke("brand-kit:get", { id });
+  }
+
+  async createBrandKit(
+    input: import("./handlers/brand_kit_handlers").BrandKitCreateInput,
+  ): Promise<import("./handlers/brand_kit_handlers").BrandKitDto> {
+    return this.ipcRenderer.invoke("brand-kit:create", input);
+  }
+
+  async updateBrandKit(
+    id: number,
+    updates: import("./handlers/brand_kit_handlers").BrandKitUpdateInput,
+  ): Promise<import("./handlers/brand_kit_handlers").BrandKitDto> {
+    return this.ipcRenderer.invoke("brand-kit:update", { id, updates });
+  }
+
+  async deleteBrandKit(id: number): Promise<{ deleted: number }> {
+    return this.ipcRenderer.invoke("brand-kit:delete", { id });
+  }
+
+  async uploadBrandKitAsset(
+    input: import("./handlers/brand_kit_handlers").BrandKitUploadInput,
+  ): Promise<{ destPath: string; field: "logoUrl" | "wordmarkUrl" }> {
+    return this.ipcRenderer.invoke("brand-kit:upload-asset", input);
+  }
+
+  /**
+   * Returns the brand-kit markdown block to splice into an agent's system
+   * prompt. Returns `{ block: "" }` when the agent has no kit selected.
+   */
+  async renderBrandKitForAgent(
+    agentId: number,
+  ): Promise<{ block: string }> {
+    return this.ipcRenderer.invoke("brand-kit:render-for-agent", { agentId });
+  }
+
+  // ─── Social posting ──────────────────────────────────────────────────────────────
+
+  async listSocialProviders(): Promise<
+    import("@/db/social_schema").SocialProvider[]
+  > {
+    return this.ipcRenderer.invoke("social:list-providers");
+  }
+
+  async listSocialAccounts(): Promise<
+    Array<import("./handlers/social_handlers").SocialAccountDto>
+  > {
+    return this.ipcRenderer.invoke("social:list-accounts");
+  }
+
+  async connectSocialAccount(input: {
+    provider: import("@/db/social_schema").SocialProvider;
+    authCode?: string;
+    extras?: Record<string, unknown>;
+  }): Promise<import("./handlers/social_handlers").SocialAccountDto> {
+    return this.ipcRenderer.invoke("social:connect-account", input);
+  }
+
+  async disconnectSocialAccount(
+    accountId: number,
+  ): Promise<{ deleted: number }> {
+    return this.ipcRenderer.invoke("social:disconnect-account", { accountId });
+  }
+
+  async postSocial(input: {
+    accountId: number;
+    payload: import("@/db/social_schema").SocialPostPayload;
+  }): Promise<{ externalPostId: string; permalink?: string }> {
+    return this.ipcRenderer.invoke("social:post", input);
+  }
+
+  async scheduleSocialPost(input: {
+    accountId: number;
+    payload: import("@/db/social_schema").SocialPostPayload;
+    scheduledFor: number;
+  }): Promise<import("./handlers/social_handlers").SocialScheduledPostDto> {
+    return this.ipcRenderer.invoke("social:schedule-post", input);
+  }
+
+  async listScheduledSocialPosts(args?: {
+    accountId?: number;
+    sinceMs?: number;
+  }): Promise<
+    Array<import("./handlers/social_handlers").SocialScheduledPostDto>
+  > {
+    return this.ipcRenderer.invoke("social:list-scheduled", args);
+  }
+
+  async cancelScheduledSocialPost(
+    id: number,
+  ): Promise<import("./handlers/social_handlers").SocialScheduledPostDto> {
+    return this.ipcRenderer.invoke("social:cancel-scheduled", { id });
+  }
+
+  // ─── Podcast briefing ───────────────────────────────────────────────────────────────
+
+  async generatePodcastBriefing(input: {
+    title: string;
+    segments: Array<{
+      speaker?: string;
+      text: string;
+      voice?: string;
+      speed?: number;
+    }>;
+    defaultVoice?: string;
+  }): Promise<
+    import("@/lib/podcast/briefing_packager").BriefingResult
+  > {
+    return this.ipcRenderer.invoke("podcast:generate-briefing", input);
+  }
+
   // ─── Agent Schedules ──────────────────────────────────────────────────────
 
   async listAgentSchedules(args?: { agentId?: string }): Promise<{
@@ -2262,9 +2409,91 @@ export class IpcClient {
     await this.ipcRenderer.invoke("supabase:delete-organization", params);
   }
 
+  /**
+   * Store a Supabase Personal Access Token (PAT) directly. Use this as a
+   * fallback when the OAuth proxy at oauth.joymarketplace.io is unreachable.
+   * Create a PAT at https://supabase.com/dashboard/account/tokens.
+   */
+  public async setSupabasePersonalAccessToken(token: string): Promise<void> {
+    await this.ipcRenderer.invoke("supabase:set-personal-access-token", {
+      token,
+    });
+  }
+
+  /** Clear the stored legacy Supabase access token (PAT). */
+  public async disconnectSupabase(): Promise<void> {
+    await this.ipcRenderer.invoke("supabase:disconnect");
+  }
+
   // List all projects from all connected organizations
   public async listAllSupabaseProjects(): Promise<SupabaseProject[]> {
     return this.ipcRenderer.invoke("supabase:list-all-projects");
+  }
+
+  // Data + Backend Layer readiness aggregator.
+  public async getDataLayerStatus(params: {
+    appId?: number | null;
+    config?: import("@/shared/data_layer_types").DataLayerConfig;
+  } = {}): Promise<import("@/shared/data_layer_types").DataLayerStatus> {
+    return this.ipcRenderer.invoke("data-layer:status", params);
+  }
+
+  public async setDataLayerConfig(params: {
+    appId: number;
+    config: import("@/shared/data_layer_types").DataLayerConfig;
+  }): Promise<import("@/shared/data_layer_types").DataLayerConfig> {
+    return this.ipcRenderer.invoke("data-layer:set-config", params);
+  }
+
+  // Autonomous chat-mode plans
+  public async getChatPlan(
+    chatId: number,
+  ): Promise<import("@/shared/chat_plan_types").ChatPlan | null> {
+    return this.ipcRenderer.invoke("chat-plan:get", { chatId });
+  }
+
+  public async upsertChatPlan(params: {
+    chatId: number;
+    goal: string;
+    phases: import("@/shared/chat_plan_types").ChatPlanPhase[];
+  }): Promise<import("@/shared/chat_plan_types").ChatPlan> {
+    return this.ipcRenderer.invoke("chat-plan:upsert", params);
+  }
+
+  public async updateChatPlanPhase(params: {
+    chatId: number;
+    phaseId: string;
+    patch: Partial<import("@/shared/chat_plan_types").ChatPlanPhase>;
+    planStatus?: import("@/shared/chat_plan_types").ChatPlanStatus;
+    currentPhaseIndex?: number;
+    lastError?: string | null;
+  }): Promise<import("@/shared/chat_plan_types").ChatPlan> {
+    return this.ipcRenderer.invoke("chat-plan:update-phase", params);
+  }
+
+  public async resetChatPlan(chatId: number): Promise<void> {
+    await this.ipcRenderer.invoke("chat-plan:reset", { chatId });
+  }
+
+  /**
+   * Flip the first pending phase to `running` and return the prompt the
+   * renderer should send through `streamMessage` to drive execution.
+   * Returns `null` when the plan has no remaining pending phases.
+   */
+  public async startNextChatPlanPhase(
+    chatId: number,
+  ): Promise<{
+    phase: import("@/shared/chat_plan_types").ChatPlanPhase;
+    prompt: string;
+  } | null> {
+    return this.ipcRenderer.invoke("chat-plan:start-next", { chatId });
+  }
+
+  public async setChatMode(
+    chatId: number,
+    mode: import("@/lib/schemas").ChatMode | null,
+  ): Promise<void> {
+    await this.ipcRenderer.invoke("chat:set-mode", { chatId, mode });
   }
 
   public async listSupabaseBranches(params: {

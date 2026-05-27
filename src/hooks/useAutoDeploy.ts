@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { IpcClient } from "@/ipc/ipc_client";
 import { showError } from "@/lib/toast";
 import { toast } from "sonner";
+import { parseDeployError } from "@/lib/deploy_errors";
 
 export interface AutoDeployStep {
   step: string;
@@ -68,11 +69,13 @@ export function useAutoDeploy(appId: number | null) {
         // Invalidate app data to refresh GitHub/Vercel state
         queryClient.invalidateQueries({ queryKey: ["app", appId] });
       } else {
-        showError(result.error || "Deployment failed");
+        const parsed = parseDeployError(result.error);
+        showError(parsed.message);
       }
     },
     onError: (error) => {
-      showError(error.message);
+      const parsed = parseDeployError(error);
+      showError(parsed.message);
     },
   });
 

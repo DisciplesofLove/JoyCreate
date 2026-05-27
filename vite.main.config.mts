@@ -64,6 +64,11 @@ export default defineConfig({
         // Claude Code SDK — uses package.json exports map that Vite/Rollup
         // can't resolve at build time; lazy-loaded by copilot/claude_runner.ts
         "@anthropic-ai/claude-code",
+        // Fleek SDK — broken `exports` field on transitive `files-from-path`;
+        // lazy-loaded by decentralized_deploy_handlers.ts
+        "@fleek-platform/sdk",
+        "@fleek-platform/sdk/node",
+        "files-from-path",
       ],
     },
   },

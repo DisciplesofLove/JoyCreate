@@ -149,8 +149,25 @@ export type RuntimeMode = z.infer<typeof RuntimeModeSchema>;
 export const RuntimeMode2Schema = z.enum(["host", "docker"]);
 export type RuntimeMode2 = z.infer<typeof RuntimeMode2Schema>;
 
-export const ChatModeSchema = z.enum(["build", "ask", "agent", "local-agent"]);
+export const ChatModeSchema = z.enum([
+  "build",
+  "ask",
+  "agent",
+  "autonomous",
+  "mcp",
+  "local-agent",
+]);
 export type ChatMode = z.infer<typeof ChatModeSchema>;
+
+export const ModeTokenBudgetsSchema = z
+  .object({
+    agent: z.number().int().positive().optional(),
+    autonomous: z.number().int().positive().optional(),
+    mcp: z.number().int().positive().optional(),
+    "local-agent": z.number().int().positive().optional(),
+  })
+  .partial();
+export type ModeTokenBudgets = z.infer<typeof ModeTokenBudgetsSchema>;
 
 export const GitHubSecretsSchema = z.object({
   accessToken: SecretSchema.nullable(),
@@ -290,6 +307,10 @@ export const UserSettingsSchema = z.object({
   selectedTemplateId: z.string(),
   enableSupabaseWriteSqlMigration: z.boolean().optional(),
   selectedChatMode: ChatModeSchema.optional(),
+  /** Per-mode `stepCountIs` cap for agentic loops (agent/autonomous/mcp/local-agent). */
+  modeTokenBudgets: ModeTokenBudgetsSchema.optional(),
+  /** When true, autonomous mode halts on the first failed phase instead of continuing. */
+  autonomousStopOnError: z.boolean().optional(),
   /** Model used for Document Studio AI generation and in-editor AI commands. Falls back to selectedModel when undefined. */
   documentAiModel: LargeLanguageModelSchema.optional(),
   acceptedCommunityCode: z.boolean().optional(),

@@ -22,7 +22,7 @@ import {
   POLYGON_AMOY,
   STYLUS_DROP_ABI,
 } from "@/config/joymarketplace";
-import { GOLDSKY_SUBGRAPHS } from "@/config/thirdweb";
+import { GOLDSKY_SUBGRAPHS } from "@/config/subgraphs";
 
 export type MarketplaceChainId = "polygonAmoy" | "arbitrumSepolia" | "arbitrumOne";
 

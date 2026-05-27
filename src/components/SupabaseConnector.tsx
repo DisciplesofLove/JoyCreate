@@ -1,5 +1,14 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 import { Label } from "@/components/ui/label";
 
@@ -143,6 +152,83 @@ export function SupabaseConnector({ appId }: { appId: number }) {
     }
   };
 
+  // PAT fallback dialog state. Used when the OAuth proxy at
+  // oauth.joymarketplace.io is unreachable (DNS failure, offline, etc.).
+  const [patDialogOpen, setPatDialogOpen] = useState(false);
+  const [patValue, setPatValue] = useState("");
+  const [patSubmitting, setPatSubmitting] = useState(false);
+
+  const handleSubmitPat = async () => {
+    setPatSubmitting(true);
+    try {
+      await IpcClient.getInstance().setSupabasePersonalAccessToken(patValue);
+      toast.success("Supabase connected via personal access token");
+      setPatDialogOpen(false);
+      setPatValue("");
+      await refreshSettings();
+      await refetchOrganizations();
+      await refetchProjects();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to set access token",
+      );
+    } finally {
+      setPatSubmitting(false);
+    }
+  };
+
+  const patDialog = (
+    <Dialog open={patDialogOpen} onOpenChange={setPatDialogOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Connect Supabase with access token</DialogTitle>
+          <DialogDescription>
+            Create a Personal Access Token at{" "}
+            <button
+              type="button"
+              className="text-primary underline"
+              onClick={() =>
+                IpcClient.getInstance().openExternalUrl(
+                  "https://supabase.com/dashboard/account/tokens",
+                )
+              }
+            >
+              supabase.com/dashboard/account/tokens
+            </button>
+            , then paste it below. Tokens start with <code>sbp_</code>.
+          </DialogDescription>
+        </DialogHeader>
+        <Input
+          type="password"
+          autoFocus
+          placeholder="sbp_..."
+          value={patValue}
+          onChange={(e) => setPatValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && patValue.trim() && !patSubmitting) {
+              handleSubmitPat();
+            }
+          }}
+        />
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            onClick={() => setPatDialogOpen(false)}
+            disabled={patSubmitting}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSubmitPat}
+            disabled={!patValue.trim() || patSubmitting}
+          >
+            {patSubmitting ? "Validating…" : "Connect"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
   const handleUnsetProject = async () => {
     try {
       await unsetAppProject(appId);
@@ -255,6 +341,7 @@ export function SupabaseConnector({ appId }: { appId: number }) {
             </Button>
           </div>
         </CardContent>
+        {patDialog}
       </Card>
     );
   }
@@ -272,15 +359,26 @@ export function SupabaseConnector({ appId }: { appId: number }) {
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
             Supabase Projects
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleAddAccount}
-              className="gap-1"
-            >
-              <Plus className="h-4 w-4" />
-              Add Organization
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPatDialogOpen(true)}
+                className="gap-1"
+                title="Use a Personal Access Token (works offline / when OAuth proxy is down)"
+              >
+                Token
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleAddAccount}
+                className="gap-1"
+              >
+                <Plus className="h-4 w-4" />
+                Add Organization
+              </Button>
+            </div>
           </CardTitle>
           <CardDescription>
             Select a Supabase project to connect to this app
@@ -379,6 +477,7 @@ export function SupabaseConnector({ appId }: { appId: number }) {
             </div>
           )}
         </CardContent>
+        {patDialog}
       </Card>
     );
   }
@@ -386,16 +485,27 @@ export function SupabaseConnector({ appId }: { appId: number }) {
   // No accounts connected, show connect button
   return (
     <div className="flex flex-col space-y-4 p-4 border rounded-md">
-      <div className="flex flex-col md:flex-row items-center justify-between">
+      <div className="flex flex-col md:flex-row items-center justify-between gap-2">
         <h2 className="text-lg font-medium">Integrations</h2>
-        <img
-          onClick={handleAddAccount}
-          src={isDarkMode ? connectSupabaseDark : connectSupabaseLight}
-          alt="Connect to Supabase"
-          className="w-full h-10 min-h-8 min-w-20 cursor-pointer"
-          data-testid="connect-supabase-button"
-        />
+        <div className="flex flex-col md:items-end gap-2 w-full md:w-auto">
+          <img
+            onClick={handleAddAccount}
+            src={isDarkMode ? connectSupabaseDark : connectSupabaseLight}
+            alt="Connect to Supabase"
+            className="w-full md:w-64 h-10 min-h-8 min-w-20 cursor-pointer"
+            data-testid="connect-supabase-button"
+          />
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0 text-xs text-muted-foreground"
+            onClick={() => setPatDialogOpen(true)}
+          >
+            Use a personal access token instead
+          </Button>
+        </div>
       </div>
+      {patDialog}
     </div>
   );
 }

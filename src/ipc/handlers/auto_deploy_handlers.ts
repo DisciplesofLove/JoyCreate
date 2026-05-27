@@ -23,7 +23,12 @@ import {
   gitCommit,
 } from "../utils/git_utils";
 import { checkSiteCompleteness, type CompletenessReport } from "../utils/site_completeness";
-import { updateAppVercelProject } from "./vercel_handlers";
+import {
+  updateAppVercelProject,
+  checkVercelGithubAppForRepo,
+  mapVercelError,
+  joyDeployError,
+} from "./vercel_handlers";
 import { deployToPlatform } from "./decentralized_deploy_handlers";
 import log from "electron-log";
 import * as fs from "node:fs";
@@ -49,7 +54,7 @@ export interface AutoDeployRequest {
 }
 
 export interface AutoDeployStep {
-  step: "completeness-check" | "github-setup" | "github-push" | "deploy";
+  step: "completeness-check" | "vercel-preflight" | "github-setup" | "github-push" | "deploy";
   status: "pending" | "running" | "success" | "skipped" | "error";
   message: string;
   details?: string;
@@ -240,6 +245,74 @@ async function handleAutoDeploy(
     steps: [...steps],
   });
 
+  // ── Step 1.5: Vercel Pre-flight (only when deploying to Vercel) ──
+  // We do this BEFORE the GitHub push so the user doesn't wait through a
+  // push only to hit a "Vercel GitHub App not installed" error at the end.
+  if (request.target === "vercel") {
+    const preflightStep: AutoDeployStep = {
+      step: "vercel-preflight",
+      status: "running",
+      message: "Checking Vercel connection...",
+    };
+    steps.push(preflightStep);
+    safeSend(event.sender, "auto-deploy:progress", {
+      appId: request.appId,
+      steps: [...steps],
+    });
+
+    const vercelToken = settings.vercelAccessToken?.value;
+    if (!vercelToken) {
+      preflightStep.status = "error";
+      preflightStep.message =
+        "Not authenticated with Vercel. Connect Vercel first.";
+      const errPayload = joyDeployError({
+        code: "vercel_token_missing",
+        message: preflightStep.message,
+      }).message;
+      return {
+        success: false,
+        steps,
+        error: errPayload,
+        completenessReport,
+      };
+    }
+
+    // We only need the org from GitHub config to scope the check.
+    const preflightApp = await db.query.apps.findFirst({
+      where: eq(apps.id, request.appId),
+    });
+    try {
+      const ghAppStatus = await checkVercelGithubAppForRepo(vercelToken, {
+        org: preflightApp?.githubOrg ?? "",
+        repo: preflightApp?.githubRepo ?? "",
+      });
+      if (!ghAppStatus.installed) {
+        // Advisory only: the configuration API is scoped to the token's
+        // owner and can return zero results when the integration lives on a
+        // different team/org. Let the create-project step surface the real
+        // error if needed.
+        preflightStep.status = "success";
+        preflightStep.message =
+          "Vercel GitHub App pre-flight inconclusive — proceeding";
+        preflightStep.details = `installUrl=${ghAppStatus.installUrl}`;
+      } else {
+        preflightStep.status = "success";
+        preflightStep.message = "Vercel GitHub App installed";
+      }
+    } catch (err) {
+      // Non-fatal: log and continue; create-project step will catch hard failures.
+      preflightStep.status = "success";
+      preflightStep.message = "Vercel pre-flight skipped (check unavailable)";
+      preflightStep.details =
+        err instanceof Error ? err.message : String(err);
+    }
+
+    safeSend(event.sender, "auto-deploy:progress", {
+      appId: request.appId,
+      steps: [...steps],
+    });
+  }
+
   // ── Step 2: GitHub Setup ──
   const githubSetupStep: AutoDeployStep = {
     step: "github-setup",
@@ -349,12 +422,23 @@ async function handleAutoDeploy(
       completenessReport,
     };
   } catch (err) {
+    // For Vercel failures, map the raw SDK/fetch error into a structured
+    // JoyDeployError so the renderer can render an actionable CTA.
+    let errorPayload: string;
+    if (request.target === "vercel") {
+      const mapped = mapVercelError(err);
+      errorPayload = mapped.message; // already JSON-stringified joy error
+      deployStep.message = `Deploy failed`;
+      deployStep.details = err instanceof Error ? err.message : String(err);
+    } else {
+      errorPayload = err instanceof Error ? err.message : String(err);
+      deployStep.message = `Deploy failed: ${errorPayload}`;
+    }
     deployStep.status = "error";
-    deployStep.message = `Deploy failed: ${err instanceof Error ? err.message : String(err)}`;
     return {
       success: false,
       steps,
-      error: deployStep.message,
+      error: errorPayload,
       completenessReport,
     };
   }

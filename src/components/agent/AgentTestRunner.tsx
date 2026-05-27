@@ -516,7 +516,20 @@ async function runSingleScenario(
     const toolDescriptions = tools.length > 0
       ? `\n\nAvailable Tools:\n${tools.map((t: any) => `- ${t.name}: ${t.description}`).join("\n")}`
       : "";
-    const fullSystemPrompt = `${systemPrompt}${toolDescriptions}\n\nYou are "${agentName}".`;
+    // Splice in the brand-kit markdown block (empty if the agent has no kit).
+    let brandKitBlock = "";
+    if (agent?.id) {
+      try {
+        const { IpcClient } = await import("@/ipc/ipc_client");
+        const res = await IpcClient.getInstance().renderBrandKitForAgent(
+          Number(agent.id),
+        );
+        brandKitBlock = res.block ? `\n\n${res.block}` : "";
+      } catch {
+        brandKitBlock = "";
+      }
+    }
+    const fullSystemPrompt = `${systemPrompt}${toolDescriptions}${brandKitBlock}\n\nYou are "${agentName}".`;
 
     // Send each message in sequence
     let lastResponse = "";

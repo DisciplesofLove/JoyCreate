@@ -162,7 +162,7 @@ async function generateWithGoogle(params: GenerateImageParams): Promise<string> 
 
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(`Gemini image error: ${err}`);
+      throw friendlyGoogleImageError(err, model);
     }
 
     const data = await res.json();
@@ -195,13 +195,42 @@ async function generateWithGoogle(params: GenerateImageParams): Promise<string> 
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`Google Imagen error: ${err}`);
+    throw friendlyGoogleImageError(err, model);
   }
 
   const data = await response.json();
   const b64 = data.predictions?.[0]?.bytesBase64Encoded;
   if (!b64) throw new Error("Google Imagen returned no image data");
   return saveBase64Image(b64, uniqueFilename("google"));
+}
+
+/**
+ * Translate raw Google Generative Language API error payloads into
+ * actionable messages. Most Imagen/Veo failures are billing-tier rejections
+ * ("paid plan required"), which the user can work around by switching to a
+ * free model (Gemini 2.5 Flash Image / Nano-Banana) or running a local
+ * provider (ComfyUI, LocalAI, Automatic1111).
+ */
+function friendlyGoogleImageError(rawBody: string, model: string): Error {
+  let parsed: { error?: { message?: string; status?: string; code?: number } } | null = null;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    /* keep raw */
+  }
+  const msg = parsed?.error?.message ?? rawBody;
+  const isPaidTier =
+    /paid plan|billed users|billing|upgrade your account|only available on paid/i.test(msg);
+
+  if (isPaidTier) {
+    return new Error(
+      `${model} requires a paid Google AI Studio plan. ` +
+        `Free alternatives in JoyCreate: switch the model to "Gemini 2.5 Flash Image (Nano-Banana)" ` +
+        `(also under the Google provider, free tier), or pick a local provider such as ComfyUI / LocalAI / A1111. ` +
+        `To enable Imagen, upgrade at https://ai.dev/projects. Raw error: ${msg}`,
+    );
+  }
+  return new Error(`Google Imagen error: ${msg}`);
 }
 
 function aspectRatioFor(width?: number, height?: number): string {

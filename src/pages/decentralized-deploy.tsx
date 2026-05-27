@@ -3,8 +3,9 @@
  * Deploy apps to 4everland, Fleek, IPFS, Arweave, and other Web3 platforms
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useAtomValue } from "jotai";
+import { useSearch } from "@tanstack/react-router";
 import { selectedAppIdAtom, appsListAtom } from "@/atoms/appAtoms";
 import {
   useDecentralizedPlatforms,
@@ -107,6 +108,19 @@ export default function DecentralizedDeployPage() {
   const [showCredentialsDialog, setShowCredentialsDialog] = useState(false);
   const [showDeployDialog, setShowDeployDialog] = useState(false);
 
+  // Deep-link support: ?provider=vercel scrolls to + highlights the Vercel card.
+  const search = useSearch({ strict: false }) as { provider?: string };
+  const vercelCardRef = useRef<HTMLDivElement | null>(null);
+  const [highlightVercel, setHighlightVercel] = useState(false);
+  useEffect(() => {
+    if (search?.provider === "vercel" && vercelCardRef.current) {
+      vercelCardRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightVercel(true);
+      const t = setTimeout(() => setHighlightVercel(false), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [search?.provider, selectedAppId]);
+
   // Get first platform if available
   useEffect(() => {
     if (platforms && Object.keys(platforms).length > 0 && !selectedPlatform) {
@@ -164,7 +178,13 @@ export default function DecentralizedDeployPage() {
               <GitHubConnector appId={selectedAppId} folderName={app.name} expanded />
             </CardContent>
           </Card>
-          <Card>
+          <Card
+            ref={vercelCardRef}
+            className={cn(
+              "transition-shadow",
+              highlightVercel && "ring-2 ring-indigo-500 shadow-lg shadow-indigo-500/20",
+            )}
+          >
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">

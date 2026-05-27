@@ -5,6 +5,7 @@ import { apps } from "../../db/schema";
 import {
   getSupabaseClientForOrganization,
   listSupabaseBranches,
+  listSupabaseOrganizations,
   getSupabaseProjectLogs,
   getOrganizationDetails,
   getOrganizationMembers,
@@ -39,9 +40,32 @@ export function registerSupabaseHandlers() {
       const settings = readSettings();
       const organizations = settings.supabase?.organizations ?? {};
 
+      // PAT fallback: when there are no per-org credentials but a legacy
+      // Personal Access Token is stored, list every org the PAT can see.
+      const legacyToken = settings.supabase?.accessToken?.value;
+      const hasRefresh = Boolean(settings.supabase?.refreshToken?.value);
+      const slugs = Object.keys(organizations);
+      if (
+        slugs.length === 0 &&
+        legacyToken &&
+        legacyToken.startsWith("sbp_") &&
+        !hasRefresh
+      ) {
+        try {
+          const orgs = await listSupabaseOrganizations(legacyToken);
+          return orgs.map((o) => ({
+            organizationSlug: o.slug,
+            name: o.name,
+          }));
+        } catch (err) {
+          logger.error("Failed to list orgs via PAT:", err);
+          return [];
+        }
+      }
+
       const results: SupabaseOrganizationInfo[] = [];
 
-      for (const organizationSlug of Object.keys(organizations)) {
+      for (const organizationSlug of slugs) {
         try {
           // Fetch organization details and members in parallel
           const [details, members] = await Promise.all([
@@ -95,13 +119,124 @@ export function registerSupabaseHandlers() {
     },
   );
 
+  // Set a Supabase Personal Access Token directly (fallback when the
+  // OAuth proxy at oauth.joymarketplace.io is unreachable). The token is
+  // validated against the Supabase Management API before being persisted;
+  // on success it is stored in the legacy single-account slot which
+  // `getSupabaseClient` already understands.
+  handle(
+    "supabase:set-personal-access-token",
+    async (_, { token }: { token: string }): Promise<void> => {
+      const trimmed = (token ?? "").trim();
+      if (!trimmed) throw new Error("Supabase access token is required");
+      if (!/^sbp_[A-Za-z0-9]+$/.test(trimmed)) {
+        throw new Error(
+          "That doesn't look like a Supabase Personal Access Token. PATs start with `sbp_`. Create one at https://supabase.com/dashboard/account/tokens",
+        );
+      }
+
+      // Validate by calling a cheap, read-only endpoint.
+      const res = await fetch("https://api.supabase.com/v1/organizations", {
+        headers: {
+          Authorization: `Bearer ${trimmed}`,
+          "Content-Type": "application/json",
+        },
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(
+          `Supabase rejected the token (${res.status}). ${body.slice(0, 200)}`.trim(),
+        );
+      }
+
+      const settings = readSettings();
+      writeSettings({
+        supabase: {
+          ...settings.supabase,
+          accessToken: { value: trimmed },
+          // PATs don't expire on their own; clear refresh-token state so
+          // `isTokenExpired` doesn't try to refresh through the missing
+          // OAuth proxy.
+          refreshToken: undefined,
+          expiresIn: undefined,
+          tokenTimestamp: undefined,
+        },
+      });
+      logger.info("Stored Supabase Personal Access Token");
+    },
+  );
+
+  handle("supabase:disconnect", async (): Promise<void> => {
+    const settings = readSettings();
+    writeSettings({
+      supabase: {
+        ...settings.supabase,
+        accessToken: undefined,
+        refreshToken: undefined,
+        expiresIn: undefined,
+        tokenTimestamp: undefined,
+      },
+    });
+    logger.info("Disconnected Supabase (cleared legacy access token)");
+  });
+
   // List all projects from all connected organizations
   handle("supabase:list-all-projects", async (): Promise<SupabaseProject[]> => {
     const settings = readSettings();
     const organizations = settings.supabase?.organizations ?? {};
     const allProjects: SupabaseProject[] = [];
 
-    for (const organizationSlug of Object.keys(organizations)) {
+    // PAT fallback: if no per-org credentials, enumerate orgs visible to the
+    // legacy access token and aggregate their projects.
+    const slugsToScan = (() => {
+      const slugs = Object.keys(organizations);
+      if (slugs.length > 0) return slugs;
+      const legacyToken = settings.supabase?.accessToken?.value;
+      const hasRefresh = Boolean(settings.supabase?.refreshToken?.value);
+      if (
+        legacyToken &&
+        legacyToken.startsWith("sbp_") &&
+        !hasRefresh
+      ) {
+        return null; // signal: PAT mode, fetch orgs lazily
+      }
+      return slugs;
+    })();
+
+    if (slugsToScan === null) {
+      try {
+        const legacyToken = settings.supabase!.accessToken!.value;
+        const orgs = await listSupabaseOrganizations(legacyToken);
+        for (const o of orgs) {
+          try {
+            const client = await getSupabaseClientForOrganization(o.slug);
+            const projects = await client.getProjects();
+            if (projects) {
+              for (const project of projects) {
+                allProjects.push({
+                  id: project.id,
+                  name: project.name,
+                  region: project.region,
+                  organizationSlug:
+                    (project as any).organization_slug ||
+                    project.organization_id,
+                });
+              }
+            }
+          } catch (innerErr) {
+            logger.error(
+              `Failed to fetch projects for org ${o.slug} via PAT:`,
+              innerErr,
+            );
+          }
+        }
+      } catch (err) {
+        logger.error("Failed to enumerate orgs via PAT:", err);
+      }
+      return allProjects;
+    }
+
+    for (const organizationSlug of slugsToScan) {
       try {
         const client = await getSupabaseClientForOrganization(organizationSlug);
         const projects = await client.getProjects();

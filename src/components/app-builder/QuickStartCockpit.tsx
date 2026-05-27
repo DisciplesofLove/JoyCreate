@@ -23,6 +23,15 @@ import {
 } from "@/atoms/quickStartAtoms";
 import type { QuickStartProjectType } from "@/ipc/app_clarification_client";
 import {
+  DEFAULT_DATA_LAYER_CONFIG,
+  defaultDataLayerFor,
+  type BlobStorageKind,
+  type DataLayerConfig,
+  type DataLayerKind,
+  type ReadIndexKind,
+  type ServerRuntimeKind,
+} from "@/shared/data_layer_types";
+import {
   Boxes,
   Globe,
   Gamepad2,
@@ -118,6 +127,52 @@ const CATEGORIES = [
   "other",
 ] as const;
 const DEPLOYMENT_TARGETS = ["web", "mobile", "desktop"] as const;
+
+// ---------------------------------------------------------------------------
+// Data + Backend Layer options (see src/shared/data_layer_types.ts)
+// ---------------------------------------------------------------------------
+
+interface DataLayerOption<T extends string> {
+  value: T;
+  label: string;
+  hint: string;
+}
+
+const PRIMARY_STORES: DataLayerOption<DataLayerKind>[] = [
+  { value: "none", label: "Local only", hint: "localStorage / IndexedDB" },
+  { value: "supabase", label: "Supabase", hint: "Hosted Postgres + Auth + Storage" },
+  { value: "tableland", label: "Tableland", hint: "Onchain SQL (NFT-owned tables)" },
+  { value: "ceramic", label: "Ceramic", hint: "DID streams, ComposeDB" },
+  { value: "gundb", label: "GunDB", hint: "Local-first p2p graph" },
+  { value: "orbitdb", label: "OrbitDB", hint: "CRDT over IPFS" },
+  { value: "weavedb", label: "WeaveDB", hint: "Permanent NoSQL on Arweave" },
+];
+
+const SERVER_RUNTIMES: DataLayerOption<ServerRuntimeKind>[] = [
+  { value: "none", label: "None", hint: "Client-only — no server logic" },
+  { value: "supabase-edge", label: "Supabase Edge", hint: "Deno edge functions" },
+  { value: "vercel-functions", label: "Vercel Funcs", hint: "Edge/Node functions" },
+  { value: "cloudflare-workers", label: "CF Workers", hint: "V8 isolates at the edge" },
+  { value: "railway", label: "Railway", hint: "Long-running containers" },
+  { value: "render", label: "Render", hint: "Long-running containers" },
+  { value: "fly-io", label: "Fly.io", hint: "Multi-region edge containers" },
+  { value: "aws-lambda", label: "AWS Lambda", hint: "AWS-native serverless" },
+];
+
+const READ_INDEXES: DataLayerOption<ReadIndexKind>[] = [
+  { value: "none", label: "None", hint: "No indexed onchain reads" },
+  { value: "goldsky", label: "Goldsky", hint: "Subgraph + Mirror" },
+  { value: "thegraph", label: "The Graph", hint: "Decentralized subgraphs" },
+];
+
+const BLOB_STORES: DataLayerOption<BlobStorageKind>[] = [
+  { value: "none", label: "None", hint: "No file uploads" },
+  { value: "supabase-storage", label: "Supabase", hint: "Buckets + RLS" },
+  { value: "ipfs-4everland", label: "IPFS (4ever)", hint: "Pinned IPFS via 4everland" },
+  { value: "ipfs-helia", label: "IPFS (Helia)", hint: "Embedded Helia node" },
+  { value: "arweave", label: "Arweave", hint: "Permanent storage" },
+  { value: "celestia", label: "Celestia", hint: "Data availability blobs" },
+];
 
 interface FeatureDef {
   id: string;
@@ -384,6 +439,17 @@ export function QuickStartCockpit({
                 className="min-h-[72px] text-sm"
               />
             </div>
+
+            {/* Data + Backend Layer (orthogonal knobs) */}
+            <DataLayerSection
+              value={
+                config.dataLayer ??
+                (config.projectType
+                  ? defaultDataLayerFor(config.projectType)
+                  : DEFAULT_DATA_LAYER_CONFIG)
+              }
+              onChange={(next) => setConfig({ ...config, dataLayer: next })}
+            />
           </div>
         </CollapsibleContent>
       </Collapsible>
@@ -465,6 +531,100 @@ function StyleField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         className="h-8 text-sm"
+      />
+    </div>
+  );
+}
+
+// Generic chip-row for a single data-layer knob.
+function DataLayerChipRow<T extends string>({
+  label,
+  hint,
+  value,
+  options,
+  onSelect,
+}: {
+  label: string;
+  hint: string;
+  value: T;
+  options: DataLayerOption<T>[];
+  onSelect: (v: T) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-baseline gap-2">
+        <ConfigLabel>{label}</ConfigLabel>
+        <span className="text-[10px] text-muted-foreground/70">{hint}</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((o) => {
+          const active = value === o.value;
+          return (
+            <button
+              key={o.value}
+              type="button"
+              title={o.hint}
+              onClick={() => onSelect(o.value)}
+              className={cn(
+                "px-2.5 py-1 rounded-md text-xs border transition-colors",
+                active
+                  ? "border-violet-500/60 bg-violet-500/10 text-violet-700 dark:text-violet-300"
+                  : "border-border/50 text-muted-foreground hover:border-violet-500/30",
+              )}
+            >
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DataLayerSection({
+  value,
+  onChange,
+}: {
+  value: DataLayerConfig;
+  onChange: (next: DataLayerConfig) => void;
+}) {
+  return (
+    <div className="md:col-span-2 flex flex-col gap-3 rounded-lg border border-border/40 bg-muted/20 p-3">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Data + Backend Layer
+        </div>
+        <span className="text-[10px] text-muted-foreground/70">
+          Four independent knobs — defaults are project-type aware.
+        </span>
+      </div>
+      <DataLayerChipRow
+        label="Primary store"
+        hint="Where structured app data lives"
+        value={value.primaryStore}
+        options={PRIMARY_STORES}
+        onSelect={(v) => onChange({ ...value, primaryStore: v })}
+      />
+      <DataLayerChipRow
+        label="Server runtime"
+        hint="Where server-only logic runs (cron, webhooks, secrets)"
+        value={value.serverRuntime}
+        options={SERVER_RUNTIMES}
+        onSelect={(v) => onChange({ ...value, serverRuntime: v })}
+      />
+      <DataLayerChipRow
+        label="Read index"
+        hint="Optional fast queryable index over onchain data"
+        value={value.readIndex}
+        options={READ_INDEXES}
+        onSelect={(v) => onChange({ ...value, readIndex: v })}
+      />
+      <DataLayerChipRow
+        label="Blob storage"
+        hint="Where uploaded files live"
+        value={value.blobStorage}
+        options={BLOB_STORES}
+        onSelect={(v) => onChange({ ...value, blobStorage: v })}
       />
     </div>
   );

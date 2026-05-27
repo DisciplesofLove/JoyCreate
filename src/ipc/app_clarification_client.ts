@@ -12,6 +12,7 @@
  */
 
 import { IpcClient } from "@/ipc/ipc_client";
+import type { DataLayerConfig } from "@/shared/data_layer_types";
 
 export type QuickStartProjectType =
   | "app"
@@ -33,6 +34,11 @@ export interface QuickStartConfig {
   deploymentTargets?: string[];
   features?: string[];
   knowledgeNotes?: string;
+  /**
+   * Data + Backend Layer selection. When omitted, defaults are derived
+   * via `defaultDataLayerFor(projectType)` at brief-build time.
+   */
+  dataLayer?: DataLayerConfig;
 }
 
 export interface BuildBrief {

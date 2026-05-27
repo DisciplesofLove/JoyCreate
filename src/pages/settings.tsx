@@ -436,6 +436,76 @@ export function AISettings() {
       <div className="mt-4">
         <MaxChatTurnsSelector />
       </div>
+
+      <AgentModeSettings />
+    </div>
+  );
+}
+
+function AgentModeSettings() {
+  const { settings, updateSettings } = useSettings();
+  if (!settings) return null;
+
+  const budgets = settings.modeTokenBudgets ?? {};
+  const stopOnError = settings.autonomousStopOnError ?? true;
+
+  type BudgetMode = "agent" | "autonomous" | "mcp" | "local-agent";
+  const handleBudgetChange = (mode: BudgetMode, value: string) => {
+    const n = value.trim() === "" ? undefined : Math.max(1, Number(value));
+    updateSettings({
+      modeTokenBudgets: {
+        ...budgets,
+        [mode]: Number.isFinite(n) ? n : undefined,
+      },
+    });
+  };
+
+  const rows: Array<{ mode: BudgetMode; label: string; defaultCap: number }> = [
+    { mode: "agent", label: "Agent (MCP pre-pass)", defaultCap: 20 },
+    { mode: "autonomous", label: "Agent (Autonomous)", defaultCap: 60 },
+    { mode: "mcp", label: "MCP only", defaultCap: 30 },
+    { mode: "local-agent", label: "Local agent", defaultCap: 40 },
+  ];
+
+  return (
+    <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
+      <h3 className="text-md font-medium text-gray-900 dark:text-white mb-2">
+        Agent Modes
+      </h3>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+        Step caps for agentic loops. Higher values let the agent take more tool
+        steps per turn before stopping. Leave blank to use defaults.
+      </p>
+      <div className="space-y-2">
+        {rows.map((row) => (
+          <div key={row.mode} className="flex items-center gap-3">
+            <label className="w-44 text-sm text-gray-700 dark:text-gray-300">
+              {row.label}
+            </label>
+            <input
+              type="number"
+              min={1}
+              placeholder={String(row.defaultCap)}
+              value={budgets[row.mode] ?? ""}
+              onChange={(e) => handleBudgetChange(row.mode, e.target.value)}
+              className="w-28 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm"
+            />
+            <span className="text-xs text-gray-500">
+              steps (default {row.defaultCap})
+            </span>
+          </div>
+        ))}
+      </div>
+      <label className="mt-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+        <input
+          type="checkbox"
+          checked={stopOnError}
+          onChange={(e) =>
+            updateSettings({ autonomousStopOnError: e.target.checked })
+          }
+        />
+        <span>Autonomous mode: stop on the first failed phase</span>
+      </label>
     </div>
   );
 }

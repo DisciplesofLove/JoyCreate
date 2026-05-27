@@ -9,6 +9,11 @@ import {
   SUPABASE_AVAILABLE_SYSTEM_PROMPT,
   SUPABASE_NOT_AVAILABLE_SYSTEM_PROMPT,
 } from "../../prompts/supabase_prompt";
+import { getDataLayerPrompts } from "../../prompts/data_layer";
+import {
+  deriveLegacyDataLayerConfig,
+  type DataLayerConfig,
+} from "../../shared/data_layer_types";
 import { getJoyAppPath } from "../../paths/paths";
 import log from "electron-log";
 import { extractCodebase } from "../../utils/codebase";
@@ -22,7 +27,7 @@ import { validateChatContext } from "../utils/context_paths_utils";
 import { readSettings } from "@/main/settings";
 import { extractMentionedAppsCodebases } from "../utils/mention_apps";
 import { parseAppMentions } from "@/shared/parse_mention_apps";
-import { isTurboEditsV2Enabled } from "@/lib/schemas";
+import { ChatModeSchema, isTurboEditsV2Enabled } from "@/lib/schemas";
 
 const logger = log.scope("token_count_handlers");
 
@@ -60,29 +65,71 @@ export function registerTokenCountHandlers() {
       // Parse app mentions from the input
       const mentionedAppNames = parseAppMentions(req.input);
 
-      // Count system prompt tokens
+      // Count system prompt tokens.
+      // Mirror chat_stream_handlers: per-chat chatMode overrides settings.
+      const chatModeParsed = ChatModeSchema.safeParse(chat.chatMode);
+      const effectiveChatMode = chatModeParsed.success
+        ? chatModeParsed.data
+        : (settings.selectedChatMode ?? "build");
       let systemPrompt = constructSystemPrompt({
         aiRules: await readAiRules(getJoyAppPath(chat.app.path)),
         chatMode:
-          settings.selectedChatMode === "agent" ||
-          settings.selectedChatMode === "local-agent"
+          effectiveChatMode === "agent" || effectiveChatMode === "local-agent"
             ? "build"
-            : settings.selectedChatMode,
+            : effectiveChatMode,
         enableTurboEditsV2: isTurboEditsV2Enabled(settings),
       });
       let supabaseContext = "";
 
-      if (chat.app?.supabaseProjectId) {
-        systemPrompt += "\n\n" + SUPABASE_AVAILABLE_SYSTEM_PROMPT;
-        supabaseContext = await getSupabaseContext({
-          supabaseProjectId: chat.app.supabaseProjectId,
-          organizationSlug: chat.app.supabaseOrganizationSlug ?? null,
-        });
-      } else if (
-        // Neon projects don't need Supabase.
-        !chat.app?.neonProjectId
-      ) {
-        systemPrompt += "\n\n" + SUPABASE_NOT_AVAILABLE_SYSTEM_PROMPT;
+      // Mirror chat_stream_handlers: prefer per-app dataLayerConfig,
+      // fall back to deriving from legacy columns so token estimates
+      // match the prompt we actually stream.
+      const dataLayerConfig: DataLayerConfig | null =
+        (chat.app?.dataLayerConfig as DataLayerConfig | null) ??
+        (chat.app
+          ? deriveLegacyDataLayerConfig({
+              supabaseProjectId: chat.app.supabaseProjectId,
+              neonProjectId: chat.app.neonProjectId,
+            })
+          : null);
+      const isLegacyConfig = !chat.app?.dataLayerConfig;
+
+      if (isLegacyConfig) {
+        if (chat.app?.supabaseProjectId) {
+          systemPrompt += "\n\n" + SUPABASE_AVAILABLE_SYSTEM_PROMPT;
+          supabaseContext = await getSupabaseContext({
+            supabaseProjectId: chat.app.supabaseProjectId,
+            organizationSlug: chat.app.supabaseOrganizationSlug ?? null,
+          });
+        } else if (!chat.app?.neonProjectId) {
+          systemPrompt += "\n\n" + SUPABASE_NOT_AVAILABLE_SYSTEM_PROMPT;
+        }
+      } else if (dataLayerConfig) {
+        const primaryConfigured =
+          dataLayerConfig.primaryStore === "none" ||
+          (dataLayerConfig.primaryStore === "supabase" &&
+            !!chat.app?.supabaseProjectId);
+        const serverConfigured =
+          dataLayerConfig.serverRuntime === "none" ||
+          (dataLayerConfig.serverRuntime === "supabase-edge" &&
+            !!chat.app?.supabaseProjectId);
+        systemPrompt +=
+          "\n\n" +
+          getDataLayerPrompts(dataLayerConfig, {
+            primaryConfigured,
+            serverConfigured,
+            indexConfigured: false,
+            blobConfigured: false,
+          });
+        if (
+          dataLayerConfig.primaryStore === "supabase" &&
+          chat.app?.supabaseProjectId
+        ) {
+          supabaseContext = await getSupabaseContext({
+            supabaseProjectId: chat.app.supabaseProjectId,
+            organizationSlug: chat.app.supabaseOrganizationSlug ?? null,
+          });
+        }
       }
 
       const systemPromptTokens = estimateTokens(systemPrompt + supabaseContext);

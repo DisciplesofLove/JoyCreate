@@ -52,7 +52,9 @@ import {
   useCreateLongTermMemory,
   useUpdateLongTermMemory,
   useDeleteLongTermMemory,
+  usePickAndIngestMarkdown,
 } from "@/hooks/useAgentMemory";
+import { FileText } from "lucide-react";
 import type {
   LongTermMemory,
   LongTermMemoryCategory,
@@ -100,6 +102,7 @@ export default function AgentMemoryTab({ agentId }: AgentMemoryTabProps) {
   const createMemory = useCreateLongTermMemory();
   const updateMemory = useUpdateLongTermMemory(agentId);
   const deleteMemory = useDeleteLongTermMemory(agentId);
+  const importMarkdown = usePickAndIngestMarkdown(agentId);
 
   // Dialog state
   const [createOpen, setCreateOpen] = useState(false);
@@ -319,10 +322,22 @@ export default function AgentMemoryTab({ agentId }: AgentMemoryTabProps) {
                 Facts, preferences, and instructions your agent will remember
               </CardDescription>
             </div>
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-4 w-4 mr-1" />
-              Add Memory
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => importMarkdown.mutate()}
+                disabled={importMarkdown.isPending}
+                title="Pick .md files or a folder; they become recallable agent memories"
+              >
+                <FileText className="h-4 w-4 mr-1" />
+                {importMarkdown.isPending ? "Importing…" : "Import Markdown"}
+              </Button>
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
+                <Plus className="h-4 w-4 mr-1" />
+                Add Memory
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>

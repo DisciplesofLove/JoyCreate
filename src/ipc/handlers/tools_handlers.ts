@@ -20,6 +20,7 @@ import type {
   ToolDefinition,
 } from "@/pro/main/ipc/handlers/local_agent/tools/types";
 import { getSchedulerService } from "@/lib/scheduler_service";
+import { executeScheduledSocialPost } from "./social_handlers";
 
 const logger = log.scope("tools_handlers");
 
@@ -57,6 +58,10 @@ export async function dispatchToolHeadless(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  // Built-in non-registry tools fired by the scheduler.
+  if (toolName === "social.post") {
+    return executeScheduledSocialPost(args as { scheduledPostId: number });
+  }
   const tool = await findTool(toolName);
   if (!tool) throw new Error(`Tool not found: ${toolName}`);
   const parsed = tool.inputSchema.safeParse(args);

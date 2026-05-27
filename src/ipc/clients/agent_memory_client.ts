@@ -89,6 +89,49 @@ export class AgentMemoryClient {
   clearSTM(params: ClearShortTermMemoryRequest): Promise<void> {
     return this.invoke("agent-memory:stm:clear", params);
   }
+
+  // ── Ingestion (conversations + markdown) ───────────────────────
+
+  ingestConversationTurn(params: {
+    agentId: number;
+    chatId: string | number;
+    role: "user" | "assistant" | "system";
+    content: string;
+    turnIdx: number;
+    importance?: number;
+  }): Promise<LongTermMemory | null> {
+    return this.invoke("agent-memory:ingest-conversation-turn", params);
+  }
+
+  ingestMarkdownFile(params: {
+    agentId: number;
+    filePath: string;
+    importance?: number;
+  }): Promise<{ filePath: string; memoryId: number; bytes: number }> {
+    return this.invoke("agent-memory:ingest-markdown-file", params);
+  }
+
+  ingestMarkdownDirectory(params: {
+    agentId: number;
+    dirPath: string;
+    recursive?: boolean;
+    importance?: number;
+  }): Promise<{
+    ingested: Array<{ filePath: string; memoryId: number; bytes: number }>;
+    failed: Array<{ filePath: string; error: string }>;
+  }> {
+    return this.invoke("agent-memory:ingest-markdown-directory", params);
+  }
+
+  pickAndIngestMarkdown(params: {
+    agentId: number;
+    importance?: number;
+  }): Promise<{
+    ingested: Array<{ filePath: string; memoryId: number; bytes: number }>;
+    failed: Array<{ filePath: string; error: string }>;
+  }> {
+    return this.invoke("agent-memory:pick-and-ingest-markdown", params);
+  }
 }
 
 export const agentMemoryClient = AgentMemoryClient.getInstance();

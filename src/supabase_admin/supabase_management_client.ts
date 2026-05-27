@@ -173,6 +173,7 @@ export async function getSupabaseClient({
   // Check if Supabase token exists in settings
   const supabaseAccessToken = settings.supabase?.accessToken?.value;
   const expiresIn = settings.supabase?.expiresIn;
+  const refreshToken = settings.supabase?.refreshToken?.value;
 
   if (!supabaseAccessToken) {
     throw new Error(
@@ -180,8 +181,14 @@ export async function getSupabaseClient({
     );
   }
 
-  // Check if token needs refreshing
-  if (isTokenExpired(expiresIn)) {
+  // Personal Access Tokens (sbp_*) don't expire and have no refresh
+  // counterpart; skip the OAuth refresh path entirely for them. This
+  // matters when the OAuth proxy is unreachable.
+  const isPersonalAccessToken =
+    supabaseAccessToken.startsWith("sbp_") && !refreshToken;
+
+  // Check if token needs refreshing (OAuth tokens only)
+  if (!isPersonalAccessToken && isTokenExpired(expiresIn)) {
     await withLock("refresh-supabase-token", refreshSupabaseToken);
     // Get updated settings after refresh
     const updatedSettings = readSettings();
@@ -307,7 +314,16 @@ export async function getSupabaseClientForOrganization(
   const settings = readSettings();
   const org = settings.supabase?.organizations?.[organizationSlug];
 
+  // Fallback: if the user authenticated via a Personal Access Token
+  // (legacy single-account slot) and never went through the per-org OAuth
+  // flow, the PAT has access to every org in the account. Use it for any
+  // requested slug instead of throwing.
   if (!org) {
+    const legacyToken = settings.supabase?.accessToken?.value;
+    const hasRefresh = Boolean(settings.supabase?.refreshToken?.value);
+    if (legacyToken && legacyToken.startsWith("sbp_") && !hasRefresh) {
+      return new SupabaseManagementAPI({ accessToken: legacyToken });
+    }
     throw new Error(
       `Supabase organization ${organizationSlug} not found. Please authenticate first.`,
     );

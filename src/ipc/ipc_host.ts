@@ -11,6 +11,8 @@ import { registerProposalHandlers } from "./handlers/proposal_handlers";
 import { registerDebugHandlers } from "./handlers/debug_handlers";
 import { registerSupabaseHandlers } from "./handlers/supabase_handlers";
 import { registerNeonHandlers } from "./handlers/neon_handlers";
+import { registerDataLayerStatusHandlers } from "./handlers/data_layer_status_handlers";
+import { registerChatPlanHandlers } from "./handlers/chat_plan_handlers";
 import { registerLocalModelHandlers } from "./handlers/local_model_handlers";
 import { registerTokenCountHandlers } from "./handlers/token_count_handlers";
 import { registerWindowHandlers } from "./handlers/window_handlers";
@@ -111,6 +113,10 @@ import { registerWhitehatMcpHandlers } from "./handlers/whitehat_mcp_handlers";
 import { registerGauntletHandlers } from "./handlers/gauntlet_handlers";
 import { registerWidgetHandlers } from "./handlers/widget_handlers";
 import { registerSchedulerHandlers } from "./handlers/scheduler_handlers";
+import { registerCommandCenterHandlers } from "./handlers/command_center_handlers";
+import { registerBrandKitHandlers } from "./handlers/brand_kit_handlers";
+import { registerSocialHandlers } from "./handlers/social_handlers";
+import { registerPodcastHandlers } from "./handlers/podcast_handlers";
 import { registerToolMacroHandlers } from "./handlers/tool_macro_handlers";
 import { registerToolsHandlers } from "./handlers/tools_handlers";
 import { registerPrivacyInferenceHandlers } from "./handlers/privacy_inference_handlers";
@@ -134,6 +140,9 @@ import { registerEmbeddingPipelineHandlers } from "./handlers/embedding_pipeline
 import { registerModelDownloadManagerHandlers } from "./handlers/model_download_manager_handlers";
 import { registerMABHandlers } from "./handlers/mab_handlers";
 import { registerAgentMemoryHandlers } from "./handlers/agent_memory_handlers";
+import { registerBrowserPluginHandlers } from "./handlers/browser_plugin_handlers";
+import { registerBrowserAgentHandlers } from "./handlers/browser_agent_handlers";
+import { registerJoySearchHandlers } from "./handlers/joy_search_handlers";
 import { registerAgentStackHandlers } from "./handlers/agent_stack_handlers";
 import { registerAgentOrchestratorHandlers } from "./handlers/agent_orchestrator_handlers";
 import { registerAgentWorkspaceHandlers } from "./handlers/agent_workspace_handlers";
@@ -207,6 +216,8 @@ export function registerIpcHandlers() {
   registerDebugHandlers();
   registerSupabaseHandlers();
   registerNeonHandlers();
+  registerDataLayerStatusHandlers();
+  registerChatPlanHandlers();
   registerLocalModelHandlers();
   registerTokenCountHandlers();
   registerWindowHandlers();
@@ -376,6 +387,10 @@ export function registerIpcHandlers() {
   // Extensibility surfaces — widgets, scheduler, tool macros, universal tool catalog
   registerWidgetHandlers();
   registerSchedulerHandlers();
+  registerCommandCenterHandlers();
+  registerBrandKitHandlers();
+  registerSocialHandlers();
+  registerPodcastHandlers();
   registerToolMacroHandlers();
   registerToolsHandlers();
   
@@ -451,6 +466,15 @@ export function registerIpcHandlers() {
 
   // Agent Memory — Long-Term (cross-conversation) + Short-Term (per-conversation)
   registerAgentMemoryHandlers();
+
+  // Smart Browser plugins (page-actions, widgets, AI-generated extensions)
+  registerBrowserPluginHandlers();
+
+  // Smart Browser autonomous web agent
+  registerBrowserAgentHandlers();
+
+  // JoySearch — local-AI-powered web search (DuckDuckGo + Brave fusion, Ollama synthesis)
+  registerJoySearchHandlers();
 
   // Agent Stack Builder — Triggers (Gmail/Slack/Sheets), Tool Catalog, n8n Workflows
   registerAgentStackHandlers();

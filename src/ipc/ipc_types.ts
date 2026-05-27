@@ -1230,6 +1230,7 @@ export interface VideoStudioProviderModel {
   supportsVideoExtend?: boolean;
   supportsVideo2Video?: boolean;
   maxDurationSeconds?: number;
+  minDurationSeconds?: number;
   defaultFps?: number;
   comingSoon?: boolean;
 }

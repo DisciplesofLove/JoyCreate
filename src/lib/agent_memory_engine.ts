@@ -749,3 +749,147 @@ export async function consolidateAgentMemories(): Promise<{
 
   return { decayed, deleted };
 }
+
+// =============================================================================
+// CONVERSATION INGESTION — every turn becomes a recallable, vector-indexed
+// long-term memory so the agent can semantically search prior chats.
+// =============================================================================
+
+/**
+ * Persist one conversation turn as a low-importance long-term memory.
+ * Uses a stable `chat:<chatId>:<role>:<turnIdx>` key so re-ingesting the
+ * same turn updates in place (no duplicates). Vector indexing happens
+ * automatically via `createLongTermMemory`.
+ */
+export async function ingestConversationTurn(params: {
+  agentId: number;
+  chatId: string | number;
+  role: "user" | "assistant" | "system";
+  content: string;
+  turnIdx: number;
+  importance?: number;
+}): Promise<LongTermMemory | null> {
+  const text = (params.content ?? "").trim();
+  if (!text) return null;
+  // Cap stored excerpt so a single huge response doesn't dominate context.
+  const excerpt = text.length > 4000 ? `${text.slice(0, 4000)}…` : text;
+  try {
+    return await createLongTermMemory({
+      agentId: params.agentId,
+      category: "context",
+      content: `[${params.role}] ${excerpt}`,
+      key: `chat:${params.chatId}:${params.role}:${params.turnIdx}`,
+      importance: params.importance ?? 0.25,
+    });
+  } catch (err) {
+    logger.warn("ingestConversationTurn failed (non-fatal):", err);
+    return null;
+  }
+}
+
+// =============================================================================
+// MARKDOWN INGESTION — point the agent at .md notes / docs so they become
+// part of its recallable memory (vector-indexed, semantic-searchable).
+// =============================================================================
+
+interface IngestMarkdownResult {
+  filePath: string;
+  memoryId: number;
+  bytes: number;
+}
+
+/**
+ * Read a single Markdown file and store it as a long-term memory entry.
+ * Idempotent: re-ingesting the same path updates the existing entry.
+ */
+export async function ingestMarkdownFile(params: {
+  agentId: number;
+  filePath: string;
+  importance?: number;
+  category?: LongTermMemoryCategory;
+}): Promise<IngestMarkdownResult> {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const raw = await fs.readFile(params.filePath, "utf8");
+  const fileName = path.basename(params.filePath);
+  // Truncate very large notes; the vector store collection's own chunking
+  // splits this into searchable pieces internally.
+  const content = raw.length > 50_000 ? `${raw.slice(0, 50_000)}…` : raw;
+  const mem = await createLongTermMemory({
+    agentId: params.agentId,
+    category: params.category ?? "context",
+    content: `# ${fileName}\n${content}`,
+    key: `md:${params.filePath}`,
+    importance: params.importance ?? 0.6,
+  });
+  return { filePath: params.filePath, memoryId: mem.id, bytes: raw.length };
+}
+
+/**
+ * Walk a directory and ingest every Markdown file found (recurses by default).
+ * Returns a summary of ingested files. Errors on individual files are logged
+ * but do not abort the batch.
+ */
+export async function ingestMarkdownDirectory(params: {
+  agentId: number;
+  dirPath: string;
+  recursive?: boolean;
+  importance?: number;
+  category?: LongTermMemoryCategory;
+}): Promise<{
+  ingested: IngestMarkdownResult[];
+  failed: Array<{ filePath: string; error: string }>;
+}> {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const recursive = params.recursive ?? true;
+  const stack: string[] = [params.dirPath];
+  const mdFiles: string[] = [];
+
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      logger.warn(`Cannot read directory ${dir}:`, err);
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (recursive && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+          stack.push(full);
+        }
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (ext === ".md" || ext === ".markdown") {
+          mdFiles.push(full);
+        }
+      }
+    }
+  }
+
+  const ingested: IngestMarkdownResult[] = [];
+  const failed: Array<{ filePath: string; error: string }> = [];
+  for (const filePath of mdFiles) {
+    try {
+      const result = await ingestMarkdownFile({
+        agentId: params.agentId,
+        filePath,
+        importance: params.importance,
+        category: params.category,
+      });
+      ingested.push(result);
+    } catch (err) {
+      failed.push({
+        filePath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  logger.info(
+    `Markdown ingestion for agent ${params.agentId}: ${ingested.length} ok, ${failed.length} failed (from ${params.dirPath})`,
+  );
+  return { ingested, failed };
+}

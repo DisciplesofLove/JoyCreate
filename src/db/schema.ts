@@ -2,6 +2,10 @@ import { sql } from "drizzle-orm";
 import { integer, real, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
 import { relations } from "drizzle-orm";
 import type { ModelMessage } from "ai";
+import type {
+  ChatPlanPhase,
+  ChatPlanStatus,
+} from "@/shared/chat_plan_types";
 
 export const AI_MESSAGES_SDK_VERSION = "ai@v5" as const;
 
@@ -114,6 +118,13 @@ export const apps = sqliteTable("apps", {
   isFavorite: integer("is_favorite", { mode: "boolean" })
     .notNull()
     .default(sql`0`),
+  // Data + Backend Layer (see src/shared/data_layer_types.ts).
+  // `dataLayerKind` and `serverRuntimeKind` are duplicated from
+  // `dataLayerConfig` so dashboards can query without JSON parsing.
+  // When null, chat handlers fall back to `deriveLegacyDataLayerConfig`.
+  dataLayerKind: text("data_layer_kind"),
+  serverRuntimeKind: text("server_runtime_kind"),
+  dataLayerConfig: text("data_layer_config", { mode: "json" }),
 });
 
 export const chats = sqliteTable("chats", {
@@ -123,6 +134,8 @@ export const chats = sqliteTable("chats", {
     .references(() => apps.id, { onDelete: "cascade" }),
   title: text("title"),
   initialCommitHash: text("initial_commit_hash"),
+  // Per-chat sticky chat mode. Null → fall back to UserSettings.selectedChatMode.
+  chatMode: text("chat_mode"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -152,6 +165,29 @@ export const messages = sqliteTable("messages", {
     mode: "json",
   }).$type<AiMessagesJsonV5 | null>(),
   createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+export const chatPlans = sqliteTable("chat_plans", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  chatId: integer("chat_id")
+    .notNull()
+    .unique()
+    .references(() => chats.id, { onDelete: "cascade" }),
+  goal: text("goal").notNull(),
+  phases: text("phases", { mode: "json" })
+    .$type<ChatPlanPhase[]>()
+    .notNull(),
+  currentPhaseIndex: integer("current_phase_index").notNull().default(-1),
+  status: text("status").$type<ChatPlanStatus>().notNull().default("draft"),
+  startedAt: integer("started_at", { mode: "timestamp" }),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+  lastError: text("last_error"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
 });
@@ -346,6 +382,8 @@ export const agents = sqliteTable("agents", {
   publishCurrency: text("publish_currency").default("USD"),
   // On-chain publish tracking — set when an agent's most-recent publish was a dry-run.
   dryRunAt: integer("dry_run_at", { mode: "timestamp" }),
+  // Optional brand kit — injects voice / colors / fonts into prompts.
+  brandKitId: integer("brand_kit_id"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -2461,6 +2499,12 @@ export * from "./radicle_schema";
 
 // ── Copilot — NLP-driven self-healing assistant ───────────────
 export * from "./copilot_schema";
+
+// ── Brand Kit — voice / palette / fonts injected into agent prompts ──
+export * from "./brand_kit_schema";
+
+// ── Social posting — connected accounts + scheduled posts ──
+export * from "./social_schema";
 
 // -- Image Studio (AI Image Generation + Canvas Editing) ------
 export const imageStudioImages = sqliteTable("image_studio_images", {

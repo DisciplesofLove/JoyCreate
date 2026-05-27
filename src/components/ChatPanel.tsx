@@ -10,6 +10,7 @@ import { IpcClient } from "@/ipc/ipc_client";
 import { ChatHeader } from "./chat/ChatHeader";
 import { MessagesList } from "./chat/MessagesList";
 import { ChatInput } from "./chat/ChatInput";
+import { ChatPlanPanel } from "./chat/ChatPlanPanel";
 import { VersionPane } from "./chat/VersionPane";
 import { ChatError } from "./chat/ChatError";
 import { Button } from "@/components/ui/button";
@@ -165,6 +166,7 @@ export function ChatPanel({
       <div className="flex flex-1 overflow-hidden">
         {!isVersionPaneOpen && (
           <div className="flex-1 flex flex-col min-w-0">
+            {chatId ? <ChatPlanPanel chatId={chatId} /> : null}
             <div className="flex-1 relative overflow-hidden">
               <MessagesList
                 messages={messages}

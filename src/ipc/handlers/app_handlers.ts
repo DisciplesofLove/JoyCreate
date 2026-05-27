@@ -85,14 +85,19 @@ function buildEnrichedPath(): string {
     }
   }
 
-  // Honor user-configured customNodePath
-  try {
-    const settings = readSettings();
-    if (settings?.customNodePath) {
-      extras.unshift(settings.customNodePath);
+  // Honor user-configured customNodePath. Skip if Electron app isn't ready
+  // yet — readSettings() may decrypt persisted secrets via safeStorage, which
+  // throws "safeStorage cannot be used before app is ready" at module-load
+  // time. The later refreshProcessPath() call (post-ready) will pick it up.
+  if (app.isReady()) {
+    try {
+      const settings = readSettings();
+      if (settings?.customNodePath) {
+        extras.unshift(settings.customNodePath);
+      }
+    } catch {
+      // settings not yet available — ignore
     }
-  } catch {
-    // settings not yet available — ignore
   }
 
   const segments = basePath.split(sep).filter(Boolean);

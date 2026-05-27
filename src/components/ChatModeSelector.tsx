@@ -34,6 +34,10 @@ export function ChatModeSelector() {
         return "Ask";
       case "agent":
         return "Build (MCP)";
+      case "autonomous":
+        return "Agent";
+      case "mcp":
+        return "MCP";
       case "local-agent":
         return "Build";
       default:
@@ -98,6 +102,22 @@ export function ChatModeSelector() {
             <span className="font-medium">Build with MCP</span>
             <span className="text-xs text-muted-foreground">
               Like Build, but can use external MCP tools
+            </span>
+          </div>
+        </SelectItem>
+        <SelectItem value="autonomous">
+          <div className="flex flex-col items-start">
+            <span className="font-medium">Agent (Autonomous)</span>
+            <span className="text-xs text-muted-foreground">
+              Plans phases up front, then executes end-to-end (Cursor-style)
+            </span>
+          </div>
+        </SelectItem>
+        <SelectItem value="mcp">
+          <div className="flex flex-col items-start">
+            <span className="font-medium">MCP</span>
+            <span className="text-xs text-muted-foreground">
+              Tools only — runs MCP servers, no code generation
             </span>
           </div>
         </SelectItem>

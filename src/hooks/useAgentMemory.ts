@@ -182,3 +182,28 @@ export function useClearShortTermMemory(agentId: number, chatId: string) {
       toast.error(`Failed to clear memory: ${err.message}`),
   });
 }
+
+// ── Markdown Ingestion ─────────────────────────────────────────
+
+export function usePickAndIngestMarkdown(agentId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => agentMemoryClient.pickAndIngestMarkdown({ agentId }),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: agentMemoryKeys.all });
+      const { ingested, failed } = result;
+      if (ingested.length === 0 && failed.length === 0) return; // user cancelled
+      if (failed.length === 0) {
+        toast.success(
+          `Imported ${ingested.length} markdown file${ingested.length === 1 ? "" : "s"} into agent memory`,
+        );
+      } else {
+        toast.warning(
+          `Imported ${ingested.length}, failed ${failed.length}. See logs.`,
+        );
+      }
+    },
+    onError: (err: Error) =>
+      toast.error(`Markdown import failed: ${err.message}`),
+  });
+}

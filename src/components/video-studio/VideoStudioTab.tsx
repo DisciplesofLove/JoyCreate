@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { IpcClient } from "@/ipc/ipc_client";
 import type { VideoStudioVideo, VideoStudioProvider } from "@/ipc/ipc_types";
 import { UnifiedModelPicker } from "@/components/studio/UnifiedModelPicker";
+import { ProviderCarousel } from "@/components/studio/ProviderCarousel";
 import { PublishContextMenu } from "@/components/studio/PublishContextMenu";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -456,6 +457,7 @@ function GeneratePanel({
   const supportsImg2Video = selectedModel?.supportsImg2Video ?? false;
   const supportsVideoExtend = selectedModel?.supportsVideoExtend ?? false;
   const maxDuration = selectedModel?.maxDurationSeconds ?? 10;
+  const minDuration = selectedModel?.minDurationSeconds ?? 0;
 
   // Reset model when provider changes
   const handleProviderChange = useCallback(
@@ -494,6 +496,18 @@ function GeneratePanel({
       }
     }
   }, [providers, provider, handleModelPick]);
+
+  // If the currently-selected duration preset is incompatible with the
+  // newly-selected model, shift to the nearest supported preset.
+  useEffect(() => {
+    const current = DURATION_PRESETS[durationIdx]?.value;
+    if (current == null) return;
+    if (current >= minDuration && current <= maxDuration) return;
+    const fallback = DURATION_PRESETS.findIndex(
+      (d) => d.value >= minDuration && d.value <= maxDuration,
+    );
+    if (fallback >= 0) setDurationIdx(fallback);
+  }, [minDuration, maxDuration, durationIdx]);
 
   const handleEnhancePrompt = useCallback(async () => {
     if (!prompt.trim()) return;
@@ -552,7 +566,7 @@ function GeneratePanel({
       negativePrompt: negativePrompt.trim() || undefined,
       width: aspect.width,
       height: aspect.height,
-      duration: Math.min(dur.value, maxDuration),
+      duration: Math.max(minDuration, Math.min(dur.value, maxDuration)),
       fps,
       seed: seed || undefined,
       style: style || undefined,
@@ -631,6 +645,13 @@ function GeneratePanel({
       )}
 
       {/* Provider + Model — unified picker */}
+      <ProviderCarousel
+        mode="video"
+        providers={providers}
+        selectedProvider={provider}
+        selectedModel={model}
+        onSelect={handleModelPick}
+      />
       <UnifiedModelPicker
         mode="video"
         providers={providers}
@@ -777,19 +798,22 @@ function GeneratePanel({
           Duration
         </Label>
         <div className="flex gap-1">
-          {DURATION_PRESETS.filter((d) => d.value <= maxDuration).map(
-            (d, i) => (
+          {DURATION_PRESETS.map((d, i) => {
+            const disabled = d.value > maxDuration || d.value < minDuration;
+            return (
               <Button
                 key={d.label}
                 variant={durationIdx === i ? "secondary" : "ghost"}
                 size="sm"
-                className="h-7 px-2 text-[10px] font-mono"
+                className="h-7 px-2 text-[10px] font-mono disabled:opacity-30"
+                disabled={disabled}
                 onClick={() => setDurationIdx(i)}
+                title={disabled ? `${d.label} not supported by this model` : undefined}
               >
                 {d.label}
               </Button>
-            ),
-          )}
+            );
+          })}
         </div>
       </div>
 

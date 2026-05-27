@@ -18,7 +18,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ChevronsUpDown, KeyRound, Wifi, WifiOff, Sparkles, Check } from "lucide-react";
+import { ChevronsUpDown, KeyRound, Wifi, WifiOff, Sparkles, Check, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ImageStudioProvider, VideoStudioProvider } from "@/ipc/ipc_types";
 import { ApiKeyInlineDialog } from "./ApiKeyInlineDialog";
@@ -141,6 +141,14 @@ export function UnifiedModelPicker({
                   selectedProviderId={selectedProvider}
                   selectedModelId={selectedModel}
                   onPick={handleRowClick}
+                  onReconfigure={(p) =>
+                    setKeyDialog({
+                      providerId: p.id,
+                      providerLabel: p.label,
+                      envVars: p.apiKeyEnvVars,
+                      website: p.website,
+                    })
+                  }
                 />
               ))}
               {providers.length === 0 && (
@@ -173,11 +181,13 @@ function ProviderGroup({
   selectedProviderId,
   selectedModelId,
   onPick,
+  onReconfigure,
 }: {
   provider: AnyProvider;
   selectedProviderId: string;
   selectedModelId: string;
   onPick: (providerId: string, modelId: string) => void;
+  onReconfigure?: (provider: AnyProvider) => void;
 }) {
   return (
     <div className="border-b last:border-b-0">
@@ -186,6 +196,20 @@ function ProviderGroup({
           <span className="text-xs font-semibold">{provider.label}</span>
           <ProviderStatusBadge provider={provider} />
         </div>
+        {provider.kind === "cloud" && !provider.comingSoon && onReconfigure && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onReconfigure(provider);
+            }}
+            className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+            title={provider.configured ? "Reconfigure API key" : "Add API key"}
+          >
+            <Settings2 className="h-3 w-3" />
+            {provider.configured ? "Reconfigure" : "Configure"}
+          </button>
+        )}
       </div>
       <div className="flex flex-col">
         {provider.models.map((model) => {

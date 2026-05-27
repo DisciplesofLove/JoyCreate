@@ -166,15 +166,15 @@ export const TitleBar = () => {
                 e.preventDefault();
                 setTheme("system");
               }}
-              className="h-7 w-7 rounded-md hover:bg-primary/10 hover:text-primary transition-all no-app-region-drag border border-transparent hover:border-primary/20"
+              className="h-7 w-7 shrink-0 rounded-md bg-muted/40 hover:bg-primary/10 hover:text-primary transition-all no-app-region-drag border border-border/40 hover:border-primary/40"
               aria-label={`Switch to ${effectiveDark ? "light" : "dark"} mode`}
             >
               {theme === "system" ? (
-                <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
+                <Monitor className="h-4 w-4 text-foreground" />
               ) : effectiveDark ? (
-                <Moon className="h-3.5 w-3.5 text-muted-foreground" />
+                <Moon className="h-4 w-4 text-foreground" />
               ) : (
-                <Sun className="h-3.5 w-3.5 text-muted-foreground" />
+                <Sun className="h-4 w-4 text-foreground" />
               )}
             </Button>
           </TooltipTrigger>

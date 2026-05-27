@@ -48,6 +48,7 @@ export interface McpServerRegistryEntry {
 
 export type McpServerCategory =
   | "featured"
+  | "built-in"
   | "ai-assistants"
   | "development"
   | "databases"
@@ -64,6 +65,7 @@ export type McpServerCategory =
 
 export const MCP_CATEGORIES: { id: McpServerCategory; name: string; icon: string }[] = [
   { id: "featured", name: "Featured", icon: "⭐" },
+  { id: "built-in", name: "Built-in", icon: "🔌" },
   { id: "ai-assistants", name: "AI Assistants", icon: "🤖" },
   { id: "development", name: "Development Tools", icon: "🛠️" },
   { id: "code-platforms", name: "Code Platforms", icon: "💻" },
@@ -1530,6 +1532,184 @@ export const MCP_SERVER_REGISTRY: McpServerRegistryEntry[] = [
         description: "Perplexity API key",
         required: true,
         placeholder: "pplx-...",
+      },
+    ],
+  },
+
+  // ===== BUILT-IN ONE-CLICK CONNECTORS =====
+  {
+    id: "google-workspace",
+    name: "Google Workspace",
+    description:
+      "Gmail, Drive, Calendar, Docs, and Sheets via Google's official Workspace APIs.",
+    longDescription:
+      "Provides Gmail (read/send), Drive (search/upload), Calendar (events), Docs and Sheets (read/write) tools to your agents. After installing, open Settings → Integrations → Google to authenticate via OAuth and paste the resulting refresh token.",
+    category: "built-in",
+    featured: true,
+    config: {
+      type: "stdio",
+      command: "npx -y @joycreate/mcp-google-workspace",
+    },
+    website: "https://workspace.google.com",
+    tags: ["google", "gmail", "drive", "calendar", "docs", "sheets"],
+    author: "JoyCreate",
+    requiresAuth: true,
+    requiresManualInstall: true,
+    notes:
+      "This connector ships as a built-in skill bundle. After install, complete OAuth in Settings → Integrations → Google. Required scopes: gmail.modify, drive, calendar, documents, spreadsheets.",
+    envVars: [
+      {
+        key: "GOOGLE_CLIENT_ID",
+        description: "OAuth client ID from Google Cloud Console.",
+        required: true,
+        placeholder: "xxxxx.apps.googleusercontent.com",
+      },
+      {
+        key: "GOOGLE_CLIENT_SECRET",
+        description: "OAuth client secret.",
+        required: true,
+      },
+      {
+        key: "GOOGLE_REFRESH_TOKEN",
+        description: "Long-lived refresh token from the OAuth flow.",
+        required: true,
+      },
+    ],
+  },
+  {
+    id: "dropbox",
+    name: "Dropbox",
+    description:
+      "List, search, upload, and download files in your Dropbox.",
+    category: "built-in",
+    featured: true,
+    config: {
+      type: "stdio",
+      command: "npx -y @joycreate/mcp-dropbox",
+    },
+    website: "https://www.dropbox.com",
+    tags: ["dropbox", "files", "storage"],
+    author: "JoyCreate",
+    requiresAuth: true,
+    requiresManualInstall: true,
+    notes:
+      "Create a Dropbox app at https://www.dropbox.com/developers/apps, generate an access token, then paste below.",
+    envVars: [
+      {
+        key: "DROPBOX_ACCESS_TOKEN",
+        description: "Dropbox app access token.",
+        required: true,
+        placeholder: "sl.B...",
+      },
+    ],
+  },
+  {
+    id: "airtable",
+    name: "Airtable",
+    description:
+      "Read, create, and update records in any Airtable base.",
+    category: "built-in",
+    featured: true,
+    config: {
+      type: "stdio",
+      command: "npx -y airtable-mcp-server",
+    },
+    website: "https://airtable.com",
+    tags: ["airtable", "database", "records", "crm"],
+    author: "Community",
+    requiresAuth: true,
+    envVars: [
+      {
+        key: "AIRTABLE_API_KEY",
+        description: "Airtable personal access token.",
+        required: true,
+        placeholder: "pat...",
+      },
+    ],
+  },
+  {
+    id: "quickbooks",
+    name: "QuickBooks",
+    description:
+      "Read invoices, customers, expenses, and reports from QuickBooks Online.",
+    category: "built-in",
+    config: {
+      type: "stdio",
+      command: "npx -y @joycreate/mcp-quickbooks",
+    },
+    website: "https://quickbooks.intuit.com",
+    tags: ["quickbooks", "accounting", "finance", "invoices"],
+    author: "JoyCreate",
+    requiresAuth: true,
+    requiresManualInstall: true,
+    notes:
+      "Register an Intuit developer app, complete OAuth in Settings → Integrations → QuickBooks, then paste the company ID + tokens below.",
+    envVars: [
+      {
+        key: "QB_CLIENT_ID",
+        description: "Intuit OAuth client ID.",
+        required: true,
+      },
+      {
+        key: "QB_CLIENT_SECRET",
+        description: "Intuit OAuth client secret.",
+        required: true,
+      },
+      {
+        key: "QB_REALM_ID",
+        description: "QuickBooks company / realm ID.",
+        required: true,
+      },
+      {
+        key: "QB_REFRESH_TOKEN",
+        description: "OAuth refresh token.",
+        required: true,
+      },
+    ],
+  },
+  {
+    id: "snowflake",
+    name: "Snowflake",
+    description:
+      "Run SQL queries and introspect schemas in your Snowflake warehouse.",
+    category: "built-in",
+    config: {
+      type: "stdio",
+      command: "uvx mcp-server-snowflake",
+    },
+    website: "https://www.snowflake.com",
+    tags: ["snowflake", "warehouse", "sql", "analytics"],
+    author: "Community",
+    requiresAuth: true,
+    requiresManualInstall: true,
+    notes:
+      "Requires uv (https://github.com/astral-sh/uv). Install with: `pip install uv` or `pipx install uv`, then this entry will spawn the python server on demand.",
+    envVars: [
+      {
+        key: "SNOWFLAKE_ACCOUNT",
+        description: "Snowflake account identifier.",
+        required: true,
+        placeholder: "xy12345.us-east-1",
+      },
+      {
+        key: "SNOWFLAKE_USER",
+        description: "Snowflake username.",
+        required: true,
+      },
+      {
+        key: "SNOWFLAKE_PASSWORD",
+        description: "Snowflake password or PAT.",
+        required: true,
+      },
+      {
+        key: "SNOWFLAKE_WAREHOUSE",
+        description: "Default warehouse.",
+        required: false,
+      },
+      {
+        key: "SNOWFLAKE_DATABASE",
+        description: "Default database.",
+        required: false,
       },
     ],
   },

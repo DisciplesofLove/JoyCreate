@@ -15,9 +15,11 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Sparkles, Send, Square, Trash2, Wand2, Languages, FileText, ListChecks, Baby, ShieldCheck, Quote } from "lucide-react";
+import * as LucideIcons from "lucide-react";
+import { Sparkles, Send, Square, Trash2, Wand2, Languages, FileText, ListChecks, Baby, ShieldCheck, Quote, Puzzle } from "lucide-react";
 import { useJoyAssistant } from "@/hooks/useJoyAssistant";
 import type { AssistantPageContext } from "@/types/joy_assistant_types";
+import type { BrowserPlugin } from "@/types/browser_plugin";
 import { cn } from "@/lib/utils";
 
 export interface PageSnapshot {
@@ -25,6 +27,12 @@ export interface PageSnapshot {
   title: string;
   /** Plain-text body, already truncated to a safe length. */
   text: string;
+  /** Optional meta-description / OG description. */
+  description?: string;
+  /** Optional OG site name. */
+  siteName?: string;
+  /** Top-level page headings (h1/h2/h3), capped. */
+  headings?: string[];
 }
 
 interface QuickAction {
@@ -86,11 +94,38 @@ interface Props {
   /**
    * Async callback that pulls the current visible page text from the
    * webview. Implemented by SmartBrowserPage via `wv.executeJavaScript`.
+   * Throws with a user-facing diagnostic message on failure.
    */
-  getPageSnapshot: () => Promise<PageSnapshot | null>;
+  getPageSnapshot: () => Promise<PageSnapshot>;
+  /**
+   * Enabled page-action plugins to expose as extra quick-action buttons.
+   * Their `code` is executed in the active webview by the parent.
+   */
+  pageActionPlugins?: BrowserPlugin[];
+  /**
+   * Runs a plugin's code inside the active webview and returns the raw
+   * result (JSON-parsed if possible). The parent owns the webview ref.
+   */
+  runPluginInActiveWebview?: (plugin: BrowserPlugin) => Promise<unknown>;
 }
 
-export function BrowserAiPanel({ getPageSnapshot }: Props) {
+function renderTemplate(
+  tpl: string,
+  vars: { result: string; url: string; title: string },
+): string {
+  return tpl
+    .replace(/\{\{\s*result\s*\}\}/g, vars.result)
+    .replace(/\{\{\s*url\s*\}\}/g, vars.url)
+    .replace(/\{\{\s*title\s*\}\}/g, vars.title);
+}
+
+function resolveLucideIcon(name: string | undefined): React.ElementType {
+  if (!name) return Puzzle;
+  const lookup = LucideIcons as unknown as Record<string, React.ElementType>;
+  return lookup[name] ?? Puzzle;
+}
+
+export function BrowserAiPanel({ getPageSnapshot, pageActionPlugins, runPluginInActiveWebview }: Props) {
   // One persisted assistant session per browser surface.
   const sessionId = "smart-browser";
   const { messages, streaming, sendMessage, cancel, clearHistory } =
@@ -123,11 +158,11 @@ export function BrowserAiPanel({ getPageSnapshot }: Props) {
   const runQuickAction = useCallback(
     async (action: QuickAction) => {
       setSnapshotErr(null);
-      const snap = await getPageSnapshot().catch(() => null);
-      if (!snap || !snap.text.trim()) {
-        setSnapshotErr(
-          "Couldn't read the page yet. Wait for it to load and try again.",
-        );
+      let snap: PageSnapshot;
+      try {
+        snap = await getPageSnapshot();
+      } catch (err) {
+        setSnapshotErr((err as Error).message);
         return;
       }
       const prompt = action.prompt(truncate(snap));
@@ -140,6 +175,40 @@ export function BrowserAiPanel({ getPageSnapshot }: Props) {
       });
     },
     [getPageSnapshot, sendMessage, pageContext, truncate],
+  );
+
+  const runPluginAction = useCallback(
+    async (plugin: BrowserPlugin) => {
+      if (!runPluginInActiveWebview) return;
+      setSnapshotErr(null);
+      // Snapshot is optional for plugins — they read the live DOM
+      // themselves. We only use the snapshot for the prompt template.
+      const snap = await getPageSnapshot().catch(() => null);
+      let raw: unknown;
+      try {
+        raw = await runPluginInActiveWebview(plugin);
+      } catch (err) {
+        setSnapshotErr(
+          `Plugin "${plugin.name}" failed: ${(err as Error).message}`,
+        );
+        return;
+      }
+      if (raw === null || raw === undefined || raw === "") {
+        setSnapshotErr(
+          `Plugin "${plugin.name}" returned no data for this page.`,
+        );
+        return;
+      }
+      const resultStr =
+        typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
+      const url = snap?.url ?? "";
+      const title = snap?.title ?? "";
+      const prompt = plugin.promptTemplate
+        ? renderTemplate(plugin.promptTemplate, { result: resultStr, url, title })
+        : `Plugin "${plugin.name}" returned the following result from ${url || "the active page"}. Explain or use it to answer relevant follow-up questions.\n\n\`\`\`\n${resultStr.slice(0, MAX_PAGE_CHARS)}\n\`\`\``;
+      sendMessage(prompt, pageContext);
+    },
+    [getPageSnapshot, runPluginInActiveWebview, sendMessage, pageContext],
   );
 
   const onSubmit = useCallback(
@@ -214,6 +283,27 @@ export function BrowserAiPanel({ getPageSnapshot }: Props) {
             </button>
           );
         })}
+        {(pageActionPlugins ?? [])
+          .filter((p) => p.enabled && p.type === "page-action")
+          .map((p) => {
+            const Icon = resolveLucideIcon(p.icon);
+            return (
+              <button
+                key={p.id}
+                type="button"
+                disabled={streaming}
+                title={p.description}
+                onClick={() => runPluginAction(p)}
+                className={cn(
+                  "flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/15 hover:border-emerald-400/60 transition-colors text-emerald-700 dark:text-emerald-300 text-left",
+                  "disabled:opacity-50 disabled:cursor-not-allowed",
+                )}
+              >
+                <Icon className="h-3 w-3 shrink-0" />
+                <span className="truncate">{p.name}</span>
+              </button>
+            );
+          })}
       </div>
 
       {/* Messages */}

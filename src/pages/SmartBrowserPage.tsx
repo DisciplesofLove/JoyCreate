@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate as useRouterNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -31,6 +32,8 @@ import {
   Wallet as WalletIcon,
   Shield,
   Search,
+  Puzzle,
+  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -39,16 +42,20 @@ import { JoyWalletPanel } from "@/components/smart-browser/JoyWalletPanel";
 import { PrivacyPanel } from "@/components/smart-browser/PrivacyPanel";
 import { BrowserTabBar } from "@/components/smart-browser/BrowserTabBar";
 import { BrowserWebview } from "@/components/smart-browser/BrowserWebview";
+import { BrowserPluginsPanel } from "@/components/smart-browser/BrowserPluginsPanel";
+import { BrowserAgentPanel } from "@/components/smart-browser/BrowserAgentPanel";
 
 import { useBrowserTabs } from "@/hooks/useBrowserTabs";
+import { useBrowserPlugins } from "@/hooks/useBrowserPlugins";
 import { getStoredAddress } from "@/lib/joy_wallet";
+import { joySearchClient } from "@/ipc/clients/joy_search_client";
+import type { BrowserPlugin } from "@/types/browser_plugin";
 
 const PARTITION = "persist:joybrowser";
 
-type SidePanelTab = "ai" | "wallet" | "privacy";
+type SidePanelTab = "ai" | "agent" | "wallet" | "privacy" | "plugins";
 
-// ── Bookmarks ──────────────────────────────────────────────────────────────
-
+// ── Bookmarks (user-editable, persisted) ───────────────────────────────────
 const DEFAULT_BOOKMARKS = [
   { label: "JoyCreate", url: "https://joycreate.io" },
   { label: "OpenClaw Docs", url: "https://docs.openclaw.ai" },
@@ -58,20 +65,71 @@ const DEFAULT_BOOKMARKS = [
   { label: "Hugging Face", url: "https://huggingface.co" },
 ];
 
+type Bookmark = { label: string; url: string };
+function loadBookmarks(): Bookmark[] {
+  try {
+    const raw = localStorage.getItem("joy-browser-bookmarks");
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return DEFAULT_BOOKMARKS;
+}
+function saveBookmarks(bms: Bookmark[]) {
+  try {
+    localStorage.setItem("joy-browser-bookmarks", JSON.stringify(bms));
+  } catch {}
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function normalizeUrl(input: string): string {
+/**
+ * Decide whether the user typed a URL or a search query.
+ * Returns `{ kind: "search", query }` for free-text searches so the caller
+ * can route to internal JoySearch instead of Google.
+ */
+function classifyAddressInput(
+  input: string,
+): { kind: "url"; url: string } | { kind: "search"; query: string } {
   const trimmed = input.trim();
-  if (!trimmed) return "about:blank";
-  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("about:")) return trimmed;
-  if (/^(localhost|127\.|192\.168\.|10\.)/i.test(trimmed)) return `http://${trimmed}`;
-  if (/\.[a-z]{2,}/i.test(trimmed) && !trimmed.includes(" ")) return `https://${trimmed}`;
-  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+  if (!trimmed) return { kind: "url", url: "about:blank" };
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("about:")) {
+    return { kind: "url", url: trimmed };
+  }
+  if (/^(localhost|127\.|192\.168\.|10\.)/i.test(trimmed)) {
+    return { kind: "url", url: `http://${trimmed}` };
+  }
+  if (/\.[a-z]{2,}/i.test(trimmed) && !trimmed.includes(" ")) {
+    return { kind: "url", url: `https://${trimmed}` };
+  }
+  return { kind: "search", query: trimmed };
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function SmartBrowserPage() {
+    // Bookmarks state
+    const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => loadBookmarks());
+    // Menu state
+    const [showMenu, setShowMenu] = useState(false);
+    // Add current page as bookmark
+    const handleBookmarkPage = () => {
+      if (!activeTab?.url) return;
+      const url = activeTab.url;
+      // Use page title or URL as label
+      const label = (activeTab.title || url).slice(0, 48);
+      // Avoid duplicates
+      if (bookmarks.some((b) => b.url === url)) return;
+      const next = [...bookmarks, { label, url }];
+      setBookmarks(next);
+      saveBookmarks(next);
+      setShowMenu(false);
+    };
+
+    // Remove a bookmark (future: manage UI)
+    const removeBookmark = (url: string) => {
+      const next = bookmarks.filter((b) => b.url !== url);
+      setBookmarks(next);
+      saveBookmarks(next);
+    };
   const {
     tabs,
     activeId,
@@ -104,42 +162,271 @@ export default function SmartBrowserPage() {
   }, [sideTab, showSidePanel]);
 
   // ── Page snapshot for the AI panel — always reads the active tab. ───────
-  const getPageSnapshot = useCallback(async (): Promise<PageSnapshot | null> => {
-    const wv = getWebview(activeId);
-    if (!wv) return null;
-    try {
-      const script = `(() => {
-        const clone = document.body ? document.body.cloneNode(true) : null;
-        if (clone) {
-          for (const sel of ['script', 'style', 'noscript', 'svg']) {
-            for (const el of clone.querySelectorAll(sel)) el.remove();
+  //
+  // Two-stage strategy:
+  //   1. In-page extraction via wv.executeJavaScript (best quality, sees
+  //      logged-in content, dynamic SPA state).
+  //   2. Server-side fallback via JoySearch's readability extractor, which
+  //      re-fetches the URL from Node. Works even when the webview ref is
+  //      missing, the guest page hasn't attached, or the in-page script
+  //      was blocked by CSP.
+  //
+  // We only throw when BOTH paths fail. The user-facing message is
+  // rendered verbatim by BrowserAiPanel.
+  const getPageSnapshot = useCallback(async (): Promise<PageSnapshot> => {
+    const currentUrl = activeTab?.url ?? "";
+
+    // Helper: server-side fetch + readability. Used as fallback.
+    const fetchServerSide = async (): Promise<PageSnapshot | null> => {
+      if (!/^https?:\/\//i.test(currentUrl)) return null;
+      try {
+        const res = await joySearchClient.fetchPage({ url: currentUrl });
+        if (!res?.text || res.text.length < 50) return null;
+        return {
+          url: res.finalUrl ?? res.url ?? currentUrl,
+          title: res.title ?? activeTab?.title ?? "",
+          text: res.text,
+          description: res.excerpt,
+          siteName: undefined,
+          headings: undefined,
+        };
+      } catch (err) {
+        console.warn("[getPageSnapshot] server-side fallback failed", err);
+        return null;
+      }
+    };
+
+    // Reject internal / non-extractable URLs up-front — but still try the
+    // active webview's executeJavaScript path for plain http(s) and try
+    // server-side for the same. Both will fail and we'll throw a tailored
+    // error.
+    if (
+      /^(about:|chrome:|chrome-error:|edge:|view-source:|devtools:|joycreate:|file:)/i.test(
+        currentUrl,
+      )
+    ) {
+      throw new Error(
+        `Internal URL "${currentUrl.split(/[?#]/)[0] || "about:blank"}" can't be read by the AI. Open a public webpage first.`,
+      );
+    }
+    if (/\.(pdf|epub|mobi|zip|exe|dmg|mp4|mp3)(\?|$)/i.test(currentUrl)) {
+      throw new Error(
+        "This document type can't be summarised by the in-page reader. Try the page it came from.",
+      );
+    }
+
+    // 1) Try in-page extraction. Poll briefly for the webview ref but
+    //    don't fail hard if it's missing — we have the server fallback.
+    const findWebview = async (): Promise<Electron.WebviewTag | null> => {
+      const deadline = Date.now() + 1500;
+      while (Date.now() < deadline) {
+        const w = getWebview(activeId);
+        if (w) return w;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return null;
+    };
+    const wv = await findWebview();
+
+    const waitForReady = (w: Electron.WebviewTag): Promise<void> =>
+      new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          w.removeEventListener("dom-ready", finish as EventListener);
+          w.removeEventListener("did-stop-loading", finish as EventListener);
+          w.removeEventListener("did-finish-load", finish as EventListener);
+          resolve();
+        };
+        try {
+          if (!w.isLoading()) {
+            setTimeout(finish, 100);
+            return;
           }
+        } catch {
+          /* isLoading throws when not yet attached — wait for events */
         }
+        w.addEventListener("dom-ready", finish as EventListener, { once: true });
+        w.addEventListener("did-stop-loading", finish as EventListener, {
+          once: true,
+        });
+        w.addEventListener("did-finish-load", finish as EventListener, {
+          once: true,
+        });
+        setTimeout(finish, 4000);
+      });
+
+    const script = `(() => {
+      try {
+        const cleanText = (t) =>
+          (t || '').replace(/\\u00a0/g, ' ').replace(/[ \\t]+/g, ' ').replace(/\\n{3,}/g, '\\n\\n').trim();
+        const candidates = [];
+        const push = (el) => { if (el && !candidates.includes(el)) candidates.push(el); };
+        document.querySelectorAll('article, main, [role=main], #main, #content, .content, .post, .article').forEach(push);
+        if (candidates.length === 0 && document.body) push(document.body);
+        let best = null;
+        let bestScore = 0;
+        for (const el of candidates) {
+          const txt = el.innerText || '';
+          const links = el.querySelectorAll('a').length;
+          const score = txt.length * Math.max(0.1, 1 - links / Math.max(1, txt.length / 80));
+          if (score > bestScore) { bestScore = score; best = el; }
+        }
+        const root = best || document.body;
+        if (!root) return JSON.stringify({ ok: false, reason: 'no-body' });
+        const clone = root.cloneNode(true);
+        for (const sel of ['script','style','noscript','svg','iframe','nav','aside','header','footer','form','button']) {
+          for (const el of clone.querySelectorAll(sel)) el.remove();
+        }
+        const text = cleanText(clone.innerText || '');
+        const headings = [];
+        for (const h of document.querySelectorAll('h1, h2, h3')) {
+          const t = (h.textContent || '').trim();
+          if (t && t.length < 200) headings.push(t);
+          if (headings.length >= 12) break;
+        }
+        const meta = (name) => {
+          const el = document.querySelector('meta[name="' + name + '"], meta[property="' + name + '"]');
+          return el ? (el.getAttribute('content') || '').trim() : '';
+        };
         return JSON.stringify({
+          ok: true,
           url: location.href,
           title: document.title || '',
-          text: (clone ? clone.innerText : '').replace(/\\n{3,}/g, '\\n\\n').trim(),
+          description: meta('description') || meta('og:description') || '',
+          siteName: meta('og:site_name') || '',
+          headings,
+          text,
         });
-      })()`;
-      const raw = await wv.executeJavaScript(script);
-      return typeof raw === "string" ? JSON.parse(raw) : raw;
-    } catch (err) {
-      console.warn("getPageSnapshot failed", err);
+      } catch (e) {
+        return JSON.stringify({ ok: false, reason: 'script-error', message: String(e && e.message || e) });
+      }
+    })()`;
+
+    type RawSnap = {
+      ok: boolean;
+      url?: string;
+      title?: string;
+      description?: string;
+      siteName?: string;
+      headings?: string[];
+      text?: string;
+      reason?: string;
+      message?: string;
+    };
+
+    const tryInPage = async (): Promise<PageSnapshot | null> => {
+      if (!wv) return null;
+      try {
+        await waitForReady(wv);
+      } catch {
+        /* swallow — we still try executeJavaScript */
+      }
+      const backoffs = [0, 350, 800, 1500];
+      for (const ms of backoffs) {
+        if (ms) await new Promise((r) => setTimeout(r, ms));
+        try {
+          const raw = await wv.executeJavaScript(script);
+          const parsed: RawSnap | null =
+            typeof raw === "string" ? JSON.parse(raw) : (raw as RawSnap);
+          if (
+            parsed?.ok &&
+            typeof parsed.text === "string" &&
+            parsed.text.trim().length >= 50
+          ) {
+            return {
+              url: parsed.url ?? currentUrl,
+              title: parsed.title ?? activeTab?.title ?? "",
+              text: parsed.text.trim(),
+              description: parsed.description,
+              siteName: parsed.siteName,
+              headings: parsed.headings,
+            };
+          }
+        } catch (err) {
+          console.warn("[getPageSnapshot] in-page attempt failed", err);
+        }
+      }
       return null;
+    };
+
+    // Run both in parallel — server-side is independent and often faster
+    // than waiting for an SPA to settle.
+    const [inPage, serverSide] = await Promise.all([
+      tryInPage(),
+      fetchServerSide(),
+    ]);
+    const snap = inPage ?? serverSide;
+    if (snap) return snap;
+
+    // Both failed — produce a precise diagnostic.
+    if (!currentUrl || currentUrl === "about:blank") {
+      throw new Error(
+        "This tab has no page loaded. Type a URL in the address bar and try again.",
+      );
     }
-  }, [activeId, getWebview]);
+    if (!wv) {
+      throw new Error(
+        `Couldn't read the page and the server-side fallback also failed. The URL "${currentUrl}" may be unreachable from the network or blocked by CORS.`,
+      );
+    }
+    throw new Error(
+      "The page is loaded but has very little extractable text (likely a JS-heavy app that hasn't finished rendering). Wait a moment and try again.",
+    );
+  }, [activeId, activeTab?.url, activeTab?.title, getWebview]);
+
+  // ── Plugin runner — executes plugin.code inside the active webview. ─────
+  const { data: plugins = [] } = useBrowserPlugins();
+  const runPluginInActiveWebview = useCallback(
+    async (plugin: BrowserPlugin): Promise<unknown> => {
+      const wv = getWebview(activeId);
+      if (!wv) throw new Error("No active tab");
+      try {
+        if (wv.isLoading()) {
+          await new Promise<void>((resolve) => {
+            let done = false;
+            const finish = () => {
+              if (done) return;
+              done = true;
+              wv.removeEventListener("did-stop-loading", finish as EventListener);
+              resolve();
+            };
+            wv.addEventListener("did-stop-loading", finish as EventListener, {
+              once: true,
+            });
+            setTimeout(finish, 2500);
+          });
+        }
+      } catch {
+        /* isLoading throws when not yet attached — proceed */
+      }
+      // Plugins return their raw value — Electron auto-marshalls primitives,
+      // arrays, and plain objects. We DO NOT JSON.stringify on the page side
+      // so the user-authored plugin can return any of those shapes.
+      return wv.executeJavaScript(plugin.code);
+    },
+    [activeId, getWebview],
+  );
 
   // ── Navigation helpers (act on the active tab) ──────────────────────────
+  const routerNavigate = useRouterNavigate();
   const navigate = useCallback(
     (input: string) => {
-      const url = normalizeUrl(input);
+      const parsed = classifyAddressInput(input);
+      if (parsed.kind === "search") {
+        // Free-text query → send to local JoySearch instead of Google.
+        routerNavigate({ to: "/joy-search", search: { q: parsed.query } });
+        return;
+      }
+      const url = parsed.url;
       if (!activeTab) return;
       updateTab(activeTab.id, { addressInput: url });
       const wv = getWebview(activeTab.id);
       if (wv) wv.loadURL(url);
       else updateTab(activeTab.id, { url });
     },
-    [activeTab, updateTab, getWebview],
+    [activeTab, updateTab, getWebview, routerNavigate],
   );
 
   const handleAddressSubmit = (e: React.FormEvent) => {
@@ -303,7 +590,46 @@ export default function SmartBrowserPage() {
           </form>
 
           {/* Right actions */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 relative">
+                    {/* Three dots menu */}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => setShowMenu((v) => !v)}
+                      title="More actions"
+                    >
+                      <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="3.5" r="1.5" fill="currentColor"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/><circle cx="9" cy="14.5" r="1.5" fill="currentColor"/></svg>
+                    </Button>
+                    {showMenu && (
+                      <div className="absolute right-0 top-9 z-50 min-w-[180px] bg-popover border border-border rounded shadow-lg py-1 animate-in fade-in slide-in-from-top-2">
+                        <button
+                          className="w-full text-left px-4 py-2 text-sm hover:bg-muted/40"
+                          onClick={handleBookmarkPage}
+                          disabled={!activeTab?.url || bookmarks.some((b) => b.url === activeTab.url)}
+                        >
+                          {bookmarks.some((b) => b.url === activeTab?.url)
+                            ? "Bookmarked"
+                            : "Bookmark this page"}
+                        </button>
+                        {/* Future: manage bookmarks, settings, etc. */}
+                      </div>
+                    )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              onClick={() =>
+                routerNavigate({
+                  to: "/joy-search",
+                  search: { q: activeTab?.addressInput ?? "" },
+                })
+              }
+              title="Open JoySearch — local-AI web search"
+            >
+              <Search className="h-3.5 w-3.5 text-sky-500" />
+              <span className="hidden @sm:inline">JoySearch</span>
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -354,6 +680,24 @@ export default function SmartBrowserPage() {
               variant="ghost"
               size="icon"
               className="h-7 w-7"
+              onClick={() => openSideTab("plugins")}
+              title="Browser plugins"
+            >
+              <Puzzle className="h-3.5 w-3.5 text-emerald-500" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => openSideTab("agent")}
+              title="Autonomous web agent"
+            >
+              <Bot className="h-3.5 w-3.5 text-sky-500" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
               onClick={handleOpenExternal}
               title="Open in system browser"
             >
@@ -378,7 +722,7 @@ export default function SmartBrowserPage() {
 
         {/* Bookmarks bar */}
         <div className="flex items-center gap-1 px-3 pb-1.5 overflow-x-auto scrollbar-thin">
-          {DEFAULT_BOOKMARKS.map((bm) => (
+          {bookmarks.map((bm) => (
             <button
               key={bm.url}
               type="button"
@@ -389,10 +733,16 @@ export default function SmartBrowserPage() {
                   openTab(bm.url, { background: true });
                 }
               }}
-              className="shrink-0 flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+              className="shrink-0 flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground group"
+              title={bm.url}
             >
               <Globe className="h-3 w-3" />
               {bm.label}
+              {/* Remove button (hidden by default, show on hover, for future manage UI) */}
+              {/* <span
+                className="ml-1 text-[10px] text-red-400 opacity-0 group-hover:opacity-100 cursor-pointer"
+                onClick={(e) => { e.stopPropagation(); removeBookmark(bm.url); }}
+              >×</span> */}
             </button>
           ))}
         </div>
@@ -465,6 +815,8 @@ export default function SmartBrowserPage() {
               {(
                 [
                   { id: "ai" as const, label: "AI", icon: Sparkles, color: "text-violet-500" },
+                  { id: "agent" as const, label: "Agent", icon: Bot, color: "text-sky-500" },
+                  { id: "plugins" as const, label: "Plugins", icon: Puzzle, color: "text-emerald-500" },
                   { id: "wallet" as const, label: "Wallet", icon: WalletIcon, color: "text-amber-500" },
                   { id: "privacy" as const, label: "Data", icon: Shield, color: "text-emerald-500" },
                 ]
@@ -490,7 +842,25 @@ export default function SmartBrowserPage() {
               })}
             </div>
             <div className="flex-1 min-h-0">
-              {sideTab === "ai" && <BrowserAiPanel getPageSnapshot={getPageSnapshot} />}
+              {sideTab === "ai" && (
+                <BrowserAiPanel
+                  getPageSnapshot={getPageSnapshot}
+                  pageActionPlugins={plugins}
+                  runPluginInActiveWebview={runPluginInActiveWebview}
+                />
+              )}
+              {sideTab === "agent" && (
+                <BrowserAgentPanel
+                  getActiveWebview={() => getWebview(activeId)}
+                  openTab={(url, opts) => openTab(url, opts)}
+                />
+              )}
+              {sideTab === "plugins" && (
+                <BrowserPluginsPanel
+                  currentUrl={activeTab?.url}
+                  runPluginInActiveWebview={runPluginInActiveWebview}
+                />
+              )}
               {sideTab === "wallet" && <JoyWalletPanel />}
               {sideTab === "privacy" && <PrivacyPanel />}
             </div>

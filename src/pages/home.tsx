@@ -151,24 +151,30 @@ export default function HomePage() {
       // Run the App Clarification agent first. It returns a refined brief
       // (asking 1–4 questions inline if needed). The agent uses
       // `quickStartConfig` chips/advanced fields as known facts.
+      //
+      // Skip in "ask" mode — the user explicitly chose Q&A over building,
+      // so the extra "Checking what you've got…" reasoning step is just
+      // noise. Build / agent / local-agent modes still get the brief.
       let refinedPrompt = inputValue;
       let appName = generateCuteAppName();
 
-      try {
-        posthog.capture("home:clarify-start");
-        const result = await clarification.start({
-          prompt: inputValue,
-          config: quickStartConfig,
-        });
-        if (result.brief) {
-          refinedPrompt = result.brief.refinedPrompt || inputValue;
-          appName = result.brief.title?.trim() || appName;
-          setLastBuildBrief(result.brief);
-          posthog.capture("home:clarify-complete");
+      if (settings?.selectedChatMode !== "ask") {
+        try {
+          posthog.capture("home:clarify-start");
+          const result = await clarification.start({
+            prompt: inputValue,
+            config: quickStartConfig,
+          });
+          if (result.brief) {
+            refinedPrompt = result.brief.refinedPrompt || inputValue;
+            appName = result.brief.title?.trim() || appName;
+            setLastBuildBrief(result.brief);
+            posthog.capture("home:clarify-complete");
+          }
+        } catch (clarErr) {
+          // Non-fatal — fall back to the user's raw prompt.
+          console.warn("Clarification agent failed; using raw prompt", clarErr);
         }
-      } catch (clarErr) {
-        // Non-fatal — fall back to the user's raw prompt.
-        console.warn("Clarification agent failed; using raw prompt", clarErr);
       }
 
       setIsLoading(true);

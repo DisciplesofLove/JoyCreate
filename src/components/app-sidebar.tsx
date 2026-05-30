@@ -745,6 +745,15 @@ const menuCategories = [
         activeText: "text-cyan-600 dark:text-cyan-400",
       },
       {
+        title: "8004scan",
+        to: "/8004scan",
+        icon: Fingerprint,
+        gradient: "from-emerald-500 to-teal-500",
+        hoverBg: "hover:bg-emerald-500/10",
+        activeBg: "bg-emerald-500/15",
+        activeText: "text-emerald-600 dark:text-emerald-400",
+      },
+      {
         title: "API Gateway",
         to: "/api-gateway",
         icon: KeyRound,

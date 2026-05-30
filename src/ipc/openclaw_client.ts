@@ -150,6 +150,32 @@ class OpenClawClientImpl {
     return this.ipcRenderer.invoke("openclaw:provider:health");
   }
 
+  // ===========================================================================
+  // COST TRACKING
+  // ===========================================================================
+
+  async getCostSummary(): Promise<{
+    todayUsd: number;
+    monthUsd: number;
+    allTimeUsd: number;
+    todayTokens: number;
+    monthTokens: number;
+    todayRequests: number;
+    budget: {
+      dailyLimitUsd: number;
+      monthlyLimitUsd: number;
+      warningThresholdPct: number;
+      autoDowngrade: boolean;
+      preferFree: boolean;
+    };
+    overBudget: boolean;
+    warningActive: boolean;
+    topModels: Array<{ model: string; cost: number; requests: number }>;
+    savedByLocal: number;
+  }> {
+    return this.ipcRenderer.invoke("openclaw:cost:summary");
+  }
+
   async configureProvider(params: OpenClawConfigureProviderParams): Promise<{ success: boolean }> {
     return this.ipcRenderer.invoke("openclaw:provider:configure", params);
   }

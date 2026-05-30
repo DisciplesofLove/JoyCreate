@@ -16,9 +16,22 @@ import * as path from "path";
 import * as crypto from "crypto";
 import log from "electron-log";
 import { v4 as uuidv4 } from "uuid";
+import { ethers } from "ethers";
 import { db } from "@/db";
 import { eq, and, desc, sql, count } from "drizzle-orm";
 import { publishAndForget } from "@/lib/joymarketplace/publish_orchestrator";
+import { monetizeDataset } from "@/lib/joymarketplace/dataset_monetization_orchestrator";
+import { purchaseEdition } from "@/lib/x402/purchase_orchestrator";
+import { jcnKeyManager } from "@/lib/jcn_key_manager";
+import {
+  DEFAULT_X402_CHAIN,
+  X402_RPC,
+  type X402ChainId,
+} from "@/config/x402";
+import type {
+  DataMonetization,
+  MonetizationLicense,
+} from "@/types/data_sovereignty_types";
 import {
   studioDatasets,
   datasetItems,
@@ -207,11 +220,183 @@ function detectModality(mimeType: string): "text" | "image" | "audio" | "video" 
 }
 
 /**
- * Sign data with Ed25519 (placeholder - integrate with vault)
+ * Sign data with Ed25519 using a persistent dataset-studio signing key.
+ * The keypair is generated on first use and stored under userData.
  */
-async function signData(_data: Buffer): Promise<string> {
-  // TODO: Integrate with vault for actual signing
-  return `sig_${uuidv4()}`;
+let signingKeyCache: crypto.KeyObject | null = null;
+
+async function getSigningKey(): Promise<crypto.KeyObject> {
+  if (signingKeyCache) return signingKeyCache;
+
+  const keyDir = path.join(app.getPath("userData"), "dataset-studio-keys");
+  await fs.ensureDir(keyDir);
+  const keyPath = path.join(keyDir, "signing.key");
+
+  if (await fs.pathExists(keyPath)) {
+    const der = await fsPromises.readFile(keyPath);
+    signingKeyCache = crypto.createPrivateKey({
+      key: der,
+      format: "der",
+      type: "pkcs8",
+    });
+    return signingKeyCache;
+  }
+
+  const { privateKey } = crypto.generateKeyPairSync("ed25519");
+  const der = privateKey.export({ type: "pkcs8", format: "der" });
+  await fsPromises.writeFile(keyPath, der, { mode: 0o600 });
+  signingKeyCache = privateKey;
+  return signingKeyCache;
+}
+
+async function signData(data: Buffer): Promise<string> {
+  const privateKey = await getSigningKey();
+  return crypto.sign(null, data, privateKey).toString("base64");
+}
+
+// ============================================================================
+// Marketplace publish helpers
+// ============================================================================
+
+interface DatasetPublishArtifacts {
+  dataset: typeof studioDatasets.$inferSelect;
+  manifest?: typeof datasetManifests.$inferSelect;
+  contentBuffer: Buffer;
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * Load a dataset + its latest (or specified) manifest and build the
+ * content-addressed publish payload shared by the marketplace and x402 flows.
+ */
+async function buildDatasetPublishArtifacts(
+  datasetId: string,
+  manifestId?: string,
+): Promise<DatasetPublishArtifacts> {
+  const datasetRow = await db
+    .select()
+    .from(studioDatasets)
+    .where(eq(studioDatasets.id, datasetId))
+    .limit(1);
+  const dataset = datasetRow[0];
+  if (!dataset) {
+    throw new Error(`Dataset ${datasetId} not found`);
+  }
+
+  let manifest: typeof datasetManifests.$inferSelect | undefined;
+  if (manifestId) {
+    const m = await db
+      .select()
+      .from(datasetManifests)
+      .where(eq(datasetManifests.id, manifestId))
+      .limit(1);
+    manifest = m[0];
+  } else {
+    const m = await db
+      .select()
+      .from(datasetManifests)
+      .where(eq(datasetManifests.datasetId, datasetId))
+      .orderBy(desc(datasetManifests.id))
+      .limit(1);
+    manifest = m[0];
+  }
+
+  const items = await db
+    .select({
+      id: datasetItems.id,
+      modality: datasetItems.modality,
+      contentHash: datasetItems.contentHash,
+      byteSize: datasetItems.byteSize,
+      license: datasetItems.license,
+      split: datasetItems.split,
+    })
+    .from(datasetItems)
+    .where(eq(datasetItems.datasetId, datasetId));
+
+  const publishManifest = {
+    version: 1 as const,
+    dataset: {
+      id: dataset.id,
+      name: dataset.name,
+      description: dataset.description ?? null,
+      datasetType: dataset.datasetType,
+      supportedModalities: dataset.supportedModalities ?? [],
+      license: dataset.license,
+      licenseUrl: dataset.licenseUrl ?? null,
+      creatorName: dataset.creatorName ?? null,
+      creatorId: dataset.creatorId ?? null,
+      tags: dataset.tags ?? [],
+      itemCount: dataset.itemCount,
+      totalBytes: dataset.totalBytes,
+      schemaJson: dataset.schemaJson ?? null,
+    },
+    manifest: manifest
+      ? {
+          id: manifest.id,
+          version: manifest.version,
+          manifestHash: manifest.manifestHash,
+          merkleRoot: manifest.merkleRoot ?? null,
+          totalItems: manifest.totalItems,
+          totalBytes: manifest.totalBytes,
+          statsJson: manifest.statsJson ?? null,
+        }
+      : null,
+    items,
+    publishedAt: new Date().toISOString(),
+  };
+
+  const contentBuffer = Buffer.from(JSON.stringify(publishManifest, null, 2), "utf8");
+
+  const metadata: Record<string, unknown> = {
+    datasetId: dataset.id,
+    manifestId: manifest?.id ?? null,
+    itemCount: dataset.itemCount,
+    totalBytes: dataset.totalBytes,
+    datasetType: dataset.datasetType,
+    license: dataset.license,
+    modalities: dataset.supportedModalities ?? [],
+    merkleRoot: manifest?.merkleRoot ?? null,
+    manifestHash: manifest?.manifestHash ?? null,
+  };
+
+  return { dataset, manifest, contentBuffer, metadata };
+}
+
+/** Build a permissive default license for dataset monetization records. */
+function defaultDatasetLicense(licenseId: string): MonetizationLicense {
+  return {
+    type: "commercial",
+    allowedUses: ["inference", "training", "fine-tuning", "embedding", "analysis"],
+    prohibitedUses: ["resale"],
+    canSublicense: false,
+    canModify: true,
+    canRedistribute: false,
+    attributionRequired: true,
+    commercialUse: true,
+    geoRestrictions: [],
+    industryRestrictions: [],
+    customTermsCid: licenseId || undefined,
+  };
+}
+
+function resolveDatasetChain(value: unknown): X402ChainId {
+  if (value === "arbitrumSepolia" || value === "arbitrumOne") return value;
+  return DEFAULT_X402_CHAIN;
+}
+
+/** Load the active secp256k1 chain key as an ethers.Wallet on the x402 RPC. */
+async function loadDatasetWallet(chain: X402ChainId): Promise<ethers.Wallet> {
+  await jcnKeyManager.initialize();
+  const keys = await jcnKeyManager.listKeys("chain");
+  const active = keys.find((k) => k.active && k.algorithm === "secp256k1");
+  if (!active) {
+    throw new Error("no active chain (secp256k1) key in jcnKeyManager — import one in Settings");
+  }
+  const pk = await jcnKeyManager.getPrivateKey(active.keyId);
+  if (!pk) throw new Error("active chain key has no private material");
+  const provider = new ethers.JsonRpcProvider(X402_RPC[chain]);
+  const hex = pk.toString("hex");
+  return new ethers.Wallet(hex.startsWith("0x") ? hex : `0x${hex}`, provider);
 }
 
 // ============================================================================
@@ -1130,79 +1315,8 @@ export function registerDatasetStudioHandlers() {
       throw new Error("datasetId is required");
     }
 
-    const datasetRow = await db
-      .select()
-      .from(studioDatasets)
-      .where(eq(studioDatasets.id, args.datasetId))
-      .limit(1);
-    const dataset = datasetRow[0];
-    if (!dataset) {
-      throw new Error(`Dataset ${args.datasetId} not found`);
-    }
-
-    let manifest: typeof datasetManifests.$inferSelect | undefined;
-    if (args.manifestId) {
-      const m = await db
-        .select()
-        .from(datasetManifests)
-        .where(eq(datasetManifests.id, args.manifestId))
-        .limit(1);
-      manifest = m[0];
-    } else {
-      const m = await db
-        .select()
-        .from(datasetManifests)
-        .where(eq(datasetManifests.datasetId, args.datasetId))
-        .orderBy(desc(datasetManifests.id))
-        .limit(1);
-      manifest = m[0];
-    }
-
-    const items = await db
-      .select({
-        id: datasetItems.id,
-        modality: datasetItems.modality,
-        contentHash: datasetItems.contentHash,
-        byteSize: datasetItems.byteSize,
-        license: datasetItems.license,
-        split: datasetItems.split,
-      })
-      .from(datasetItems)
-      .where(eq(datasetItems.datasetId, args.datasetId));
-
-    const publishManifest = {
-      version: 1 as const,
-      dataset: {
-        id: dataset.id,
-        name: dataset.name,
-        description: dataset.description ?? null,
-        datasetType: dataset.datasetType,
-        supportedModalities: dataset.supportedModalities ?? [],
-        license: dataset.license,
-        licenseUrl: dataset.licenseUrl ?? null,
-        creatorName: dataset.creatorName ?? null,
-        creatorId: dataset.creatorId ?? null,
-        tags: dataset.tags ?? [],
-        itemCount: dataset.itemCount,
-        totalBytes: dataset.totalBytes,
-        schemaJson: dataset.schemaJson ?? null,
-      },
-      manifest: manifest
-        ? {
-            id: manifest.id,
-            version: manifest.version,
-            manifestHash: manifest.manifestHash,
-            merkleRoot: manifest.merkleRoot ?? null,
-            totalItems: manifest.totalItems,
-            totalBytes: manifest.totalBytes,
-            statsJson: manifest.statsJson ?? null,
-          }
-        : null,
-      items,
-      publishedAt: new Date().toISOString(),
-    };
-
-    const contentBuffer = Buffer.from(JSON.stringify(publishManifest, null, 2), "utf8");
+    const { dataset, contentBuffer, metadata } =
+      await buildDatasetPublishArtifacts(args.datasetId, args.manifestId);
 
     const outcome = await publishAndForget({
       assetType: "dataset",
@@ -1210,17 +1324,7 @@ export function registerDatasetStudioHandlers() {
       description: args.description ?? dataset.description ?? undefined,
       contentBuffer,
       contentMimeType: "application/json",
-      metadata: {
-        datasetId: dataset.id,
-        manifestId: manifest?.id ?? null,
-        itemCount: dataset.itemCount,
-        totalBytes: dataset.totalBytes,
-        datasetType: dataset.datasetType,
-        license: dataset.license,
-        modalities: dataset.supportedModalities ?? [],
-        merkleRoot: manifest?.merkleRoot ?? null,
-        manifestHash: manifest?.manifestHash ?? null,
-      },
+      metadata,
       priceUsdc: typeof args.priceUsdc === "number" ? args.priceUsdc : 0,
       royaltyBps: typeof args.royaltyBps === "number" ? args.royaltyBps : 250,
       dryRun: args.dryRun === true,
@@ -1245,6 +1349,138 @@ export function registerDatasetStudioHandlers() {
     );
 
     return outcome;
+  });
+
+  // -------------------------------------------------------------------------
+  // dataset:monetize — publish to marketplace AND create an EditionController
+  // drop so the listing is purchasable through the x402 pay-per-mint rail.
+  // Persists the resulting DataMonetization onto the dataset row.
+  // -------------------------------------------------------------------------
+  ipcMain.handle("dataset:monetize", async (_event, args: {
+    datasetId: string;
+    manifestId?: string;
+    name?: string;
+    description?: string;
+    /** Human-readable USDC price (e.g. 1.5). */
+    priceUsdc: number;
+    royaltyBps?: number;
+    storeSlug: string;
+    chain?: string;
+    maxSupply?: number;
+    requiresProof?: boolean;
+    dryRun?: boolean;
+  }) => {
+    if (!args?.datasetId) {
+      throw new Error("datasetId is required");
+    }
+    if (typeof args.priceUsdc !== "number" || args.priceUsdc < 0) {
+      throw new Error("priceUsdc must be a non-negative number (human USDC units)");
+    }
+    if (!args.storeSlug || typeof args.storeSlug !== "string") {
+      throw new Error("storeSlug is required to create the x402 drop");
+    }
+
+    const chain = resolveDatasetChain(args.chain);
+    const { dataset, manifest, contentBuffer, metadata } =
+      await buildDatasetPublishArtifacts(args.datasetId, args.manifestId);
+
+    const outcome = await monetizeDataset({
+      publish: {
+        assetType: "dataset",
+        name: args.name ?? dataset.name,
+        description: args.description ?? dataset.description ?? undefined,
+        contentBuffer,
+        contentMimeType: "application/json",
+        metadata,
+        storeSlug: args.storeSlug,
+      },
+      chain,
+      storeSlug: args.storeSlug,
+      assetLeafSource: manifest?.merkleRoot ?? manifest?.manifestHash ?? null,
+      priceUsdc: args.priceUsdc,
+      royaltyBps: typeof args.royaltyBps === "number" ? args.royaltyBps : 250,
+      maxSupply: args.maxSupply,
+      requiresProof: args.requiresProof === true,
+      license: defaultDatasetLicense(dataset.license),
+      dryRun: args.dryRun === true,
+    });
+
+    if (outcome.ok && !outcome.dryRun) {
+      try {
+        await db
+          .update(studioDatasets)
+          .set({
+            publishStatus: "marketplace_published",
+            monetizationJson: outcome.monetization,
+            updatedAt: new Date(),
+          })
+          .where(eq(studioDatasets.id, dataset.id));
+      } catch (err) {
+        logger.warn("Failed to persist dataset monetization after monetize:", err);
+      }
+    }
+
+    logger.info(
+      `Dataset ${dataset.id} monetize ok=${outcome.ok} dryRun=${outcome.dryRun} ` +
+        `tokenId=${outcome.publish.tokenId ?? "n/a"} dropId=${outcome.dropId ?? "n/a"}`,
+    );
+
+    return outcome;
+  });
+
+  // -------------------------------------------------------------------------
+  // dataset:purchase — pay-per-mint a monetized dataset via the x402 rail.
+  // Reads the stored x402 drop id, settles USDC, mints the edition, and
+  // increments the dataset's revenue/purchase counters.
+  // -------------------------------------------------------------------------
+  ipcMain.handle("dataset:purchase", async (_event, args: { datasetId: string }) => {
+    if (!args?.datasetId) {
+      throw new Error("datasetId is required");
+    }
+
+    const datasetRow = await db
+      .select()
+      .from(studioDatasets)
+      .where(eq(studioDatasets.id, args.datasetId))
+      .limit(1);
+    const dataset = datasetRow[0];
+    if (!dataset) {
+      throw new Error(`Dataset ${args.datasetId} not found`);
+    }
+
+    const monetization = dataset.monetizationJson as DataMonetization | null;
+    if (!monetization?.x402DropId) {
+      throw new Error(
+        `Dataset ${args.datasetId} has no x402 drop — monetize it first (dataset:monetize)`,
+      );
+    }
+    const chain = resolveDatasetChain(monetization.x402ChainId);
+
+    const wallet = await loadDatasetWallet(chain);
+    const result = await purchaseEdition(wallet, {
+      chain,
+      dropId: monetization.x402DropId,
+    });
+
+    try {
+      const updated: DataMonetization = {
+        ...monetization,
+        totalPurchases: (monetization.totalPurchases ?? 0) + 1,
+        totalRevenue: (monetization.totalRevenue ?? 0) + (monetization.price ?? 0),
+      };
+      await db
+        .update(studioDatasets)
+        .set({ monetizationJson: updated, updatedAt: new Date() })
+        .where(eq(studioDatasets.id, dataset.id));
+    } catch (err) {
+      logger.warn("Failed to update dataset revenue counters after purchase:", err);
+    }
+
+    logger.info(
+      `Dataset ${dataset.id} purchased: drop ${result.dropId} -> token ${result.tokenId}`,
+    );
+
+    return result;
   });
 
   logger.info("Dataset Studio handlers registered");

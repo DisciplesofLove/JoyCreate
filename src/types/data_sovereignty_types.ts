@@ -238,6 +238,16 @@ export interface DataMonetization {
   /** NFT contract address */
   nftContractAddress?: WalletAddress;
   
+  /**
+   * EditionController drop id used for pay-per-mint x402 purchases.
+   * Bridges a published marketplace dataset to the on-chain drop that the
+   * x402 settlement rail mints against.
+   */
+  x402DropId?: string;
+  
+  /** Chain the x402 drop lives on (e.g. "arbitrumSepolia"). */
+  x402ChainId?: string;
+  
   /** Total revenue earned */
   totalRevenue: number;
   

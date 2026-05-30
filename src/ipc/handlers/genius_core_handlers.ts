@@ -11,7 +11,7 @@
  * channel shapes do not change as concrete subsystems land.
  */
 
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import { BrowserWindow } from "electron";
 import log from "electron-log";
 
@@ -46,6 +46,7 @@ import {
   type DistillationReceipt,
   type DistillationStatus,
 } from "@/lib/genius_core/distillation_scheduler";
+import { createLocalDistillationTrainer } from "@/lib/genius_core/local_distillation_trainer";
 import {
   getAdapterEvaluator,
   setupAdapterEvaluator,
@@ -53,6 +54,7 @@ import {
   type EvalSet,
 } from "@/lib/genius_core/adapter_evaluator";
 import { readSettings, writeSettings } from "@/main/settings";
+import { getGeniusCoreSettings } from "@/main/settings";
 import type { UserSettings } from "@/lib/schemas";
 
 const logger = log.scope("genius_core_handlers");
@@ -199,12 +201,37 @@ async function ensureEditLogger() {
   }
 }
 
+/**
+ * Tracks the project (== appId) the user most recently edited. Updated by the
+ * `genius-core:record-edit` handler and consumed by the distillation
+ * scheduler's idle path as the "active project" to distil.
+ */
+let lastEditProjectId: number | null = null;
+
+/**
+ * Resolve the active project for idle distillation. Prefers the most
+ * recently edited project; the scheduler skips the run when this is null.
+ */
+const resolveActiveProject = async (): Promise<number | null> => {
+  if (
+    typeof lastEditProjectId === "number" &&
+    Number.isInteger(lastEditProjectId) &&
+    lastEditProjectId > 0
+  ) {
+    return lastEditProjectId;
+  }
+  return null;
+};
+
 /** Lazy distillation-scheduler access mirroring `ensureSlotManager`. */
 async function ensureDistillationScheduler() {
   try {
     return getDistillationScheduler();
   } catch {
-    return setupDistillationScheduler();
+    return setupDistillationScheduler({
+      trainer: createLocalDistillationTrainer(),
+      activeProjectResolver: resolveActiveProject,
+    });
   }
 }
 
@@ -299,6 +326,69 @@ export function assertRecordEditInput(value: unknown): RecordInput {
     occurredAtMs:
       typeof v.occurredAtMs === "number" ? v.occurredAtMs : undefined,
   };
+}
+
+let geniusCoreBootstrapped = false;
+
+/**
+ * Boot-time bootstrap so Genius Core is "running" without waiting for the
+ * first renderer interaction. Idempotent and best-effort: failures are
+ * logged but never block app startup.
+ *
+ * Privacy note: this does NOT bypass the capture consent gate. The edit
+ * logger still drops every record unless the user has opted into telemetry
+ * AND enabled the keystroke logger — the gate is enforced per-record in
+ * `setupEditLogger`. Here we only (a) pre-warm the logger so capture is
+ * ready instantly once permitted, (b) start the nightly idle scheduler when
+ * the user enabled it, and (c) flush buffered edits on quit.
+ */
+async function bootstrapGeniusCore(): Promise<void> {
+  if (geniusCoreBootstrapped) return;
+  geniusCoreBootstrapped = true;
+
+  let gc: ReturnType<typeof getGeniusCoreSettings> | null = null;
+  try {
+    gc = getGeniusCoreSettings();
+  } catch (err) {
+    logger.warn("Genius Core bootstrap: failed to read settings", err);
+    return;
+  }
+
+  // Pre-warm the edit logger when capture is plausibly active so the first
+  // edit isn't dropped while the singleton lazily initialises.
+  if (gc.enabled || gc.keystrokeLoggerEnabled) {
+    try {
+      await ensureEditLogger();
+    } catch (err) {
+      logger.warn("Genius Core bootstrap: edit logger setup failed", err);
+    }
+  }
+
+  // Start the nightly distillation idle monitor when the user enabled it.
+  // Safe even before the production trainer is wired: idle ticks return
+  // early when there is no active project.
+  if (gc.nightlyDistillationEnabled) {
+    try {
+      const sched = await ensureDistillationScheduler();
+      sched.start();
+    } catch (err) {
+      logger.warn("Genius Core bootstrap: distillation scheduler start failed", err);
+    }
+  }
+
+  // Flush any buffered edits on quit so the ≤debounce-window tail is never
+  // lost. Best-effort; guarded against an uninitialised logger.
+  try {
+    app.on("before-quit", () => {
+      try {
+        void getEditLogger().flush();
+      } catch {
+        // logger not initialised or already disposed — nothing to flush
+      }
+    });
+  } catch (err) {
+    logger.warn("Genius Core bootstrap: before-quit hook failed", err);
+  }
 }
 
 export function registerGeniusCoreHandlers(): void {
@@ -422,6 +512,11 @@ export function registerGeniusCoreHandlers(): void {
     "genius-core:record-edit",
     async (_e, raw: unknown): Promise<{ accepted: boolean }> => {
       const input = assertRecordEditInput(raw);
+      // Track the active project for idle distillation regardless of whether
+      // the privacy gate accepts the record below.
+      if (Number.isInteger(input.projectId) && input.projectId > 0) {
+        lastEditProjectId = input.projectId;
+      }
       try {
         const logger_ = await ensureEditLogger();
         const accepted = logger_.record(input);
@@ -677,6 +772,10 @@ export function registerGeniusCoreHandlers(): void {
       );
     }
   }
+
+  // Fire-and-forget boot bootstrap: pre-warm capture, start the nightly idle
+  // scheduler when enabled, and register the before-quit flush.
+  void bootstrapGeniusCore();
 }
 
 let distillationProgressForwarderInstalled = false;

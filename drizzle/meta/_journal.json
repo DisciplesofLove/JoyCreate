@@ -498,6 +498,27 @@
       "when": 1779741863040,
       "tag": "0070_dusty_roughhouse",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "6",
+      "when": 1780019835804,
+      "tag": "0071_illegal_firebird",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "6",
+      "when": 1780072433073,
+      "tag": "0072_furry_scourge",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "6",
+      "when": 1780104862777,
+      "tag": "0073_strange_bill_hollister",
+      "breakpoints": true
     }
   ]
 }

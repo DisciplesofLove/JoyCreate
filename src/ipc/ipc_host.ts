@@ -49,6 +49,12 @@ import { registerMarketplaceSyncHandlers } from "./handlers/marketplace_sync_han
 import { registerJoyBridgeHandlers } from "./handlers/joybridge_handlers";
 import { registerMarketplaceInboundHandlers } from "./handlers/marketplace_inbound_handlers";
 import { registerDataMarketHandlers } from "./handlers/data_market_handlers";
+import { registerErc8004Handlers } from "./handlers/erc8004_handlers";
+import { registerGlueHandlers } from "./handlers/glue_handlers";
+import { registerX402Handlers } from "./handlers/x402_handlers";
+import { registerBrokerHandlers } from "./handlers/broker_handlers";
+import { registerTeeHandlers } from "./handlers/tee_handlers";
+import { registerOptimisticStakingHandlers } from "./handlers/optimistic_staking_handlers";
 import { startLitRelayer } from "../lib/onchain/lit_relayer";
 import { registerApiGatewayHandlers } from "./handlers/api_gateway_handlers";
 import { startApiGateway } from "../lib/api_gateway/service";
@@ -258,6 +264,12 @@ export function registerIpcHandlers() {
   registerJoyBridgeHandlers();
   registerMarketplaceInboundHandlers(); // Inbound: Joy Marketplace → JoyCreate webhook handler
   registerDataMarketHandlers(); // Arbitrum Stylus: DataProvenance + DataLease
+  registerErc8004Handlers(); // Arbitrum Stylus: ERC-8004 Identity/Reputation/Validation registries
+  registerGlueHandlers(); // Arbitrum Stylus: StoreRegistry/EditionController/AgentMandate glue contracts
+  registerX402Handlers(); // X402 pay-per-prompt: USDC EIP-3009 settlement + RevenueSplitter 80/10/10
+  registerBrokerHandlers(); // ERC-1144 interface broker: machine-readable resource blueprints
+  registerTeeHandlers(); // Verifiable inference: provider-agnostic attestation (local/optimistic/lit/nitro)
+  registerOptimisticStakingHandlers(); // Bonded attestations: stake/slash economics for the optimistic provider
   startLitRelayer(); // background poll: pending lease grants → Lit ACC provisioning
   registerApiGatewayHandlers(); // expose agents as metered HTTP endpoints
   installAgentInvoker(); // bind gateway → real LLM via getModelClient

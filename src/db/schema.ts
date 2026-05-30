@@ -6,6 +6,7 @@ import type {
   ChatPlanPhase,
   ChatPlanStatus,
 } from "@/shared/chat_plan_types";
+import type { DataMonetization } from "@/types/data_sovereignty_types";
 
 export const AI_MESSAGES_SDK_VERSION = "ai@v5" as const;
 
@@ -1120,6 +1121,9 @@ export const studioDatasets = sqliteTable("studio_datasets", {
   // Schema definition (for structured datasets)
   schemaJson: text("schema_json", { mode: "json" }).$type<DatasetSchemaV2 | null>(),
   
+  // Monetization linkage (marketplace listing + x402 drop) populated after publish
+  monetizationJson: text("monetization_json", { mode: "json" }).$type<DataMonetization | null>(),
+  
   // Timestamps
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
@@ -1831,6 +1835,17 @@ export const publishBundles = sqliteTable("onchain_publish_bundles", {
   contentCid: text("content_cid"),
   metadataCid: text("metadata_cid"),
   metadataUri: text("metadata_uri"),
+  // IPLD Merkle DAG shard (Web 4.0 content layer)
+  shardRootCid: text("shard_root_cid"),
+  merkleRoot: text("merkle_root"),
+  contentHash: text("content_hash"),
+  // Celestia DA anchor for the shard CAR
+  celestiaHeight: integer("celestia_height"),
+  celestiaCommitment: text("celestia_commitment"),
+  celestiaNamespace: text("celestia_namespace"),
+  // On-chain DataProvenance soulbound token
+  provenanceTokenId: text("provenance_token_id"),
+  provenanceTxHash: text("provenance_tx_hash"),
   tokenId: text("token_id"),
   listingId: text("listing_id"),
   mintTxHash: text("mint_tx_hash"),
@@ -2548,6 +2563,24 @@ export const videoStudioVideos = sqliteTable("video_studio_videos", {
   /** Provenance manifest (model, params, training data refs, signer) — see ProvenanceManifest. */
   provenanceJson: text("provenance_json", { mode: "json" }).$type<Record<string, unknown> | null>(),
   createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+// -- Video Editor Projects (timeline-based multi-clip editing) ------
+export const videoProjects = sqliteTable("video_projects", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().default("Untitled Project"),
+  /** Serialized VideoTimeline (clips, overlays, audio tracks, settings). */
+  timelineJson: text("timeline_json", { mode: "json" }).$type<Record<string, unknown>>(),
+  /** Cached thumbnail (first clip frame) path on disk. */
+  thumbnailPath: text("thumbnail_path"),
+  /** DB id of the most recent rendered output video, if any. */
+  renderedVideoId: integer("rendered_video_id"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
 });

@@ -5,6 +5,7 @@ import type { VideoStudioVideo, VideoStudioProvider } from "@/ipc/ipc_types";
 import { UnifiedModelPicker } from "@/components/studio/UnifiedModelPicker";
 import { ProviderCarousel } from "@/components/studio/ProviderCarousel";
 import { PublishContextMenu } from "@/components/studio/PublishContextMenu";
+import { VideoEditor } from "@/components/video-studio/VideoEditor";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,6 +61,7 @@ import {
   RotateCcw,
   FastForward,
   Layers,
+  Scissors,
 } from "lucide-react";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -930,6 +932,7 @@ function Gallery({
   videos,
   selectedId,
   onSelect,
+  onOpenEditor,
   onDelete,
   onSaveToDisk,
   onOpenInFolder,
@@ -943,6 +946,7 @@ function Gallery({
   videos: VideoStudioVideo[];
   selectedId: number | null;
   onSelect: (id: number) => void;
+  onOpenEditor: (id: number) => void;
   onDelete: (id: number) => void;
   onSaveToDisk: (id: number) => void;
   onOpenInFolder: (id: number) => void;
@@ -1025,6 +1029,7 @@ function Gallery({
                     : "border-border hover:border-violet-500/50"
                 }`}
                 onClick={() => onSelect(vid.id)}
+                onDoubleClick={() => onOpenEditor(vid.id)}
               >
                 <VideoThumbnail videoId={vid.id} />
 
@@ -1070,6 +1075,10 @@ function Gallery({
                         <DropdownMenuItem onClick={() => onSelect(vid.id)}>
                           <Play className="w-3 h-3 mr-2" />
                           Play
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => onOpenEditor(vid.id)}>
+                          <Scissors className="w-3 h-3 mr-2" />
+                          Edit Video
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => onReusePrompt(vid.prompt)}
@@ -1202,6 +1211,7 @@ function Gallery({
 export function VideoStudioTab() {
   const queryClient = useQueryClient();
   const [selectedVideoId, setSelectedVideoId] = useState<number | null>(null);
+  const [editorVideoId, setEditorVideoId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [providerFilter, setProviderFilter] = useState("all");
   const debouncedSearch = useDebounce(searchQuery, 300);
@@ -1318,6 +1328,7 @@ export function VideoStudioTab() {
           videos={videos}
           selectedId={selectedVideoId}
           onSelect={setSelectedVideoId}
+          onOpenEditor={setEditorVideoId}
           onDelete={(id) => deleteMutation.mutate(id)}
           onSaveToDisk={handleSaveToDisk}
           onOpenInFolder={handleOpenInFolder}
@@ -1338,6 +1349,14 @@ export function VideoStudioTab() {
           onClose={() => setSelectedVideoId(null)}
           onSaveToDisk={handleSaveToDisk}
           onExtractFrames={handleExtractFrames}
+        />
+      )}
+
+      {/* Full-screen timeline editor */}
+      {editorVideoId !== null && (
+        <VideoEditor
+          videoId={editorVideoId}
+          onClose={() => setEditorVideoId(null)}
         />
       )}
     </div>

@@ -85,7 +85,9 @@ import type {
   ImageStudioProvider,
   VideoStudioVideo,
   VideoStudioProvider,
+  VideoProject,
 } from "./ipc_types";
+import type { VideoTimeline } from "@/lib/video/timeline_types";
 import type { ConsoleEntry } from "../atoms/appAtoms";
 import type { Template } from "../shared/templates";
 import type {
@@ -324,6 +326,9 @@ export class IpcClient {
   private gauntletProgressHandlers: Set<
     (evt: GauntletProgressEvent) => void
   >;
+  private videoRenderProgressHandlers: Set<
+    (evt: { fraction: number; stage: string }) => void
+  >;
   private constructor() {
     this.ipcRenderer = ((window as any).electron?.ipcRenderer ?? {
       invoke: async (..._args: any[]) => null,
@@ -346,6 +351,7 @@ export class IpcClient {
     this.agentBlueprintHandlers = new Set();
     this.whitehatMcpPendingHandlers = new Set();
     this.gauntletProgressHandlers = new Set();
+    this.videoRenderProgressHandlers = new Set();
     // Set up listeners for stream events
     this.ipcRenderer.on("chat:response:chunk", (data) => {
       if (
@@ -481,6 +487,15 @@ export class IpcClient {
       ) {
         for (const handler of this.gauntletProgressHandlers) {
           handler(data as unknown as GauntletProgressEvent);
+        }
+      }
+    });
+
+    // Video editor — render progress events
+    this.ipcRenderer.on("video-studio:render-progress", (data) => {
+      if (data && typeof data === "object" && "fraction" in data) {
+        for (const handler of this.videoRenderProgressHandlers) {
+          handler(data as unknown as { fraction: number; stage: string });
         }
       }
     });
@@ -5305,6 +5320,92 @@ export class IpcClient {
     return this.ipcRenderer.invoke("system:services-health");
   }
 
+  // ── External Services (n8n, Celestia, Ollama, Radicle) ──
+
+  public async listServices(): Promise<
+    Array<{
+      id: "n8n" | "celestia" | "ollama" | "radicle";
+      name: string;
+      description: string;
+      port?: number;
+      healthCheckUrl?: string;
+    }>
+  > {
+    return this.ipcRenderer.invoke("services:list");
+  }
+
+  public async getServicesStatus(): Promise<
+    Array<{
+      id: "n8n" | "celestia" | "ollama" | "radicle";
+      name: string;
+      running: boolean;
+      pid?: number;
+      startedAt?: number;
+      port?: number;
+      error?: string;
+    }>
+  > {
+    return this.ipcRenderer.invoke("services:status:all");
+  }
+
+  public async startService(
+    serviceId: "n8n" | "celestia" | "ollama" | "radicle",
+  ): Promise<{ success: boolean; message?: string }> {
+    return this.ipcRenderer.invoke("services:start", serviceId);
+  }
+
+  public async stopService(
+    serviceId: "n8n" | "celestia" | "ollama" | "radicle",
+  ): Promise<{ success: boolean; message?: string }> {
+    return this.ipcRenderer.invoke("services:stop", serviceId);
+  }
+
+  public async startAllServices(): Promise<{ success: boolean; message?: string }> {
+    return this.ipcRenderer.invoke("services:start:all");
+  }
+
+  public async stopAllServices(): Promise<{ success: boolean; message?: string }> {
+    return this.ipcRenderer.invoke("services:stop:all");
+  }
+
+  // ── Agent Builder: agent fleet ──
+
+  public async listBuilderAgents(args?: {
+    status?: "draft" | "active" | "paused" | "archived";
+    type?: string;
+    tags?: string[];
+    search?: string;
+  }): Promise<{
+    success: boolean;
+    agents: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      type: string;
+      status: "draft" | "active" | "paused" | "archived";
+      tags: string[];
+      createdAt: string | Date;
+      updatedAt: string | Date;
+      stats: {
+        totalExecutions: number;
+        successfulExecutions: number;
+        failedExecutions?: number;
+        averageResponseTime: number;
+        lastExecutedAt?: string | Date;
+      };
+    }>;
+  }> {
+    return this.ipcRenderer.invoke("agent-builder:list-agents", args);
+  }
+
+  public async updateBuilderAgent(args: {
+    agentId: string;
+    updates: { status?: "draft" | "active" | "paused" | "archived" } & Record<string, unknown>;
+    bumpVersion?: boolean;
+  }): Promise<{ success: boolean; agent?: unknown }> {
+    return this.ipcRenderer.invoke("agent-builder:update-agent", args);
+  }
+
   // ── Celestia Node Management ──
 
   public async startCelestiaNode(): Promise<{ success: boolean; message: string }> {
@@ -5482,6 +5583,16 @@ export class IpcClient {
     return this.ipcRenderer.invoke("image-studio:variations", params);
   }
 
+  public async saveEditedImage(params: {
+    imageBase64: string;
+    sourceImageId?: number;
+    prompt?: string;
+    width?: number;
+    height?: number;
+  }): Promise<ImageStudioImage> {
+    return this.ipcRenderer.invoke("image-studio:save-edited", params);
+  }
+
   // ── Video Studio ──────────────────────────────────────────────────────────
 
   public async generateVideo(params: {
@@ -5551,6 +5662,63 @@ export class IpcClient {
   }): Promise<{ videoDataUrl: string; duration: number | null; fps: number | null; requestedFrames: number }> {
     return this.ipcRenderer.invoke("video-studio:extract-frames", params);
   }
+
+  // ── Video Editor (timeline) ───────────────────────────────────────────────
+
+  public async probeVideo(id: number): Promise<{
+    duration: number;
+    width: number;
+    height: number;
+    fps: number;
+    hasAudio: boolean;
+  }> {
+    return this.ipcRenderer.invoke("video-studio:probe", id);
+  }
+
+  public async renderTimeline(params: {
+    timeline: VideoTimeline;
+    projectId?: number;
+    projectName?: string;
+  }): Promise<VideoStudioVideo> {
+    return this.ipcRenderer.invoke("video-studio:render", params);
+  }
+
+  public onVideoRenderProgress(
+    handler: (evt: { fraction: number; stage: string }) => void,
+  ): () => void {
+    this.videoRenderProgressHandlers.add(handler);
+    return () => {
+      this.videoRenderProgressHandlers.delete(handler);
+    };
+  }
+
+  public async listVideoProjects(): Promise<VideoProject[]> {
+    return this.ipcRenderer.invoke("video-projects:list");
+  }
+
+  public async getVideoProject(id: number): Promise<VideoProject> {
+    return this.ipcRenderer.invoke("video-projects:get", id);
+  }
+
+  public async createVideoProject(params: {
+    name?: string;
+    timeline?: VideoTimeline;
+  }): Promise<VideoProject> {
+    return this.ipcRenderer.invoke("video-projects:create", params);
+  }
+
+  public async updateVideoProject(params: {
+    id: number;
+    name?: string;
+    timeline?: VideoTimeline;
+  }): Promise<VideoProject> {
+    return this.ipcRenderer.invoke("video-projects:update", params);
+  }
+
+  public async deleteVideoProject(id: number): Promise<{ success: boolean }> {
+    return this.ipcRenderer.invoke("video-projects:delete", id);
+  }
+
 
   // ── Marketplace Browse ──────────────────────────────────────────────────
 
@@ -6106,6 +6274,20 @@ export class IpcClient {
     return this.ipcRenderer.invoke("dataset:publish-to-marketplace", args);
   }
 
+  /** Publish a dataset AND create an x402-purchasable EditionController drop. */
+  public async monetizeDataset(
+    args: DatasetMonetizeArgs,
+  ): Promise<DatasetMonetizeOutcome> {
+    return this.ipcRenderer.invoke("dataset:monetize", args);
+  }
+
+  /** Pay-per-mint a monetized dataset through the x402 rail. */
+  public async purchaseDataset(
+    args: { datasetId: string },
+  ): Promise<DatasetPurchaseResult> {
+    return this.ipcRenderer.invoke("dataset:purchase", args);
+  }
+
   // ── Data Market (Provenance + Smart-Lease, Arbitrum Stylus) ──────────
 
   public async dataMarketStatus(
@@ -6173,6 +6355,343 @@ export class IpcClient {
     return this.ipcRenderer.invoke("data-lease:has-active", args);
   }
 
+  // ── ERC-8004 (Trustless Agents) ──────────────────────────────────────────
+  public async erc8004Status(
+    args?: { chain?: Erc8004ChainId },
+  ): Promise<Erc8004Status> {
+    return this.ipcRenderer.invoke("erc8004:status", args ?? {});
+  }
+  public async erc8004RegisterAgent(
+    args: { chain?: Erc8004ChainId; agentDomain: string },
+  ): Promise<Erc8004RegisterAgentResult> {
+    return this.ipcRenderer.invoke("erc8004:register-agent", args);
+  }
+  public async erc8004UpdateAgent(
+    args: { chain?: Erc8004ChainId; agentId: string; newDomain: string; newAddress: string },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("erc8004:update-agent", args);
+  }
+  public async erc8004GetAgent(
+    args: { chain?: Erc8004ChainId; agentId: string },
+  ): Promise<Erc8004AgentRecord> {
+    return this.ipcRenderer.invoke("erc8004:get-agent", args);
+  }
+  public async erc8004ResolveByAddress(
+    args: { chain?: Erc8004ChainId; agentAddress: string },
+  ): Promise<{ agentId: string }> {
+    return this.ipcRenderer.invoke("erc8004:resolve-by-address", args);
+  }
+  public async erc8004ResolveByDomain(
+    args: { chain?: Erc8004ChainId; agentDomain: string },
+  ): Promise<{ agentId: string }> {
+    return this.ipcRenderer.invoke("erc8004:resolve-by-domain", args);
+  }
+  public async erc8004AgentCount(
+    args?: { chain?: Erc8004ChainId },
+  ): Promise<{ total: string }> {
+    return this.ipcRenderer.invoke("erc8004:agent-count", args ?? {});
+  }
+  public async erc8004AcceptFeedback(
+    args: { chain?: Erc8004ChainId; clientId: string; serverId: string },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("erc8004:accept-feedback", args);
+  }
+  public async erc8004SubmitFeedback(
+    args: { chain?: Erc8004ChainId; clientId: string; serverId: string; score: number; feedbackUri?: string },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("erc8004:submit-feedback", args);
+  }
+  public async erc8004IsFeedbackAuthorized(
+    args: { chain?: Erc8004ChainId; clientId: string; serverId: string },
+  ): Promise<{ authorized: boolean }> {
+    return this.ipcRenderer.invoke("erc8004:is-feedback-authorized", args);
+  }
+  public async erc8004GetReputation(
+    args: { chain?: Erc8004ChainId; serverId: string },
+  ): Promise<Erc8004ReputationScore> {
+    return this.ipcRenderer.invoke("erc8004:get-reputation", args);
+  }
+  public async erc8004ValidationRequest(
+    args: { chain?: Erc8004ChainId; validator: string; serverAgentId: string; dataHash: string },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("erc8004:validation-request", args);
+  }
+  public async erc8004ValidationResponse(
+    args: { chain?: Erc8004ChainId; dataHash: string; response: number },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("erc8004:validation-response", args);
+  }
+  public async erc8004GetValidation(
+    args: { chain?: Erc8004ChainId; dataHash: string },
+  ): Promise<Erc8004ValidationRecord> {
+    return this.ipcRenderer.invoke("erc8004:get-validation", args);
+  }
+
+  // ── JOY Marketplace glue (StoreRegistry / EditionController / AgentMandate) ──
+  public async glueStatus(
+    args?: { chain?: GlueChainId },
+  ): Promise<{ chain: GlueChainId; ready: boolean }> {
+    return this.ipcRenderer.invoke("glue:status", args ?? {});
+  }
+  public async glueRegisterStore(
+    args: { chain?: GlueChainId; slug: string; agentId?: string },
+  ): Promise<{ storeId: string; txHash: string; blockNumber: number }> {
+    return this.ipcRenderer.invoke("glue:register-store", args);
+  }
+  public async glueSetStoreAgent(
+    args: { chain?: GlueChainId; storeId: string; agentId: string },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("glue:set-store-agent", args);
+  }
+  public async glueTransferStore(
+    args: { chain?: GlueChainId; storeId: string; newOwner: string },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("glue:transfer-store", args);
+  }
+  public async glueGetStore(
+    args: { chain?: GlueChainId; storeId: string },
+  ): Promise<GlueStoreRecord> {
+    return this.ipcRenderer.invoke("glue:get-store", args);
+  }
+  public async glueResolveStoreBySlug(
+    args: { chain?: GlueChainId; slug: string },
+  ): Promise<{ storeId: string }> {
+    return this.ipcRenderer.invoke("glue:resolve-store-by-slug", args);
+  }
+  public async glueStoreCount(
+    args?: { chain?: GlueChainId },
+  ): Promise<{ total: string }> {
+    return this.ipcRenderer.invoke("glue:store-count", args ?? {});
+  }
+  public async glueCreateDrop(
+    args: {
+      chain?: GlueChainId;
+      storeId: string;
+      assetLeaf: string;
+      price?: string;
+      maxSupply?: string;
+      requiresProof?: boolean;
+    },
+  ): Promise<{ dropId: string; txHash: string; blockNumber: number }> {
+    return this.ipcRenderer.invoke("glue:create-drop", args);
+  }
+  public async glueSetDropActive(
+    args: { chain?: GlueChainId; dropId: string; active: boolean },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("glue:set-drop-active", args);
+  }
+  public async glueGrantProof(
+    args: { chain?: GlueChainId; dropId: string; account: string },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("glue:grant-proof", args);
+  }
+  public async glueMint(
+    args: { chain?: GlueChainId; dropId: string },
+  ): Promise<{ tokenId: string; txHash: string; blockNumber: number }> {
+    return this.ipcRenderer.invoke("glue:mint", args);
+  }
+  public async glueGetDrop(
+    args: { chain?: GlueChainId; dropId: string },
+  ): Promise<GlueDropRecord> {
+    return this.ipcRenderer.invoke("glue:get-drop", args);
+  }
+  public async glueEditionBalance(
+    args: { chain?: GlueChainId; dropId: string; account: string },
+  ): Promise<{ balance: string }> {
+    return this.ipcRenderer.invoke("glue:edition-balance", args);
+  }
+  public async glueDropCount(
+    args?: { chain?: GlueChainId },
+  ): Promise<{ total: string }> {
+    return this.ipcRenderer.invoke("glue:drop-count", args ?? {});
+  }
+  public async glueCreateMandate(
+    args: {
+      chain?: GlueChainId;
+      agent: string;
+      spendLimit: string;
+      expiry?: string;
+      actionScope?: string;
+    },
+  ): Promise<{ mandateId: string; txHash: string; blockNumber: number }> {
+    return this.ipcRenderer.invoke("glue:create-mandate", args);
+  }
+  public async glueRecordSpend(
+    args: { chain?: GlueChainId; mandateId: string; amount: string },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("glue:record-spend", args);
+  }
+  public async glueRevokeMandate(
+    args: { chain?: GlueChainId; mandateId: string },
+  ): Promise<{ txHash: string }> {
+    return this.ipcRenderer.invoke("glue:revoke-mandate", args);
+  }
+  public async glueIsMandateValid(
+    args: { chain?: GlueChainId; mandateId: string },
+  ): Promise<{ valid: boolean }> {
+    return this.ipcRenderer.invoke("glue:is-mandate-valid", args);
+  }
+  public async glueCanSpend(
+    args: { chain?: GlueChainId; mandateId: string; amount: string },
+  ): Promise<{ allowed: boolean }> {
+    return this.ipcRenderer.invoke("glue:can-spend", args);
+  }
+  public async glueGetMandate(
+    args: { chain?: GlueChainId; mandateId: string },
+  ): Promise<GlueMandateRecord> {
+    return this.ipcRenderer.invoke("glue:get-mandate", args);
+  }
+  public async glueMandateCount(
+    args?: { chain?: GlueChainId },
+  ): Promise<{ total: string }> {
+    return this.ipcRenderer.invoke("glue:mandate-count", args ?? {});
+  }
+
+  // ── X402 pay-per-prompt ─────────────────────────────────────────────────
+  public async x402Status(
+    args?: { chain?: X402ChainId },
+  ): Promise<{ chain: X402ChainId; ready: boolean }> {
+    return this.ipcRenderer.invoke("x402:status", args ?? {});
+  }
+  public async x402CreateChallenge(
+    args: {
+      chain?: X402ChainId;
+      amountAtomic?: string;
+      amountUsdc?: string;
+      resource: string;
+      description: string;
+      mimeType?: string;
+      maxTimeoutSeconds?: number;
+    },
+  ): Promise<X402PaymentRequirements> {
+    return this.ipcRenderer.invoke("x402:create-challenge", args);
+  }
+  public async x402CreatePayment(
+    args: { chain?: X402ChainId; requirements: X402PaymentRequirements },
+  ): Promise<{ payload: X402PaymentPayload; header: string; payer: string }> {
+    return this.ipcRenderer.invoke("x402:create-payment", args);
+  }
+  public async x402VerifyPayment(
+    args: { payment: X402PaymentPayload; requirements: X402PaymentRequirements },
+  ): Promise<X402VerifyResult> {
+    return this.ipcRenderer.invoke("x402:verify-payment", args);
+  }
+  public async x402Settle(
+    args: {
+      chain?: X402ChainId;
+      payment: X402PaymentPayload;
+      requirements: X402PaymentRequirements;
+      creator: string;
+    },
+  ): Promise<X402SettleResult> {
+    return this.ipcRenderer.invoke("x402:settle", args);
+  }
+  public async x402CreatorEarnings(
+    args: { chain?: X402ChainId; creator: string },
+  ): Promise<{ token: string; creator: string; earnings: string }> {
+    return this.ipcRenderer.invoke("x402:creator-earnings", args);
+  }
+  public async x402PurchaseEdition(
+    args: { chain?: X402ChainId; dropId: string },
+  ): Promise<X402PurchaseResult> {
+    return this.ipcRenderer.invoke("x402:purchase-edition", args);
+  }
+
+  // ── ERC-1144 interface broker ─────────────────────────────────────
+  public async brokerDropBlueprint(
+    args: { chain?: X402ChainId; dropId: string },
+  ): Promise<InterfaceBlueprint> {
+    return this.ipcRenderer.invoke("broker:drop-blueprint", args);
+  }
+  public async brokerStoreBlueprint(
+    args: { chain?: X402ChainId; storeId: string },
+  ): Promise<InterfaceBlueprint> {
+    return this.ipcRenderer.invoke("broker:store-blueprint", args);
+  }
+  public async brokerAgentBlueprint(
+    args: { chain?: X402ChainId; agentId: string },
+  ): Promise<InterfaceBlueprint> {
+    return this.ipcRenderer.invoke("broker:agent-blueprint", args);
+  }
+
+  // ── Verifiable inference (TEE) ────────────────────────────────────
+  public async teeStatus(): Promise<TeeStatus> {
+    return this.ipcRenderer.invoke("tee:status");
+  }
+  public async teeRunVerifiedInference(
+    args: {
+      chain?: X402ChainId;
+      modelId: string;
+      input: string;
+      output: string;
+      serverAgentId?: string;
+      score?: number;
+      writeOnChain?: boolean;
+      anchorCelestia?: boolean;
+    },
+  ): Promise<TeeVerifiedInferenceRecord> {
+    return this.ipcRenderer.invoke("tee:run-verified-inference", args);
+  }
+
+  // ── OptimisticStaking (bonded attestations) ───────────────────────
+  public async optimisticStakingGetConfig(
+    args?: { chain?: OptimisticStakingChainId },
+  ): Promise<OptimisticStakingConfig> {
+    return this.ipcRenderer.invoke("optimistic-staking:get-config", args ?? {});
+  }
+  public async optimisticStakingGetAttestation(
+    args: { chain?: OptimisticStakingChainId; digest: string },
+  ): Promise<OptimisticStakingAttestation> {
+    return this.ipcRenderer.invoke("optimistic-staking:get-attestation", args);
+  }
+  public async optimisticStakingStakeOf(
+    args: { chain?: OptimisticStakingChainId; validator: string },
+  ): Promise<OptimisticStakingStake> {
+    return this.ipcRenderer.invoke("optimistic-staking:stake-of", args);
+  }
+  public async optimisticStakingDeposit(
+    args: { chain?: OptimisticStakingChainId; amount: string },
+  ): Promise<OptimisticStakingTxResult> {
+    return this.ipcRenderer.invoke("optimistic-staking:deposit", args);
+  }
+  public async optimisticStakingWithdraw(
+    args: { chain?: OptimisticStakingChainId; amount: string },
+  ): Promise<OptimisticStakingTxResult> {
+    return this.ipcRenderer.invoke("optimistic-staking:withdraw", args);
+  }
+  public async optimisticStakingSubmitAttestation(
+    args: {
+      chain?: OptimisticStakingChainId;
+      digest: string;
+      signer: string;
+      score: string;
+      bond: string;
+      signature: string;
+    },
+  ): Promise<OptimisticStakingTxResult> {
+    return this.ipcRenderer.invoke("optimistic-staking:submit-attestation", args);
+  }
+  public async optimisticStakingChallengeSignature(
+    args: { chain?: OptimisticStakingChainId; digest: string },
+  ): Promise<OptimisticStakingTxResult> {
+    return this.ipcRenderer.invoke("optimistic-staking:challenge-signature", args);
+  }
+  public async optimisticStakingOpenDispute(
+    args: { chain?: OptimisticStakingChainId; digest: string },
+  ): Promise<OptimisticStakingTxResult> {
+    return this.ipcRenderer.invoke("optimistic-staking:open-dispute", args);
+  }
+  public async optimisticStakingResolveDispute(
+    args: { chain?: OptimisticStakingChainId; digest: string; validatorSlashed: boolean },
+  ): Promise<OptimisticStakingTxResult> {
+    return this.ipcRenderer.invoke("optimistic-staking:resolve-dispute", args);
+  }
+  public async optimisticStakingFinalize(
+    args: { chain?: OptimisticStakingChainId; digest: string },
+  ): Promise<OptimisticStakingTxResult> {
+    return this.ipcRenderer.invoke("optimistic-staking:finalize", args);
+  }
+
   // ── API Gateway ─────────────────────────────────────────────────────────
   public async apiGatewayStatus(): Promise<ApiGatewayStatus> {
     return this.ipcRenderer.invoke("api-gateway:status");
@@ -6223,6 +6742,244 @@ export class IpcClient {
 // ── Data Market shared types ─────────────────────────────────────────────
 
 export type DataMarketChainId = "arbitrumSepolia" | "arbitrumOne";
+
+// ── ERC-8004 shared types ────────────────────────────────────────────────
+
+export type Erc8004ChainId = "arbitrumSepolia" | "arbitrumOne";
+
+export interface Erc8004Status {
+  chain: Erc8004ChainId;
+  ready: boolean;
+}
+
+export interface Erc8004RegisterAgentResult {
+  agentId: string;
+  txHash: string;
+  blockNumber: number;
+}
+
+export interface Erc8004AgentRecord {
+  agentId: string;
+  agentDomain: string;
+  agentAddress: string;
+}
+
+export interface Erc8004ReputationScore {
+  count: string;
+  sum: string;
+  average: number;
+}
+
+export interface Erc8004ValidationRecord {
+  request: { validator: string; serverAgentId: string; exists: boolean };
+  response: { responded: boolean; score: number };
+}
+
+// ── JOY Marketplace glue contract types ────────────────────────────────────
+export type GlueChainId = "arbitrumSepolia" | "arbitrumOne";
+
+export interface GlueStoreRecord {
+  storeId: string;
+  owner: string;
+  agentId: string;
+  slug: string;
+}
+
+export interface GlueDropRecord {
+  dropId: string;
+  creator: string;
+  storeId: string;
+  assetLeaf: string;
+  price: string;
+  maxSupply: string;
+  minted: string;
+  active: boolean;
+  requiresProof: boolean;
+}
+
+export interface GlueMandateRecord {
+  mandateId: string;
+  principal: string;
+  agent: string;
+  spendLimit: string;
+  spent: string;
+  expiry: string;
+  actionScope: string;
+  active: boolean;
+}
+
+// ── X402 pay-per-prompt types ──────────────────────────────────────────────
+export type X402ChainId = "arbitrumSepolia" | "arbitrumOne";
+export type X402Network = "arbitrum-sepolia" | "arbitrum-one";
+
+export interface X402PaymentRequirements {
+  scheme: "exact";
+  network: X402Network;
+  maxAmountRequired: string;
+  resource: string;
+  description: string;
+  mimeType: string;
+  payTo: string;
+  maxTimeoutSeconds: number;
+  asset: string;
+  extra?: { name: string; version: string };
+}
+
+export interface X402Authorization {
+  from: string;
+  to: string;
+  value: string;
+  validAfter: string;
+  validBefore: string;
+  nonce: string;
+}
+
+export interface X402PaymentPayload {
+  x402Version: number;
+  scheme: "exact";
+  network: X402Network;
+  payload: { signature: string; authorization: X402Authorization };
+}
+
+export interface X402VerifyResult {
+  isValid: boolean;
+  invalidReason?: string;
+  payer?: string;
+}
+
+export interface X402SettleResult {
+  success: boolean;
+  txHash?: string;
+  distributeTxHash?: string;
+  payer?: string;
+  amount?: string;
+  split?: { creator: string; platform: string; protocol: string };
+  error?: string;
+}
+
+export interface X402PurchaseResult {
+  dropId: string;
+  creator: string;
+  buyer: string;
+  amountAtomic: string;
+  settlement: X402SettleResult;
+  proofTxHash?: string;
+  tokenId: string;
+  mintTxHash: string;
+  blockNumber: number;
+}
+
+// ── ERC-1144 interface broker types ──────────────────────────────────
+export type BlueprintKind = "store" | "drop" | "agent";
+
+export interface BlueprintIdentity {
+  agentId: string;
+  agentDomain: string;
+  agentAddress: string;
+  ensName?: string;
+  ensResolvedAddress?: string;
+}
+
+export interface BlueprintReputation {
+  count: string;
+  sum: string;
+  average: number;
+}
+
+export interface BlueprintCapability {
+  id: string;
+  name: string;
+  priceUsdc: string;
+  priceAtomic: string;
+  requiresProof: boolean;
+  payment: X402PaymentRequirements;
+  invocation: {
+    ipcChannel: string;
+    mcpTool?: string;
+    args: Record<string, string>;
+  };
+}
+
+export interface InterfaceBlueprint {
+  version: string;
+  kind: BlueprintKind;
+  chain: X402ChainId;
+  resourceId: string;
+  identity?: BlueprintIdentity;
+  reputation?: BlueprintReputation;
+  store?: GlueStoreRecord & { ensName?: string };
+  capabilities: BlueprintCapability[];
+  contracts: { revenueSplitter: string; usdc: string };
+  ready: boolean;
+  generatedAt: string;
+}
+
+// ── Verifiable inference (TEE) ──────────────────────────────────────
+export type TeeMode = "local" | "optimistic" | "lit" | "nitro";
+export type TeeProofKind =
+  | "local-digest"
+  | "stake-signature"
+  | "lit-pkp-signature"
+  | "tee-quote";
+
+export interface TeeStatus {
+  mode: TeeMode;
+  ready: boolean;
+  proofKind: TeeProofKind;
+  litConfigured: boolean;
+  nitroConfigured: boolean;
+}
+
+export interface TeeAttestationQuote {
+  version: string;
+  mode: TeeMode;
+  proofKind: TeeProofKind;
+  inputHash: string;
+  outputHash: string;
+  digest: string;
+  modelId: string;
+  signer: string;
+  signature: string;
+  issuedAt: string;
+  meta?: Record<string, string>;
+}
+
+export interface TeeVerifiedInferenceRecord {
+  mode: TeeMode;
+  quote: TeeAttestationQuote;
+  validation: { requestTxHash: string; responseTxHash: string; score: number } | null;
+  celestia: { height: number; commitment: string } | null;
+}
+
+// ── OptimisticStaking (bonded attestations) ──────────────────────────
+export type OptimisticStakingChainId = "arbitrumSepolia" | "arbitrumOne";
+
+export interface OptimisticStakingTxResult {
+  txHash: string;
+  blockNumber: number;
+}
+
+export interface OptimisticStakingConfig {
+  owner: string;
+  arbiter: string;
+  stakeToken: string;
+  minStake: string;
+  challengeWindow: string;
+}
+
+export interface OptimisticStakingAttestation {
+  submitter: string;
+  signer: string;
+  score: string;
+  bond: string;
+  deadline: string;
+  status: number;
+}
+
+export interface OptimisticStakingStake {
+  stake: string;
+  locked: string;
+}
 
 export interface DataMarketStatus {
   chain: DataMarketChainId;
@@ -6441,6 +7198,43 @@ export interface DatasetPublishArgs {
   priceUsdc?: number;
   royaltyBps?: number;
   dryRun?: boolean;
+}
+
+export interface DatasetMonetizeArgs {
+  datasetId: string;
+  manifestId?: string;
+  name?: string;
+  description?: string;
+  /** Human-readable USDC price (e.g. 1.5). */
+  priceUsdc: number;
+  royaltyBps?: number;
+  /** EditionController store slug the drop is created under. */
+  storeSlug: string;
+  chain?: "arbitrumSepolia" | "arbitrumOne";
+  maxSupply?: number;
+  requiresProof?: boolean;
+  dryRun?: boolean;
+}
+
+export interface DatasetMonetizeOutcome {
+  ok: boolean;
+  dryRun: boolean;
+  publish: StudioPublishOutcome;
+  dropId?: string;
+  dropTxHash?: string;
+  monetization: import("../types/data_sovereignty_types").DataMonetization;
+  errors: string[];
+}
+
+export interface DatasetPurchaseResult {
+  dropId: string;
+  creator: string;
+  buyer: string;
+  amountAtomic: string;
+  proofTxHash?: string;
+  tokenId: string;
+  mintTxHash: string;
+  blockNumber: number;
 }
 
 export interface OnchainListenerStatus {

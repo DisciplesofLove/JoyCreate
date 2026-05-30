@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Stage, Layer, Image as KonvaImage, Line } from "react-konva";
-import type Konva from "konva";
 import { IpcClient } from "@/ipc/ipc_client";
 import type { ImageStudioImage, ImageStudioProvider, ImageStudioProviderModel } from "@/ipc/ipc_types";
+import { ImageEditor } from "@/components/image-studio/ImageEditor";
 import { UnifiedModelPicker } from "@/components/studio/UnifiedModelPicker";
 import { ProviderCarousel } from "@/components/studio/ProviderCarousel";
 import { PublishContextMenu } from "@/components/studio/PublishContextMenu";
@@ -45,8 +44,6 @@ import {
   Download,
   FolderOpen,
   MoreVertical,
-  Eraser,
-  MousePointer2,
   Paintbrush,
   ChevronDown,
   ChevronUp,
@@ -61,21 +58,12 @@ import {
   ImagePlus,
   SlidersHorizontal,
   Info,
-  Undo2,
-  Redo2,
-  Maximize2,
   Database,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type CanvasTool = "select" | "mask" | "erase";
 type GalleryView = "grid" | "list";
-
-interface MaskLine {
-  points: number[];
-  erase: boolean;
-}
 
 const ASPECT_PRESETS = [
   { label: "1:1", icon: "■", width: 1024, height: 1024 },
@@ -613,6 +601,7 @@ function Gallery({
   images,
   selectedId,
   onSelect,
+  onOpenEditor,
   onDelete,
   onSaveToDisk,
   onOpenInFolder,
@@ -629,6 +618,7 @@ function Gallery({
   images: ImageStudioImage[];
   selectedId: number | null;
   onSelect: (id: number) => void;
+  onOpenEditor: (id: number) => void;
   onDelete: (id: number) => void;
   onSaveToDisk: (id: number) => void;
   onOpenInFolder: (id: number) => void;
@@ -707,6 +697,7 @@ function Gallery({
                     : "border-border hover:border-violet-500/50"
                 }`}
                 onClick={() => onSelect(img.id)}
+                onDoubleClick={() => onOpenEditor(img.id)}
               >
                 <ImageThumbnail imageId={img.id} />
 
@@ -745,7 +736,7 @@ function Gallery({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="text-xs">
-                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onSelect(img.id); }}>
+                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onOpenEditor(img.id); }}>
                           <Paintbrush className="w-3 h-3 mr-2" />
                           Open in Editor
                         </DropdownMenuItem>
@@ -938,453 +929,12 @@ function ImageInfoPanel({
   );
 }
 
-// ── Canvas Editor ──────────────────────────────────────────────────────────────
-
-function CanvasEditor({
-  imageId,
-  onClose,
-}: {
-  imageId: number;
-  onClose: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const stageRef = useRef<Konva.Stage>(null);
-  const imageNodeRef = useRef<Konva.Image>(null);
-
-  const [tool, setTool] = useState<CanvasTool>("select");
-  const [maskLines, setMaskLines] = useState<MaskLine[]>([]);
-  const [undoStack, setUndoStack] = useState<MaskLine[][]>([]);
-  const [redoStack, setRedoStack] = useState<MaskLine[][]>([]);
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [brushSize, setBrushSize] = useState(20);
-  const [brightness, setBrightness] = useState(0);
-  const [contrast, setContrast] = useState(0);
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [canvasImage, setCanvasImage] = useState<HTMLImageElement | null>(null);
-
-  const CANVAS_SIZE = 512;
-
-  const { data: src } = useQuery({
-    queryKey: ["image-studio", "thumb", imageId],
-    queryFn: () => IpcClient.getInstance().readImageAsBase64(imageId),
-    staleTime: Infinity,
-  });
-
-  // Load image for Konva
-  useEffect(() => {
-    if (!src) return;
-    const img = new window.Image();
-    img.src = src;
-    img.onload = () => {
-      setCanvasImage(img);
-    };
-  }, [src]);
-
-  // Cache after brightness/contrast changes
-  useEffect(() => {
-    const node = imageNodeRef.current;
-    if (!node) return;
-    node.cache();
-    node.getLayer()?.batchDraw();
-  }, [brightness, contrast, canvasImage]);
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        handleUndo();
-      }
-      if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
-        e.preventDefault();
-        handleRedo();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  });
-
-  function pushUndo() {
-    setUndoStack((prev) => [...prev, maskLines]);
-    setRedoStack([]);
-  }
-
-  function handleUndo() {
-    setUndoStack((prev) => {
-      if (prev.length === 0) return prev;
-      const last = prev[prev.length - 1];
-      setRedoStack((r) => [...r, maskLines]);
-      setMaskLines(last);
-      return prev.slice(0, -1);
-    });
-  }
-
-  function handleRedo() {
-    setRedoStack((prev) => {
-      if (prev.length === 0) return prev;
-      const last = prev[prev.length - 1];
-      setUndoStack((u) => [...u, maskLines]);
-      setMaskLines(last);
-      return prev.slice(0, -1);
-    });
-  }
-
-  const editMutation = useMutation({
-    mutationFn: (params: { maskBase64: string; prompt: string; provider: string; model: string }) =>
-      IpcClient.getInstance().editImage({ imageId, ...params }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["image-studio", "list"] });
-      toast.success("AI edit applied — new image added to gallery");
-      setMaskLines([]);
-      setUndoStack([]);
-      setRedoStack([]);
-      setAiPrompt("");
-    },
-    onError: (err: Error) => {
-      toast.error(err.message);
-    },
-  });
-
-  function handleMouseDown(e: Konva.KonvaEventObject<MouseEvent>) {
-    if (tool === "select") return;
-    pushUndo();
-    setIsDrawing(true);
-    const pos = e.target.getStage()?.getPointerPosition();
-    if (!pos) return;
-    setMaskLines((prev) => [
-      ...prev,
-      { points: [pos.x, pos.y], erase: tool === "erase" },
-    ]);
-  }
-
-  function handleMouseMove(e: Konva.KonvaEventObject<MouseEvent>) {
-    if (!isDrawing) return;
-    const pos = e.target.getStage()?.getPointerPosition();
-    if (!pos) return;
-    setMaskLines((prev) => {
-      const last = prev[prev.length - 1];
-      if (!last) return prev;
-      const updated = { ...last, points: [...last.points, pos.x, pos.y] };
-      return [...prev.slice(0, -1), updated];
-    });
-  }
-
-  function handleMouseUp() {
-    setIsDrawing(false);
-  }
-
-  function clearMask() {
-    if (maskLines.length > 0) pushUndo();
-    setMaskLines([]);
-  }
-
-  function getMaskBase64(): string {
-    const canvas = document.createElement("canvas");
-    canvas.width = CANVAS_SIZE;
-    canvas.height = CANVAS_SIZE;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return "";
-    ctx.fillStyle = "black";
-    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-    ctx.fillStyle = "white";
-    maskLines.forEach((line) => {
-      if (line.erase) return;
-      ctx.beginPath();
-      for (let i = 0; i < line.points.length - 1; i += 2) {
-        if (i === 0) ctx.moveTo(line.points[i], line.points[i + 1]);
-        else ctx.lineTo(line.points[i], line.points[i + 1]);
-      }
-      ctx.lineWidth = brushSize;
-      ctx.lineCap = "round";
-      ctx.stroke();
-    });
-    return canvas.toDataURL("image/png");
-  }
-
-  function handleApplyAIEdit() {
-    if (!aiPrompt.trim()) {
-      toast.error("Enter a prompt for the AI edit");
-      return;
-    }
-    if (maskLines.filter((l) => !l.erase).length === 0) {
-      toast.error("Paint a mask over the area you want to edit");
-      return;
-    }
-    const maskBase64 = getMaskBase64();
-    editMutation.mutate({
-      maskBase64,
-      prompt: aiPrompt.trim(),
-      provider: "openai",
-      model: "dall-e-2",
-    });
-  }
-
-  // Dynamic filter list for Konva
-  const filters: ((imageData: ImageData) => void)[] = [];
-  if (brightness !== 0 || contrast !== 0) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const KonvaLib = require("konva");
-    if (brightness !== 0) filters.push(KonvaLib.Filters.Brighten);
-    if (contrast !== 0) filters.push(KonvaLib.Filters.Contrast);
-  }
-
-  return (
-    <div className="flex flex-col w-80 shrink-0 border-l bg-background overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b">
-        <span className="text-sm font-medium">Canvas Editor</span>
-        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose}>
-          <X className="w-3 h-3" />
-        </Button>
-      </div>
-
-      {/* Canvas */}
-      <div className="flex items-center justify-center bg-muted/30 p-2">
-        {canvasImage ? (
-          <Stage
-            ref={stageRef}
-            width={CANVAS_SIZE}
-            height={CANVAS_SIZE}
-            className="cursor-crosshair"
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-          >
-            <Layer>
-              <KonvaImage
-                ref={imageNodeRef}
-                image={canvasImage}
-                width={CANVAS_SIZE}
-                height={CANVAS_SIZE}
-                filters={filters}
-                brightness={brightness / 100}
-                contrast={contrast / 100}
-              />
-            </Layer>
-            <Layer>
-              {maskLines.map((line, i) => (
-                <Line
-                  key={i}
-                  points={line.points}
-                  stroke={line.erase ? "black" : "rgba(139, 92, 246, 0.6)"}
-                  strokeWidth={brushSize}
-                  lineCap="round"
-                  lineJoin="round"
-                  globalCompositeOperation={line.erase ? "destination-out" : "source-over"}
-                />
-              ))}
-            </Layer>
-          </Stage>
-        ) : (
-          <div className="w-[512px] h-[512px] flex items-center justify-center">
-            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-          </div>
-        )}
-      </div>
-
-      {/* Toolbar */}
-      <div className="flex items-center gap-1 px-3 py-2 border-b">
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant={tool === "select" ? "secondary" : "ghost"}
-                size="sm"
-                className="h-7 w-7 p-0"
-                onClick={() => setTool("select")}
-              >
-                <MousePointer2 className="w-3 h-3" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent><p className="text-xs">Select (V)</p></TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant={tool === "mask" ? "secondary" : "ghost"}
-                size="sm"
-                className="h-7 w-7 p-0"
-                onClick={() => setTool("mask")}
-              >
-                <Paintbrush className="w-3 h-3" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent><p className="text-xs">Paint mask (B)</p></TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant={tool === "erase" ? "secondary" : "ghost"}
-                size="sm"
-                className="h-7 w-7 p-0"
-                onClick={() => setTool("erase")}
-              >
-                <Eraser className="w-3 h-3" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent><p className="text-xs">Erase mask (E)</p></TooltipContent>
-          </Tooltip>
-
-          <div className="w-px h-5 bg-border mx-1" />
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 p-0"
-                disabled={undoStack.length === 0}
-                onClick={handleUndo}
-              >
-                <Undo2 className="w-3 h-3" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent><p className="text-xs">Undo (Ctrl+Z)</p></TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 p-0"
-                disabled={redoStack.length === 0}
-                onClick={handleRedo}
-              >
-                <Redo2 className="w-3 h-3" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent><p className="text-xs">Redo (Ctrl+Y)</p></TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-
-        <div className="flex-1" />
-        {maskLines.length > 0 && (
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={clearMask}>
-            Clear mask
-          </Button>
-        )}
-      </div>
-
-      <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-4 p-3">
-          {/* Brush Size */}
-          {(tool === "mask" || tool === "erase") && (
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">Brush Size</Label>
-                <span className="text-xs text-muted-foreground">{brushSize}px</span>
-              </div>
-              <Slider
-                min={2}
-                max={80}
-                step={1}
-                value={[brushSize]}
-                onValueChange={([v]) => setBrushSize(v)}
-                className="h-3"
-              />
-            </div>
-          )}
-
-          {/* Adjustments */}
-          <div className="flex flex-col gap-3">
-            <p className="text-xs font-medium">Adjustments</p>
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">Brightness</Label>
-                <span className="text-xs text-muted-foreground">{brightness}</span>
-              </div>
-              <Slider
-                min={-100}
-                max={100}
-                step={1}
-                value={[brightness]}
-                onValueChange={([v]) => setBrightness(v)}
-                className="h-3"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">Contrast</Label>
-                <span className="text-xs text-muted-foreground">{contrast}</span>
-              </div>
-              <Slider
-                min={-100}
-                max={100}
-                step={1}
-                value={[contrast]}
-                onValueChange={([v]) => setContrast(v)}
-                className="h-3"
-              />
-            </div>
-          </div>
-
-          {/* AI Edit */}
-          <div className="flex flex-col gap-2 border-t pt-3">
-            <p className="text-xs font-medium">AI Edit (Inpainting)</p>
-            <p className="text-[11px] text-muted-foreground">
-              Paint a mask over the area to change, then describe the replacement.
-            </p>
-            <Textarea
-              placeholder="Replace the sky with a sunset…"
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              className="text-xs min-h-[60px] resize-none"
-            />
-            <Button
-              size="sm"
-              onClick={handleApplyAIEdit}
-              disabled={editMutation.isPending}
-              className="w-full"
-            >
-              {editMutation.isPending ? (
-                <>
-                  <Loader2 className="w-3 h-3 mr-2 animate-spin" />
-                  Applying…
-                </>
-              ) : (
-                <>
-                  <Wand2 className="w-3 h-3 mr-2" />
-                  Apply AI Edit
-                </>
-              )}
-            </Button>
-          </div>
-
-          {/* Export */}
-          <div className="flex flex-col gap-2 border-t pt-3">
-            <p className="text-xs font-medium">Export</p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full text-xs"
-              onClick={() => IpcClient.getInstance().saveImageToDisk(imageId).then((r) => {
-                if (r.saved) toast.success("Image saved");
-              })}
-            >
-              <Download className="w-3 h-3 mr-2" />
-              Save to Disk
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full text-xs"
-              onClick={() => IpcClient.getInstance().openImageInFolder(imageId)}
-            >
-              <FolderOpen className="w-3 h-3 mr-2" />
-              Show in Folder
-            </Button>
-          </div>
-        </div>
-      </ScrollArea>
-    </div>
-  );
-}
-
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export function ImageStudioTab() {
   const queryClient = useQueryClient();
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
+  const [editorImageId, setEditorImageId] = useState<number | null>(null);
   const [reusePrompt, setReusePrompt] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
   const [providerFilter, setProviderFilter] = useState("all");
@@ -1514,6 +1064,7 @@ export function ImageStudioTab() {
           images={images}
           selectedId={selectedImageId}
           onSelect={setSelectedImageId}
+          onOpenEditor={setEditorImageId}
           onDelete={(id) => deleteMutation.mutate(id)}
           onSaveToDisk={handleSaveToDisk}
           onOpenInFolder={handleOpenInFolder}
@@ -1541,11 +1092,11 @@ export function ImageStudioTab() {
         </div>
       )}
 
-      {/* Canvas Editor — only when image is selected */}
-      {selectedImageId !== null && (
-        <CanvasEditor
-          imageId={selectedImageId}
-          onClose={() => setSelectedImageId(null)}
+      {/* Full Image Editor — opens when an image is opened in the editor */}
+      {editorImageId !== null && (
+        <ImageEditor
+          imageId={editorImageId}
+          onClose={() => setEditorImageId(null)}
         />
       )}
     </div>

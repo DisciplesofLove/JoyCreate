@@ -1,6 +1,6 @@
 import { ipcMain, shell, dialog, app } from "electron";
 import { db } from "@/db";
-import { videoStudioVideos, imageStudioImages } from "@/db/schema";
+import { videoStudioVideos, videoProjects } from "@/db/schema";
 import { readSettings } from "@/main/settings";
 import { resolveApiKey } from "@/lib/api_key_resolver";
 import { desc, eq, like, or } from "drizzle-orm";
@@ -11,6 +11,8 @@ import { getModelClient } from "@/ipc/utils/get_model_client";
 import { recordAICost } from "@/ipc/utils/cost_tracking";
 import { createProvenanceManifest } from "@/types/provenance";
 import { getDomainEventBus } from "@/lib/events/domain_event_bus";
+import { renderTimeline, probeVideo, extractThumbnail } from "@/lib/video/ffmpeg";
+import { timelineDuration, type VideoTimeline } from "@/lib/video/timeline_types";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -42,6 +44,23 @@ interface ListVideosParams {
 interface ExtractFramesParams {
   videoId: number;
   count?: number;
+}
+
+interface RenderTimelineParams {
+  timeline: VideoTimeline;
+  projectId?: number;
+  projectName?: string;
+}
+
+interface CreateProjectParams {
+  name?: string;
+  timeline?: VideoTimeline;
+}
+
+interface UpdateProjectParams {
+  id: number;
+  name?: string;
+  timeline?: VideoTimeline;
 }
 
 // ── Storage Directory ──────────────────────────────────────────────────────────
@@ -1027,5 +1046,206 @@ Rules:
       fps: row.fps,
       requestedFrames: params.count ?? 1,
     };
+  });
+
+  // ── Probe (accurate duration / resolution / fps) ─────────────────────────
+  ipcMain.handle("video-studio:probe", async (_, id: number) => {
+    const row = await db
+      .select()
+      .from(videoStudioVideos)
+      .where(eq(videoStudioVideos.id, id))
+      .get();
+    if (!row) throw new Error(`Video not found: ${id}`);
+    if (!fs.existsSync(row.filePath)) throw new Error(`Video file missing: ${row.filePath}`);
+    const probe = await probeVideo(row.filePath);
+    return {
+      duration: probe.duration ?? row.duration,
+      width: probe.width ?? row.width,
+      height: probe.height ?? row.height,
+      fps: probe.fps ?? row.fps,
+      hasAudio: probe.hasAudio,
+    };
+  });
+
+  // ── Render timeline (editor export) ──────────────────────────────────────
+  ipcMain.handle("video-studio:render", async (event, params: RenderTimelineParams) => {
+    const timeline = params.timeline;
+    if (!timeline?.clips?.length) {
+      throw new Error("Timeline has no clips to render");
+    }
+
+    // Resolve every referenced source video to a file path up front
+    // (renderTimeline expects a synchronous resolver).
+    const ids = new Set<number>();
+    for (const clip of timeline.clips) ids.add(clip.videoId);
+    for (const track of timeline.audioTracks ?? []) {
+      if (track.videoId != null) ids.add(track.videoId);
+    }
+    const pathMap = new Map<number, string>();
+    for (const id of ids) {
+      const row = await db
+        .select()
+        .from(videoStudioVideos)
+        .where(eq(videoStudioVideos.id, id))
+        .get();
+      if (!row) throw new Error(`Source video not found: ${id}`);
+      if (!fs.existsSync(row.filePath)) {
+        throw new Error(`Source video file missing: ${row.filePath}`);
+      }
+      pathMap.set(id, row.filePath);
+    }
+
+    const outputPath = path.join(getVideoStoreDir(), uniqueVideoFilename("local-edit"));
+    const startedAt = Date.now();
+
+    await renderTimeline({
+      timeline,
+      outputPath,
+      resolveVideoPath: (videoId) => {
+        const p = pathMap.get(videoId);
+        if (!p) throw new Error(`Unresolved source video: ${videoId}`);
+        return p;
+      },
+      onProgress: (fraction, stage) => {
+        try {
+          event.sender.send("video-studio:render-progress", { fraction, stage });
+        } catch { /* renderer gone */ }
+      },
+    });
+
+    // Best-effort thumbnail from the first frame.
+    let thumbnailPath: string | null = null;
+    try {
+      const thumb = path.join(
+        getVideoStoreDir(),
+        `thumb_local-edit_${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`,
+      );
+      await extractThumbnail(outputPath, 0.1, thumb);
+      thumbnailPath = fs.existsSync(thumb) ? thumb : null;
+    } catch { thumbnailPath = null; }
+
+    const duration = timelineDuration(timeline);
+    const prompt = params.projectName?.trim() || "Video editor render";
+
+    const provenance = createProvenanceManifest({
+      model: "video-editor",
+      provider: "local",
+      prompt,
+      params: {
+        width: timeline.width,
+        height: timeline.height,
+        fps: timeline.fps,
+        duration,
+        clips: timeline.clips.length,
+        overlays: timeline.overlays.length,
+        audioTracks: timeline.audioTracks.length,
+        mode: "timeline-edit",
+      },
+    });
+
+    const [row] = await db
+      .insert(videoStudioVideos)
+      .values({
+        prompt,
+        negativePrompt: null,
+        provider: "local",
+        model: "video-editor",
+        width: timeline.width,
+        height: timeline.height,
+        duration,
+        fps: timeline.fps,
+        format: "mp4",
+        filePath: outputPath,
+        thumbnailPath,
+        seed: null,
+        style: null,
+        sourceType: "edit",
+        sourceId: timeline.clips[0]?.videoId ?? null,
+        metadata: {
+          source: "video-editor",
+          projectId: params.projectId ?? null,
+          clipCount: timeline.clips.length,
+        },
+        provenanceJson: provenance,
+      })
+      .returning();
+
+    if (params.projectId != null && row) {
+      await db
+        .update(videoProjects)
+        .set({ renderedVideoId: row.id, updatedAt: new Date() })
+        .where(eq(videoProjects.id, params.projectId));
+    }
+
+    void getDomainEventBus().publish("compute.job.completed", {
+      jobId: `video-studio:${row?.id ?? "unknown"}`,
+      status: "succeeded",
+      durationMs: Date.now() - startedAt,
+    }).catch(() => { /* swallow */ });
+
+    return row;
+  });
+
+  // ── Projects: list ───────────────────────────────────────────────────────
+  ipcMain.handle("video-projects:list", async () => {
+    return db
+      .select()
+      .from(videoProjects)
+      .orderBy(desc(videoProjects.updatedAt));
+  });
+
+  // ── Projects: get ────────────────────────────────────────────────────────
+  ipcMain.handle("video-projects:get", async (_, id: number) => {
+    const row = await db
+      .select()
+      .from(videoProjects)
+      .where(eq(videoProjects.id, id))
+      .get();
+    if (!row) throw new Error(`Project not found: ${id}`);
+    return row;
+  });
+
+  // ── Projects: create ─────────────────────────────────────────────────────
+  ipcMain.handle("video-projects:create", async (_, params: CreateProjectParams = {}) => {
+    const [row] = await db
+      .insert(videoProjects)
+      .values({
+        name: params.name?.trim() || "Untitled Project",
+        timelineJson: (params.timeline as unknown as Record<string, unknown>) ?? null,
+      })
+      .returning();
+    return row;
+  });
+
+  // ── Projects: update ─────────────────────────────────────────────────────
+  ipcMain.handle("video-projects:update", async (_, params: UpdateProjectParams) => {
+    if (params.id == null) throw new Error("Project id is required");
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if (params.name != null) patch.name = params.name.trim() || "Untitled Project";
+    if (params.timeline != null) {
+      patch.timelineJson = params.timeline as unknown as Record<string, unknown>;
+    }
+    const [row] = await db
+      .update(videoProjects)
+      .set(patch)
+      .where(eq(videoProjects.id, params.id))
+      .returning();
+    if (!row) throw new Error(`Project not found: ${params.id}`);
+    return row;
+  });
+
+  // ── Projects: delete ─────────────────────────────────────────────────────
+  ipcMain.handle("video-projects:delete", async (_, id: number) => {
+    const row = await db
+      .select()
+      .from(videoProjects)
+      .where(eq(videoProjects.id, id))
+      .get();
+    if (!row) throw new Error(`Project not found: ${id}`);
+    if (row.thumbnailPath && fs.existsSync(row.thumbnailPath)) {
+      try { fs.unlinkSync(row.thumbnailPath); } catch { /* ignore */ }
+    }
+    await db.delete(videoProjects).where(eq(videoProjects.id, id));
+    return { success: true };
   });
 }

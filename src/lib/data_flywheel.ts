@@ -15,7 +15,7 @@ import {
   flywheelRuns,
 } from "@/db/flywheel_schema";
 import { agents, messages } from "@/db/schema";
-import { eq, and, isNull, sql, desc, count } from "drizzle-orm";
+import { eq, and, isNull, sql, desc, count, gte } from "drizzle-orm";
 import log from "electron-log";
 import type { FlywheelConfig } from "@/types/agent_builder";
 import type { AgentConfig } from "@/types/agent_builder";
@@ -323,10 +323,54 @@ export async function buildTrainingData(agentId?: number | null): Promise<{
 }
 
 /**
+ * Build training data for a specific project (app), formatted as Alpaca.
+ *
+ * Used by Genius Core nightly distillation, which is keyed by `projectId`
+ * (== `appId`). Unlike {@link buildTrainingData}, this does NOT filter on the
+ * `captured` flag — distillation reads the same pairs the flywheel may also
+ * consume, scoped to the run's time window — so the two subsystems never
+ * starve each other.
+ */
+export async function buildTrainingDataForProject(
+  appId: number,
+  sinceMs?: number,
+  limit = 5000,
+): Promise<{
+  data: Array<{ instruction: string; input: string; output: string }>;
+  pairCount: number;
+}> {
+  const conditions = [eq(flywheelTrainingPairs.appId, appId)];
+  if (typeof sinceMs === "number" && sinceMs > 0) {
+    conditions.push(gte(flywheelTrainingPairs.createdAt, new Date(sinceMs)));
+  }
+
+  const pairs = await db
+    .select()
+    .from(flywheelTrainingPairs)
+    .where(and(...conditions))
+    .orderBy(flywheelTrainingPairs.createdAt)
+    .limit(limit);
+
+  const data: Array<{ instruction: string; input: string; output: string }> =
+    [];
+  for (const pair of pairs) {
+    // Skip negative-rated pairs without corrections (garbage-in prevention).
+    if (pair.rating === "negative" && !pair.correctedOutput) continue;
+    const output = pair.correctedOutput || pair.assistantOutput;
+    data.push({
+      instruction: "Respond helpfully to the user's message.",
+      input: pair.userInput,
+      output,
+    });
+  }
+
+  return { data, pairCount: data.length };
+}
+
+/**
  * Mark pairs as captured (included in a training dataset).
  */
-export async function markPairsCaptured(pairIds: number[]): Promise<void> {
-  if (pairIds.length === 0) return;
+export async function markPairsCaptured(pairIds: number[]): Promise<void> {  if (pairIds.length === 0) return;
 
   // Process in chunks to avoid SQLite parameter limits
   const chunkSize = 500;

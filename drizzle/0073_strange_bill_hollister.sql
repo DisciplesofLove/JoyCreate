@@ -1,0 +1,1 @@
+ALTER TABLE `studio_datasets` ADD `monetization_json` text;

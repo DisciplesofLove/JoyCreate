@@ -1,11 +1,21 @@
 /**
  * Agentic OS Dashboard - Central Command Center
- * Unified control for 14 AI agents, workflows, marketplace, and enterprise deployment
+ * Unified control for AI agents, workflows, marketplace, and enterprise deployment
  * 🦞 Terry's Complete Agentic Operating System
  */
 
-import { useState, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import {
+  useServicesStatus,
+  useBuilderAgents,
+  useSetAgentStatus,
+  useN8nWorkflows,
+  useStartService,
+  useStopService,
+  useStartAllServices,
+  useStopAllServices,
+} from "@/hooks/use_system_dashboard";
+import { useCreatorOverview } from "@/hooks/use_creator_dashboard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -48,7 +58,7 @@ import {
 } from "lucide-react";
 
 interface Agent {
-  id: number;
+  id: string;
   name: string;
   type: string;
   status: 'active' | 'dormant' | 'error';
@@ -61,65 +71,79 @@ interface Agent {
   };
 }
 
+type ServiceId = "n8n" | "celestia" | "ollama" | "radicle";
+
 interface SystemMetric {
+  id: ServiceId;
   service: string;
-  port: number;
-  status: 'healthy' | 'degraded' | 'down';
-  uptime: number;
-  requests: number;
-  errors: number;
+  port?: number;
+  status: 'healthy' | 'down';
+  running: boolean;
+  pid?: number;
+  startedAt?: number;
+}
+
+function formatUptime(startedAt?: number): string {
+  if (!startedAt) return "—";
+  const secs = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
 export function AgenticOSDashboard() {
-  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("overview");
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
 
-  // Mock data - In production, these would come from actual APIs
-  const systemMetrics: SystemMetric[] = [
-    { service: "JoyCreate API", port: 18793, status: "healthy", uptime: 99.9, requests: 45230, errors: 12 },
-    { service: "n8n Workflows", port: 5678, status: "healthy", uptime: 99.7, requests: 12450, errors: 3 },
-    { service: "OpenClaw Gateway", port: 18789, status: "healthy", uptime: 99.8, requests: 78920, errors: 8 },
-    { service: "Dashboard Server", port: 8081, status: "healthy", uptime: 99.6, requests: 5670, errors: 1 },
-    { service: "PostgreSQL", port: 5432, status: "healthy", uptime: 99.9, requests: 156000, errors: 0 },
-  ];
+  const { data: servicesStatus = [] } = useServicesStatus();
+  const { data: rawAgents = [] } = useBuilderAgents();
+  const setAgentStatus = useSetAgentStatus();
+  const startService = useStartService();
+  const stopService = useStopService();
+  const startAllServices = useStartAllServices();
+  const stopAllServices = useStopAllServices();
 
-  const agents: Agent[] = [
-    { id: 14, name: "CustomerCare Pro", type: "customer-support", status: "active", description: "Production-ready customer support", performance: { tasks: 1250, success: 98.4, avgTime: 2.3 } },
-    { id: 12, name: "CI/CD Pipeline Agent", type: "devops", status: "dormant", description: "Automated deployment pipeline", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 11, name: "Compute Resource Orchestrator", type: "infrastructure", status: "dormant", description: "Multi-agent resource management", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 10, name: "DePIN Network Agent", type: "blockchain", status: "dormant", description: "Decentralized compute network", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 9, name: "Customer Support Agent", type: "support", status: "dormant", description: "RAG-powered support system", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 8, name: "MarketBot v2", type: "marketing", status: "dormant", description: "Advanced marketplace search", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 7, name: "MarketBot v1", type: "marketing", status: "dormant", description: "Marketplace search and analysis", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 6, name: "Agent 6", type: "general", status: "dormant", description: "Unnamed draft agent", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 5, name: "Agent 5", type: "general", status: "dormant", description: "Unnamed draft agent", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 4, name: "Agent 4", type: "general", status: "dormant", description: "Unnamed draft agent", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 3, name: "Agent 3", type: "general", status: "dormant", description: "Unnamed draft agent", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 2, name: "Agent 2", type: "general", status: "dormant", description: "Unnamed draft agent", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 1, name: "Agent 1", type: "general", status: "dormant", description: "Unnamed draft agent", performance: { tasks: 0, success: 0, avgTime: 0 } },
-    { id: 13, name: "Agent 13", type: "general", status: "dormant", description: "Unnamed draft agent", performance: { tasks: 0, success: 0, avgTime: 0 } },
-  ];
+  const systemMetrics: SystemMetric[] = servicesStatus.map((s) => ({
+    id: s.id,
+    service: s.name,
+    port: s.port,
+    status: s.running ? 'healthy' : 'down',
+    running: s.running,
+    pid: s.pid,
+    startedAt: s.startedAt,
+  }));
 
-  const activateAgentMutation = useMutation({
-    mutationFn: async (agentId: number) => {
-      // Simulate API call to activate agent
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      return { success: true, agentId };
-    },
-    onSuccess: (data) => {
-      toast.success(`Agent ${data.agentId} activated successfully`);
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
-    },
-    onError: (error) => {
-      toast.error(`Failed to activate agent: ${error.message}`);
-    },
+  const agents: Agent[] = rawAgents.map((a) => {
+    const total = a.stats?.totalExecutions ?? 0;
+    const success = a.stats?.successfulExecutions ?? 0;
+    return {
+      id: a.id,
+      name: a.name,
+      type: a.type,
+      status: a.status === 'active' ? 'active' : 'dormant',
+      description: a.description ?? '',
+      performance: {
+        tasks: total,
+        success: total > 0 ? Math.round((success / total) * 100) : 0,
+        avgTime: Math.round(((a.stats?.averageResponseTime ?? 0) / 1000) * 10) / 10,
+      },
+    };
   });
+
+  const handleActivateAgent = (id: string) => {
+    setAgentStatus.mutate(
+      { agentId: id, status: 'active' },
+      { onSuccess: () => toast.success("Agent activated") },
+    );
+  };
 
   const activeAgents = agents.filter(a => a.status === 'active').length;
   const dormantAgents = agents.filter(a => a.status === 'dormant').length;
   const totalTasks = agents.reduce((sum, a) => sum + a.performance.tasks, 0);
   const avgSuccess = agents.filter(a => a.performance.tasks > 0).reduce((sum, a) => sum + a.performance.success, 0) / Math.max(1, agents.filter(a => a.performance.tasks > 0).length);
+  const servicesUp = systemMetrics.filter(s => s.running).length;
+  const servicesHealthPct = systemMetrics.length ? Math.round((servicesUp / systemMetrics.length) * 100) : 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -134,7 +158,7 @@ export function AgenticOSDashboard() {
               Agentic OS Command Center
             </h1>
             <p className="text-sm text-muted-foreground">
-              14 AI Agents &bull; Multi-Agent Coordination &bull; Enterprise Platform 🦞
+              {agents.length} AI {agents.length === 1 ? "Agent" : "Agents"} &bull; Multi-Agent Coordination &bull; Enterprise Platform 🦞
             </p>
           </div>
         </div>
@@ -146,7 +170,7 @@ export function AgenticOSDashboard() {
           </Badge>
           <Badge variant="secondary" className="gap-1">
             <Activity className="h-3 w-3" />
-            {activeAgents}/14 Agents Active
+            {activeAgents}/{agents.length} Agents Active
           </Badge>
           <Button
             size="sm"
@@ -207,7 +231,7 @@ export function AgenticOSDashboard() {
               <Server className="h-4 w-4 text-rose-500" />
               <span className="text-xs text-muted-foreground">Services</span>
             </div>
-            <p className="text-2xl font-bold text-rose-700 dark:text-rose-400">5/5</p>
+            <p className="text-2xl font-bold text-rose-700 dark:text-rose-400">{servicesUp}/{systemMetrics.length}</p>
           </CardContent>
         </Card>
 
@@ -215,9 +239,9 @@ export function AgenticOSDashboard() {
           <CardContent className="p-4">
             <div className="flex items-center gap-2">
               <Globe className="h-4 w-4 text-indigo-500" />
-              <span className="text-xs text-muted-foreground">Uptime</span>
+              <span className="text-xs text-muted-foreground">Healthy</span>
             </div>
-            <p className="text-2xl font-bold text-indigo-700 dark:text-indigo-400">99.8%</p>
+            <p className="text-2xl font-bold text-indigo-700 dark:text-indigo-400">{servicesHealthPct}%</p>
           </CardContent>
         </Card>
       </div>
@@ -257,46 +281,103 @@ export function AgenticOSDashboard() {
             {/* System Health Grid */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Server className="h-5 w-5" />
-                  System Health
-                </CardTitle>
-                <CardDescription>
-                  Real-time status of all agentic OS components
-                </CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Server className="h-5 w-5" />
+                      System Health
+                    </CardTitle>
+                    <CardDescription>
+                      Real-time status of all agentic OS components
+                    </CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={startAllServices.isPending}
+                      onClick={() =>
+                        startAllServices.mutate(undefined, {
+                          onSuccess: () => toast.success("Starting all services"),
+                        })
+                      }
+                    >
+                      Start All
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={stopAllServices.isPending}
+                      onClick={() =>
+                        stopAllServices.mutate(undefined, {
+                          onSuccess: () => toast.success("Stopping all services"),
+                        })
+                      }
+                    >
+                      Stop All
+                    </Button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  {systemMetrics.length === 0 && (
+                    <p className="text-sm text-muted-foreground col-span-full">No services detected. Start services from the Integrations hub.</p>
+                  )}
                   {systemMetrics.map((metric) => (
-                    <div key={metric.service} className="p-3 rounded-lg border bg-card">
+                    <div key={metric.id} className="p-3 rounded-lg border bg-card">
                       <div className="flex items-center justify-between mb-2">
                         <span className="font-medium text-sm">{metric.service}</span>
                         <Badge 
-                          variant={metric.status === 'healthy' ? 'default' : metric.status === 'degraded' ? 'secondary' : 'destructive'}
+                          variant={metric.status === 'healthy' ? 'default' : 'destructive'}
                           className="text-xs"
                         >
-                          {metric.status}
+                          {metric.status === 'healthy' ? 'running' : 'stopped'}
                         </Badge>
                       </div>
                       <div className="space-y-1 text-xs text-muted-foreground">
                         <div className="flex justify-between">
                           <span>Port:</span>
-                          <span>:{metric.port}</span>
+                          <span>{metric.port ? `:${metric.port}` : '—'}</span>
                         </div>
                         <div className="flex justify-between">
                           <span>Uptime:</span>
-                          <span>{metric.uptime}%</span>
+                          <span>{metric.running ? formatUptime(metric.startedAt) : '—'}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span>Requests:</span>
-                          <span>{metric.requests.toLocaleString()}</span>
+                          <span>PID:</span>
+                          <span>{metric.pid ?? '—'}</span>
                         </div>
-                        <div className="flex justify-between">
-                          <span>Errors:</span>
-                          <span className={metric.errors === 0 ? "text-green-500" : "text-red-500"}>
-                            {metric.errors}
-                          </span>
-                        </div>
+                      </div>
+                      <div className="mt-3">
+                        {metric.running ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full"
+                            disabled={stopService.isPending}
+                            onClick={() =>
+                              stopService.mutate(metric.id, {
+                                onSuccess: () => toast.success(`Stopping ${metric.service}`),
+                              })
+                            }
+                          >
+                            Stop
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            className="w-full"
+                            disabled={startService.isPending}
+                            onClick={() =>
+                              startService.mutate(metric.id, {
+                                onSuccess: () => toast.success(`Starting ${metric.service}`),
+                              })
+                            }
+                          >
+                            Start
+                          </Button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -405,8 +486,8 @@ export function AgenticOSDashboard() {
             agents={agents}
             selectedAgent={selectedAgent}
             onSelectAgent={setSelectedAgent}
-            onActivateAgent={(id) => activateAgentMutation.mutate(id)}
-            isActivating={activateAgentMutation.isPending}
+            onActivateAgent={handleActivateAgent}
+            isActivating={setAgentStatus.isPending}
           />
         </TabsContent>
 
@@ -445,7 +526,7 @@ function AgentManagement({
   agents: Agent[];
   selectedAgent: Agent | null;
   onSelectAgent: (agent: Agent | null) => void;
-  onActivateAgent: (id: number) => void;
+  onActivateAgent: (id: string) => void;
   isActivating: boolean;
 }) {
   return (
@@ -454,7 +535,7 @@ function AgentManagement({
         <div>
           <h2 className="text-lg font-semibold">AI Agent Fleet</h2>
           <p className="text-sm text-muted-foreground">
-            Manage 14 specialized AI agents across customer service, development, marketing, and infrastructure
+            Manage specialized AI agents across customer service, development, marketing, and infrastructure
           </p>
         </div>
         <Button 
@@ -585,12 +666,14 @@ function AgentManagement({
 
 // Workflow Management Component
 function WorkflowManagement() {
-  const workflows = [
-    { name: "Customer Onboarding Flow", status: "active", agents: ["CustomerCare Pro", "Agent 2"], triggers: 45 },
-    { name: "Content to Market Pipeline", status: "active", agents: ["MarketBot v1", "Agent 3"], triggers: 23 },
-    { name: "Development Deployment Cycle", status: "ready", agents: ["CI/CD Pipeline Agent"], triggers: 0 },
-    { name: "Business Intelligence Pipeline", status: "ready", agents: ["Agent 4", "Agent 5"], triggers: 0 },
-  ];
+  const { data: rawWorkflows = [], isLoading } = useN8nWorkflows();
+  const workflows: Array<{ id: string; name: string; status: string; nodeCount: number }> =
+    (Array.isArray(rawWorkflows) ? rawWorkflows : []).map((w: any) => ({
+      id: String(w?.id ?? w?.name ?? crypto.randomUUID()),
+      name: w?.name ?? "Untitled workflow",
+      status: w?.active ? "active" : "ready",
+      nodeCount: Array.isArray(w?.nodes) ? w.nodes.length : 0,
+    }));
 
   return (
     <div className="space-y-4">
@@ -610,9 +693,16 @@ function WorkflowManagement() {
         </Button>
       </div>
 
+      {isLoading && (
+        <p className="text-sm text-muted-foreground">Loading workflows…</p>
+      )}
+      {!isLoading && workflows.length === 0 && (
+        <p className="text-sm text-muted-foreground">No workflows found. Start n8n and create a workflow to see it here.</p>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2">
         {workflows.map((workflow) => (
-          <Card key={workflow.name}>
+          <Card key={workflow.id}>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm">{workflow.name}</CardTitle>
@@ -623,18 +713,8 @@ function WorkflowManagement() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div>
-                <Label className="text-xs">Connected Agents</Label>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {workflow.agents.map(agent => (
-                    <Badge key={agent} variant="outline" className="text-xs">
-                      {agent}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <Label className="text-xs">Triggers This Month</Label>
-                <p className="text-lg font-semibold">{workflow.triggers}</p>
+                <Label className="text-xs">Nodes</Label>
+                <p className="text-lg font-semibold">{workflow.nodeCount}</p>
               </div>
               <div className="flex gap-2">
                 <Button size="sm" variant="outline">
@@ -656,6 +736,9 @@ function WorkflowManagement() {
 
 // Marketplace Management Component
 function MarketplaceManagement() {
+  const { data: overview } = useCreatorOverview();
+  const currency = (n: number) =>
+    `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -681,7 +764,7 @@ function MarketplaceManagement() {
               <DollarSign className="h-4 w-4 text-green-500" />
               <span className="text-sm font-medium">Revenue</span>
             </div>
-            <p className="text-2xl font-bold">$12,450</p>
+            <p className="text-2xl font-bold">{currency(overview?.thisMonthEarnings ?? 0)}</p>
             <p className="text-xs text-muted-foreground">This month</p>
           </CardContent>
         </Card>
@@ -690,10 +773,10 @@ function MarketplaceManagement() {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <Users className="h-4 w-4 text-blue-500" />
-              <span className="text-sm font-medium">Active Customers</span>
+              <span className="text-sm font-medium">Total Earnings</span>
             </div>
-            <p className="text-2xl font-bold">847</p>
-            <p className="text-xs text-muted-foreground">+15% this week</p>
+            <p className="text-2xl font-bold">{currency(overview?.totalEarnings ?? 0)}</p>
+            <p className="text-xs text-muted-foreground">All time</p>
           </CardContent>
         </Card>
 
@@ -703,8 +786,8 @@ function MarketplaceManagement() {
               <Store className="h-4 w-4 text-purple-500" />
               <span className="text-sm font-medium">Published Agents</span>
             </div>
-            <p className="text-2xl font-bold">3</p>
-            <p className="text-xs text-muted-foreground">11 pending review</p>
+            <p className="text-2xl font-bold">{overview?.publishedCount ?? 0}</p>
+            <p className="text-xs text-muted-foreground">{overview?.totalAgents ?? 0} created</p>
           </CardContent>
         </Card>
       </div>

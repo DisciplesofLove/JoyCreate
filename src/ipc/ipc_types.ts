@@ -1246,3 +1246,13 @@ export interface VideoStudioProvider {
   apiKeyEnvVars?: string[];
   comingSoon?: boolean;
 }
+
+export interface VideoProject {
+  id: number;
+  name: string;
+  timelineJson: Record<string, unknown> | null;
+  thumbnailPath: string | null;
+  renderedVideoId: number | null;
+  createdAt: Date;
+  updatedAt: Date;
+}

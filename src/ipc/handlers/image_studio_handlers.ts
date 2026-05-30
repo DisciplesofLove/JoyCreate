@@ -53,6 +53,14 @@ interface UpscaleImageParams {
   provider: string;
 }
 
+interface SaveEditedImageParams {
+  imageBase64: string;
+  sourceImageId?: number;
+  prompt?: string;
+  width?: number;
+  height?: number;
+}
+
 // ── Storage Directory ──────────────────────────────────────────────────────────
 
 function getImageStoreDir(): string {
@@ -763,6 +771,60 @@ export function registerImageStudioHandlers() {
         seed: null,
         style: null,
         metadata: { editedFrom: params.imageId },
+        provenanceJson: editProvenance,
+      })
+      .returning();
+
+    return row;
+  });
+
+  ipcMain.handle("image-studio:save-edited", async (_, params: SaveEditedImageParams) => {
+    if (!params.imageBase64?.trim()) throw new Error("Edited image data is required");
+
+    const base64 = params.imageBase64.replace(/^data:image\/\w+;base64,/, "");
+    const filePath = await saveBase64Image(base64, uniqueFilename("local-edit"));
+
+    const width = params.width ?? 1024;
+    const height = params.height ?? 1024;
+
+    let basePrompt = params.prompt?.trim();
+    if (!basePrompt && params.sourceImageId) {
+      const original = await db
+        .select()
+        .from(imageStudioImages)
+        .where(eq(imageStudioImages.id, params.sourceImageId))
+        .get();
+      basePrompt = original?.prompt ? `Edited: ${original.prompt}` : undefined;
+    }
+
+    const editProvenance = createProvenanceManifest({
+      model: "canvas-editor",
+      provider: "local",
+      prompt: basePrompt ?? "Canvas edit",
+      params: {
+        width,
+        height,
+        editedFrom: params.sourceImageId ?? null,
+        mode: "canvas-edit",
+      },
+    });
+
+    const [row] = await db
+      .insert(imageStudioImages)
+      .values({
+        prompt: basePrompt ?? "Canvas edit",
+        negativePrompt: null,
+        provider: "local",
+        model: "canvas-editor",
+        width,
+        height,
+        filePath,
+        seed: null,
+        style: null,
+        metadata: {
+          editedFrom: params.sourceImageId ?? null,
+          source: "canvas-editor",
+        },
         provenanceJson: editProvenance,
       })
       .returning();

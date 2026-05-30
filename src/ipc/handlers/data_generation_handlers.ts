@@ -27,6 +27,10 @@ import {
   provenanceRecords,
   type ItemLineage,
 } from "@/db/schema";
+import { generateText } from "ai";
+import { getModelClient } from "../utils/get_model_client";
+import { readSettings } from "../../main/settings";
+import type { LargeLanguageModel } from "../../lib/schemas";
 
 const logger = log.scope("data_generation");
 
@@ -110,6 +114,49 @@ let activeJobs: Map<string, GenerationJobState> = new Map();
 
 function getContentStoreDir(): string {
   return path.join(app.getPath("userData"), "content-store");
+}
+
+/**
+ * Map a GenerationConfig/AugmentationConfig provider+model to a LargeLanguageModel
+ * selection understood by getModelClient. Falls back to the user's selected model
+ * (or "auto") when no explicit provider/model is supplied.
+ */
+function resolveModelSelection(
+  provider: string | undefined,
+  model: string | undefined,
+): LargeLanguageModel {
+  const settings = readSettings();
+  if (model && provider) {
+    const mappedProvider = provider === "local" ? "ollama" : provider;
+    return { provider: mappedProvider, name: model };
+  }
+  return settings.selectedModel ?? { provider: "auto", name: "auto" };
+}
+
+/**
+ * Generate text with a configured language model. Throws if no model can be resolved.
+ */
+async function generateWithModel(args: {
+  prompt: string;
+  systemPrompt?: string;
+  provider?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}): Promise<string> {
+  const settings = readSettings();
+  const selection = resolveModelSelection(args.provider, args.model);
+  const { modelClient } = await getModelClient(selection, settings);
+
+  const result = await generateText({
+    model: modelClient.model,
+    system: args.systemPrompt,
+    prompt: args.prompt,
+    temperature: args.temperature,
+    maxOutputTokens: args.maxTokens,
+  });
+
+  return result.text;
 }
 
 async function initializeGenerationStorage() {
@@ -280,18 +327,39 @@ async function augmentItemInternal(itemId: string, config: AugmentationConfig): 
   const contentPath = path.join(storeDir, prefix, item.contentHash);
   const originalContent = await fs.readFile(contentPath, "utf-8");
   
-  // Apply augmentation (placeholder - would use actual LLM/transformations)
+  // Apply augmentation
   let augmentedContent: string;
   
   switch (config.type) {
     case "paraphrase":
-      augmentedContent = `[Paraphrased] ${originalContent}`;
+      augmentedContent = await generateWithModel({
+        systemPrompt:
+          "You are a data augmentation assistant. Paraphrase the user's text, preserving its meaning while varying the wording. Return only the paraphrased text with no preamble.",
+        prompt: originalContent,
+        provider: config.provider,
+        model: config.model,
+        temperature: 0.8,
+      });
       break;
     case "expand":
-      augmentedContent = `[Expanded] ${originalContent}\n\nAdditional details...`;
+      augmentedContent = await generateWithModel({
+        systemPrompt:
+          "You are a data augmentation assistant. Expand the user's text with relevant additional detail while keeping it coherent and on-topic. Return only the expanded text.",
+        prompt: originalContent,
+        provider: config.provider,
+        model: config.model,
+        temperature: 0.7,
+      });
       break;
     case "summarize":
-      augmentedContent = `[Summary] ${originalContent.substring(0, 100)}...`;
+      augmentedContent = await generateWithModel({
+        systemPrompt:
+          "You are a data augmentation assistant. Summarize the user's text concisely, preserving key information. Return only the summary.",
+        prompt: originalContent,
+        provider: config.provider,
+        model: config.model,
+        temperature: 0.3,
+      });
       break;
     case "noise":
       // Add random character noise
@@ -547,16 +615,15 @@ export function registerDataGenerationHandlers() {
       // Fill template
       const prompt = fillTemplate(promptTemplate, variables);
       
-      // Call LLM (this would integrate with your existing LLM infrastructure)
-      // For now, we'll create a placeholder that shows the structure
-      const generatedContent = JSON.stringify({
+      // Call the configured language model
+      const generatedContent = await generateWithModel({
         prompt,
-        model: config.model,
+        systemPrompt: config.systemPrompt,
         provider: config.provider,
-        generated: true,
-        timestamp: new Date().toISOString(),
-        // In production, this would be the actual LLM response
-      }, null, 2);
+        model: config.model,
+        temperature: config.temperature,
+        maxTokens: config.maxTokens,
+      });
       
       // Store the generated item
       const itemId = await createDatasetItem({
@@ -633,14 +700,15 @@ export function registerDataGenerationHandlers() {
             const variables = variablesList[i];
             const prompt = fillTemplate(promptTemplate || "", variables);
             
-            // Generate content (placeholder - would call actual LLM)
-            const generatedContent = JSON.stringify({
-              index: i,
+            // Generate content with the configured language model
+            const generatedContent = await generateWithModel({
               prompt,
+              systemPrompt: config.systemPrompt,
+              provider: config.provider,
               model: config.model,
-              variables,
-              generated: true,
-            }, null, 2);
+              temperature: config.temperature,
+              maxTokens: config.maxTokens,
+            });
             
             await createDatasetItem({
               datasetId,

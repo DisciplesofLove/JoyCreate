@@ -30,6 +30,7 @@ import { registerComputeTools } from "./tools/compute_tools";
 import { registerAgentBuilderTools } from "./tools/agent_builder_tools";
 import { registerSkillsTools } from "./tools/skills_tools";
 import { registerCreatorDashboardTools } from "./tools/creator_dashboard_tools";
+import { registerWeb4MarketplaceTools } from "./tools/web4_marketplace_tools";
 import { processInboundEvent, type MarketplaceInboundEvent } from "../ipc/handlers/marketplace_inbound_handlers";
 import { getTailscaleConfig } from "../lib/tailscale_service";
 
@@ -225,6 +226,8 @@ class JoyCreateMcpServer {
     registerAgentBuilderTools(server);
     registerSkillsTools(server);
     registerCreatorDashboardTools(server);
+    // Web 4.0 pipeline — ERC-8004 / ERC-1144 / X402 store operations
+    registerWeb4MarketplaceTools(server);
 
     return server;
   }

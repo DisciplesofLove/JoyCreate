@@ -26,6 +26,10 @@ import {
   CONTRACT_ADDRESSES,
   parseUSDC,
 } from "@/config/joymarketplace";
+import { DATA_PROVENANCE_CONTRACTS, ZERO_ADDRESS, type DataMarketChainId } from "@/config/data_market";
+import { mintProvenance } from "@/lib/onchain/data_market_client";
+import { buildAndAnchorShard } from "@/lib/ipld/shard_publisher";
+import { createProvenanceManifest, type ProvenanceManifest } from "@/types/provenance";
 import { jcnKeyManager } from "@/lib/jcn_key_manager";
 import {
   DEFAULT_MARKETPLACE_CHAIN,
@@ -102,6 +106,19 @@ export interface PublishOutcome {
   bundleId?: number;
   /** Echoed in dry-run mode so the renderer can surface gas. */
   estimatedGas?: { mint?: string; listing?: string };
+  /** IPLD Merkle DAG shard (Web 4.0 content layer). */
+  shardRootCid?: string;
+  /** 0x-prefixed 32-byte merkle root committed on-chain via DataProvenance. */
+  merkleRoot?: string;
+  /** 0x-prefixed sha256 of the raw content. */
+  contentHash?: string;
+  /** Celestia DA anchor for the shard CAR. */
+  celestiaHeight?: number;
+  celestiaCommitment?: string;
+  celestiaNamespace?: string;
+  /** DataProvenance soulbound token. */
+  provenanceTokenId?: string;
+  provenanceTxHash?: string;
 }
 
 // Public marketplace URL pattern
@@ -192,6 +209,38 @@ export class PublishOrchestrator {
       outcome.blockedAt = "pin-failed";
       await this.persistBundle(bundleId, outcome);
       return outcome;
+    }
+
+    // 3b. Build IPLD Merkle DAG shard + anchor CAR to Celestia DA.
+    //     Best-effort: a failure here never blocks the publish. The shard's
+    //     merkle root becomes the on-chain DataProvenance commitment (step 6b).
+    if (input.contentBuffer && contentCid) {
+      try {
+        const provenance = this.resolveProvenance(input, wallet.address);
+        const shard = await buildAndAnchorShard(
+          {
+            content: input.contentBuffer,
+            contentMimeType: input.contentMimeType,
+            contentCid,
+            name: input.name,
+            assetType: input.assetType,
+            provenance,
+          },
+          { anchor: !dryRun },
+        );
+        outcome.shardRootCid = shard.rootCidStr;
+        outcome.merkleRoot = shard.merkleRootHex;
+        outcome.contentHash = shard.contentHashHex;
+        if (shard.celestia) {
+          outcome.celestiaHeight = shard.celestia.height;
+          outcome.celestiaCommitment = shard.celestia.commitment;
+          outcome.celestiaNamespace = shard.celestia.namespace;
+        } else if (shard.celestiaError) {
+          outcome.errors!.push(`celestia anchor: ${shard.celestiaError}`);
+        }
+      } catch (err) {
+        outcome.errors!.push(`shard build: ${(err as Error).message}`);
+      }
     }
 
     // 4. Verify creator gate
@@ -318,6 +367,14 @@ export class PublishOrchestrator {
       outcome.listingId = `stylus-${marketplaceChain.id}-${mint.tokenId}`;
     }
 
+    // 6b. Mint the DataProvenance soulbound token committing the shard's
+    //     merkle root on-chain. Best-effort and gated to Arbitrum Sepolia
+    //     (where DataProvenance is deployed) so we always sign on the right
+    //     chain as the wallet that minted the edition.
+    if (outcome.merkleRoot && marketplaceChain.id === "arbitrumSepolia") {
+      await this.mintProvenanceBestEffort(wallet, "arbitrumSepolia", outcome);
+    }
+
     // 7. Persist receipts
     outcome.ok = true;
     outcome.marketplaceUrl = `${MARKETPLACE_URL_BASE}/asset/${outcome.tokenId}`;
@@ -359,6 +416,61 @@ export class PublishOrchestrator {
     if (!pk) return undefined;
     const chain = this.resolveMarketplaceChain().chain;
     return buildWallet(pk.toString("hex"), chain);
+  }
+
+  /**
+   * Resolve the artifact's provenance manifest. Studio publishes forward the
+   * stored manifest via `metadata.provenance`; if it is missing we synthesize
+   * a minimal one so the shard always commits to model/provider lineage.
+   */
+  private resolveProvenance(input: PublishInput, signerAddress: string): ProvenanceManifest {
+    const raw = input.metadata?.provenance;
+    if (raw && typeof raw === "object") {
+      return raw as ProvenanceManifest;
+    }
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      try {
+        return JSON.parse(raw) as ProvenanceManifest;
+      } catch {
+        // fall through to a synthesized manifest
+      }
+    }
+    return createProvenanceManifest({
+      model: (input.metadata?.model as string) ?? "unknown",
+      provider: (input.metadata?.provider as string) ?? "unknown",
+      prompt: typeof input.description === "string" ? input.description : undefined,
+      params: {},
+      signerAddress: signerAddress.toLowerCase(),
+    });
+  }
+
+  /**
+   * Mint a DataProvenance soulbound token for the shard merkle root.
+   * Best-effort: never throws, records failures into outcome.errors.
+   */
+  private async mintProvenanceBestEffort(
+    wallet: ethers.Wallet,
+    chain: DataMarketChainId,
+    outcome: PublishOutcome,
+  ): Promise<void> {
+    if (!outcome.merkleRoot) return;
+    if (DATA_PROVENANCE_CONTRACTS[chain] === ZERO_ADDRESS) {
+      outcome.errors!.push(`provenance: DataProvenance not deployed on ${chain}`);
+      return;
+    }
+    try {
+      const result = await mintProvenance(wallet, {
+        chain,
+        merkleRoot: outcome.merkleRoot,
+        contentUri: outcome.contentCid ? `ipfs://${outcome.contentCid}` : (outcome.metadataUri ?? ""),
+        // No personhood oracle yet — commit the unset proof (32 zero bytes).
+        humanProof: ethers.ZeroHash,
+      });
+      outcome.provenanceTokenId = result.tokenId;
+      outcome.provenanceTxHash = result.txHash;
+    } catch (err) {
+      outcome.errors!.push(`provenance mint: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -451,6 +563,14 @@ export class PublishOrchestrator {
           contentCid: outcome.contentCid,
           metadataCid: outcome.metadataCid,
           metadataUri: outcome.metadataUri,
+          shardRootCid: outcome.shardRootCid,
+          merkleRoot: outcome.merkleRoot,
+          contentHash: outcome.contentHash,
+          celestiaHeight: outcome.celestiaHeight,
+          celestiaCommitment: outcome.celestiaCommitment,
+          celestiaNamespace: outcome.celestiaNamespace,
+          provenanceTokenId: outcome.provenanceTokenId,
+          provenanceTxHash: outcome.provenanceTxHash,
           tokenId: outcome.tokenId,
           listingId: outcome.listingId,
           mintTxHash: outcome.mintTxHash,

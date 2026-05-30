@@ -24,6 +24,7 @@ import { documentsRoute, documentEditorRoute } from "./routes/documents";
 import { deployRoute } from "./routes/deploy";
 import { datasetsRoute } from "./routes/datasets";
 import { dataMarketRoute } from "./routes/data-market";
+import { erc8004ScanRoute } from "./routes/8004scan";
 import { apiGatewayRoute } from "./routes/api-gateway";
 import { onboardingRoute } from "./routes/onboarding";
 import { reputationRoute } from "./routes/reputation";
@@ -142,6 +143,7 @@ const routeTree = rootRoute.addChildren([
   deployRoute,
   datasetsRoute,
   dataMarketRoute,
+  erc8004ScanRoute,
   apiGatewayRoute,
   onboardingRoute,
   reputationRoute,

@@ -5,7 +5,16 @@
  */
 
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useServicesStatus,
+  useBuilderAgents,
+  useOpenClawGatewayStatus,
+  useOpenClawProviders,
+  useOpenClawCostSummary,
+  useN8nWorkflows,
+  useStartAllServices,
+  useStopAllServices,
+} from "@/hooks/use_system_dashboard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,114 +53,85 @@ interface SystemComponent {
 }
 
 interface AgentStatus {
-  id: number;
+  id: string;
   name: string;
   status: 'active' | 'dormant' | 'error';
   tasks: number;
   success: number;
 }
 
-const systemComponents: SystemComponent[] = [
-  {
-    id: "agentic-os",
-    name: "Agentic OS Dashboard",
-    description: "14 AI Agents + Multi-Agent Coordination",
-    category: "Core Platform",
-    status: "operational",
-    port: 8081,
-    url: "/agentic-os",
-    uptime: 99.9,
-    lastCheck: new Date(Date.now() - 1000 * 30),
-    metrics: { requests: 15420, errors: 2, responseTime: 125 }
-  },
-  {
-    id: "joycreate-api",
-    name: "JoyCreate API Server",
-    description: "Main application backend + agent builder",
-    category: "Core Platform",
-    status: "operational",
-    port: 18793,
-    url: "http://localhost:18793",
-    uptime: 99.8,
-    lastCheck: new Date(Date.now() - 1000 * 45),
-    metrics: { requests: 45230, errors: 12, responseTime: 89 }
-  },
-  {
-    id: "openclaw-gateway",
-    name: "OpenClaw Gateway",
-    description: "AI routing + messaging + provider management",
-    category: "AI Infrastructure",
-    status: "operational",
-    port: 18789,
-    url: "/openclaw-control",
-    uptime: 99.7,
-    lastCheck: new Date(Date.now() - 1000 * 60),
-    metrics: { requests: 78920, errors: 8, responseTime: 156 }
-  },
-  {
-    id: "n8n-workflows",
-    name: "n8n Workflow Engine",
-    description: "Multi-agent coordination + automation",
-    category: "Automation",
-    status: "operational",
-    port: 5678,
-    url: "http://localhost:5678",
-    uptime: 99.6,
-    lastCheck: new Date(Date.now() - 1000 * 90),
-    metrics: { requests: 12450, errors: 3, responseTime: 234 }
-  },
-  {
-    id: "postgresql",
-    name: "PostgreSQL Database",
-    description: "Agent registry + coordination data",
-    category: "Data Storage",
-    status: "operational",
-    port: 5432,
-    uptime: 99.9,
-    lastCheck: new Date(Date.now() - 1000 * 30),
-    metrics: { requests: 156000, errors: 0, responseTime: 12 }
-  },
-  {
-    id: "github-actions",
-    name: "GitHub CI/CD Pipeline",
-    description: "Automated testing + deployment",
-    category: "DevOps",
-    status: "operational",
-    url: "https://github.com",
-    uptime: 99.4,
-    lastCheck: new Date(Date.now() - 1000 * 300),
-    metrics: { requests: 847, errors: 1, responseTime: 3200 }
-  }
-];
-
-const agentFleet: AgentStatus[] = [
-  { id: 14, name: "CustomerCare Pro", status: "active", tasks: 1250, success: 98.4 },
-  { id: 12, name: "CI/CD Pipeline Agent", status: "dormant", tasks: 0, success: 0 },
-  { id: 11, name: "Compute Resource Orchestrator", status: "dormant", tasks: 0, success: 0 },
-  { id: 10, name: "DePIN Network Agent", status: "dormant", tasks: 0, success: 0 },
-  { id: 9, name: "Customer Support Agent", status: "dormant", tasks: 0, success: 0 },
-  { id: 8, name: "MarketBot v2", status: "dormant", tasks: 0, success: 0 },
-  { id: 7, name: "MarketBot v1", status: "dormant", tasks: 0, success: 0 }
-];
-
-const aiProviders = [
-  { name: "Claude Sonnet 4", status: "connected", usage: "78%", cost: "$245.67" },
-  { name: "Ollama (Local)", status: "connected", usage: "45%", cost: "$0.00" },
-  { name: "Gemini 2.5 Pro", status: "connected", usage: "23%", cost: "$89.34" },
-  { name: "DeepSeek Chat", status: "connected", usage: "12%", cost: "$12.45" }
-];
-
 export function IntegrationsPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("overview");
   const [selectedComponent, setSelectedComponent] = useState<SystemComponent | null>(null);
+
+  const { data: servicesStatus = [] } = useServicesStatus();
+  const { data: rawAgents = [] } = useBuilderAgents();
+  const { data: gatewayStatus } = useOpenClawGatewayStatus();
+  const { data: providers = [] } = useOpenClawProviders();
+  const { data: costSummary } = useOpenClawCostSummary();
+  const startAllServices = useStartAllServices();
+  const stopAllServices = useStopAllServices();
+
+  const systemComponents: SystemComponent[] = [
+    ...servicesStatus.map((s): SystemComponent => ({
+      id: s.id,
+      name: s.name,
+      description: s.running
+        ? `Running${s.pid ? ` (pid ${s.pid})` : ""}`
+        : "Stopped",
+      category: "Service",
+      status: s.running ? "operational" : "down",
+      port: s.port,
+      url: s.id === "n8n" ? "http://localhost:5678" : undefined,
+      uptime: s.running ? 100 : 0,
+      lastCheck: new Date(),
+    })),
+    {
+      id: "openclaw-gateway",
+      name: "OpenClaw Gateway",
+      description: `${gatewayStatus?.connectedClients ?? 0} clients · ${(gatewayStatus?.activePlugins ?? []).length} plugins`,
+      category: "AI Infrastructure",
+      status:
+        gatewayStatus?.status === "connected"
+          ? "operational"
+          : gatewayStatus?.status === "error"
+            ? "down"
+            : "degraded",
+      port: 18789,
+      url: "/openclaw-control",
+      uptime: gatewayStatus?.status === "connected" ? 100 : 0,
+      lastCheck: new Date(),
+    },
+  ];
+
+  const agentFleet: AgentStatus[] = rawAgents.map((a): AgentStatus => {
+    const total = a.stats?.totalExecutions ?? 0;
+    const success = a.stats?.successfulExecutions ?? 0;
+    return {
+      id: a.id,
+      name: a.name,
+      status: a.status === "active" ? "active" : "dormant",
+      tasks: total,
+      success: total > 0 ? Math.round((success / total) * 100) : 0,
+    };
+  });
+
+  const aiProviders = providers.map((p) => {
+    const modelCost = costSummary?.topModels?.find((m) => m.model === p.model);
+    return {
+      name: p.name,
+      status: p.healthy ? "connected" : p.enabled ? "degraded" : "disabled",
+      usage: p.enabled ? "enabled" : "disabled",
+      cost: modelCost ? `$${modelCost.cost.toFixed(2)}` : "$0.00",
+    };
+  });
 
   const operationalComponents = systemComponents.filter(c => c.status === "operational").length;
   const totalComponents = systemComponents.length;
   const activeAgents = agentFleet.filter(a => a.status === "active").length;
   const totalTasks = agentFleet.reduce((sum, a) => sum + a.tasks, 0);
-  const avgUptime = systemComponents.reduce((sum, c) => sum + c.uptime, 0) / systemComponents.length;
+  const avgUptime = systemComponents.length ? systemComponents.reduce((sum, c) => sum + c.uptime, 0) / systemComponents.length : 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -172,14 +152,28 @@ export function IntegrationsPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          <Badge variant="default" className="gap-1 bg-green-500">
+          <Badge variant={operationalComponents === totalComponents ? "default" : "secondary"} className={`gap-1 ${operationalComponents === totalComponents ? "bg-green-500" : ""}`}>
             <CheckCircle className="h-3 w-3" />
-            All Systems Operational
+            {operationalComponents === totalComponents ? "All Systems Operational" : "Partial Outage"}
           </Badge>
           <Badge variant="secondary" className="gap-1">
             <Activity className="h-3 w-3" />
             {operationalComponents}/{totalComponents} Services
           </Badge>
+          <Button
+            variant="outline"
+            disabled={startAllServices.isPending}
+            onClick={() => startAllServices.mutate()}
+          >
+            Start All
+          </Button>
+          <Button
+            variant="outline"
+            disabled={stopAllServices.isPending}
+            onClick={() => stopAllServices.mutate()}
+          >
+            Stop All
+          </Button>
           <Button
             onClick={() => navigate({ to: "/agentic-os" })}
             className="bg-gradient-to-r from-indigo-500 to-purple-500 text-white"
@@ -208,7 +202,7 @@ export function IntegrationsPage() {
               <Bot className="h-4 w-4 text-blue-500" />
               <span className="text-xs text-muted-foreground">Active Agents</span>
             </div>
-            <p className="text-2xl font-bold text-blue-700 dark:text-blue-400">{activeAgents}/14</p>
+            <p className="text-2xl font-bold text-blue-700 dark:text-blue-400">{activeAgents}/{agentFleet.length}</p>
           </CardContent>
         </Card>
 
@@ -305,7 +299,7 @@ export function IntegrationsPage() {
                   >
                     <Brain className="h-6 w-6 text-purple-500" />
                     <span className="font-medium">Agentic OS Dashboard</span>
-                    <span className="text-xs text-muted-foreground">14 AI Agents + Coordination</span>
+                    <span className="text-xs text-muted-foreground">{agentFleet.length} AI Agents + Coordination</span>
                   </Button>
 
                   <Button 
@@ -409,7 +403,7 @@ export function IntegrationsPage() {
                         <div className="text-xs">Agent Registry</div>
                       </div>
                       <div className="border-2 border-dashed border-indigo-500/50 rounded p-3 bg-indigo-500/5">
-                        <div className="font-bold text-indigo-600">14 AI Agents</div>
+                        <div className="font-bold text-indigo-600">{agentFleet.length} AI Agents</div>
                         <div className="text-xs">Specialized Tasks</div>
                       </div>
                     </div>
@@ -474,35 +468,35 @@ export function IntegrationsPage() {
                     <div>
                       <div className="flex justify-between text-sm mb-1">
                         <span>Agent Utilization</span>
-                        <span>{((activeAgents / 14) * 100).toFixed(0)}%</span>
+                        <span>{agentFleet.length ? ((activeAgents / agentFleet.length) * 100).toFixed(0) : 0}%</span>
                       </div>
-                      <Progress value={(activeAgents / 14) * 100} className="h-2" />
+                      <Progress value={agentFleet.length ? (activeAgents / agentFleet.length) * 100 : 0} className="h-2" />
                     </div>
                     <div>
                       <div className="flex justify-between text-sm mb-1">
-                        <span>Workflow Success Rate</span>
-                        <span>98.7%</span>
+                        <span>Avg Agent Success Rate</span>
+                        <span>{agentFleet.length ? Math.round(agentFleet.reduce((s, a) => s + a.success, 0) / agentFleet.length) : 0}%</span>
                       </div>
-                      <Progress value={98.7} className="h-2" />
+                      <Progress value={agentFleet.length ? agentFleet.reduce((s, a) => s + a.success, 0) / agentFleet.length : 0} className="h-2" />
                     </div>
                     <div>
                       <div className="flex justify-between text-sm mb-1">
-                        <span>API Response Time</span>
-                        <span>145ms avg</span>
+                        <span>Operational Components</span>
+                        <span>{operationalComponents}/{totalComponents}</span>
                       </div>
-                      <Progress value={85} className="h-2" />
+                      <Progress value={totalComponents ? (operationalComponents / totalComponents) * 100 : 0} className="h-2" />
                     </div>
                     
                     <Separator className="my-4" />
                     
                     <div className="grid grid-cols-2 gap-4 text-center">
                       <div>
-                        <p className="text-2xl font-bold text-green-600">99.8%</p>
+                        <p className="text-2xl font-bold text-green-600">{avgUptime.toFixed(0)}%</p>
                         <p className="text-xs text-muted-foreground">Availability</p>
                       </div>
                       <div>
-                        <p className="text-2xl font-bold text-blue-600">1.2K</p>
-                        <p className="text-xs text-muted-foreground">Tasks/Day</p>
+                        <p className="text-2xl font-bold text-blue-600">{totalTasks.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">Total Tasks</p>
                       </div>
                     </div>
                   </div>
@@ -693,12 +687,14 @@ function AgentsOverview({ agents }: { agents: AgentStatus[] }) {
 
 // Workflows Overview
 function WorkflowsOverview() {
-  const workflows = [
-    { name: "Customer Onboarding", status: "active", runs: 45 },
-    { name: "Content to Market", status: "active", runs: 23 },
-    { name: "Development Cycle", status: "ready", runs: 0 },
-    { name: "Business Intelligence", status: "ready", runs: 0 }
-  ];
+  const { data: rawWorkflows = [], isLoading } = useN8nWorkflows();
+  const workflows: Array<{ id: string; name: string; status: string; nodeCount: number }> =
+    (Array.isArray(rawWorkflows) ? rawWorkflows : []).map((w: any) => ({
+      id: String(w?.id ?? w?.name ?? crypto.randomUUID()),
+      name: w?.name ?? "Untitled workflow",
+      status: w?.active ? "active" : "ready",
+      nodeCount: Array.isArray(w?.nodes) ? w.nodes.length : 0,
+    }));
 
   return (
     <div className="space-y-4">
@@ -715,9 +711,16 @@ function WorkflowsOverview() {
         </Button>
       </div>
 
+      {isLoading && (
+        <p className="text-sm text-muted-foreground">Loading workflows…</p>
+      )}
+      {!isLoading && workflows.length === 0 && (
+        <p className="text-sm text-muted-foreground">No workflows found. Start n8n and create a workflow to see it here.</p>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2">
         {workflows.map((workflow) => (
-          <Card key={workflow.name}>
+          <Card key={workflow.id}>
             <CardContent className="p-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="font-medium">{workflow.name}</h3>
@@ -726,7 +729,7 @@ function WorkflowsOverview() {
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground">
-                {workflow.runs} runs this month
+                {workflow.nodeCount} nodes
               </p>
             </CardContent>
           </Card>

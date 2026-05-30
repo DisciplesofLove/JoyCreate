@@ -549,10 +549,26 @@ export function registerMarketplaceHandlers() {
 
     const totalEarnings = listings.reduce((sum, l) => sum + Number(l.totalPaid || 0), 0);
 
+    // Compute month-over-month earnings from on-chain sale timestamps.
+    // `soldAt` is a unix timestamp in seconds (subgraph block time).
+    const now = new Date();
+    const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
+
+    const soldListings = listings.filter((l) => l.buyer && l.soldAt);
+    const earningsInRange = (startMs: number, endMs: number) =>
+      soldListings.reduce((sum, l) => {
+        const soldMs = Number(l.soldAt) * 1000;
+        return soldMs >= startMs && soldMs < endMs ? sum + Number(l.totalPaid || 0) : sum;
+      }, 0);
+
+    const thisMonth = earningsInRange(startOfThisMonth, Number.POSITIVE_INFINITY);
+    const lastMonth = earningsInRange(startOfLastMonth, startOfThisMonth);
+
     return {
       totalEarnings,
-      thisMonth: 0,
-      lastMonth: 0,
+      thisMonth,
+      lastMonth,
       pendingPayout: 0,
       salesCount: listings.filter((l) => l.buyer).length,
       topAssets: listings

@@ -16,6 +16,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useSettings } from "@/hooks/useSettings";
 import { useCheckProblems } from "@/hooks/useCheckProblems";
 import { getLanguage } from "@/utils/get_language";
+import { useGeniusCoreEditLogger } from "@/hooks/useGeniusCoreEditLogger";
+import type { editor as MonacoEditor } from "monaco-editor";
 
 interface FileEditorProps {
   appId: number | null;
@@ -103,6 +105,15 @@ export const FileEditor = ({ appId, filePath }: FileEditorProps) => {
   const queryClient = useQueryClient();
   const { checkProblems } = useCheckProblems(appId);
 
+  // Genius Core — order-respecting edit capture. The hook no-ops unless the
+  // user has opted into telemetry AND enabled the keystroke logger (the main
+  // process enforces the privacy gate on every record), so this is safe to
+  // wire unconditionally here.
+  const { recordTextChange } = useGeniusCoreEditLogger({
+    projectId: appId,
+    fileId: filePath,
+  });
+
   // Update state when content loads
   useEffect(() => {
     if (content !== null) {
@@ -141,13 +152,39 @@ export const FileEditor = ({ appId, filePath }: FileEditorProps) => {
   };
 
   // Handle content change
-  const handleEditorChange = (newValue: string | undefined) => {
+  const handleEditorChange = (
+    newValue: string | undefined,
+    ev?: MonacoEditor.IModelContentChangedEvent,
+  ) => {
     setValue(newValue);
     currentValueRef.current = newValue;
 
     const hasChanged = newValue !== originalValueRef.current;
     needsSaveRef.current = hasChanged;
     setDisplayUnsavedChanges(hasChanged);
+
+    // Best-effort Genius Core capture: translate each Monaco change into an
+    // insert/delete record with its range. Never allow capture to disrupt the
+    // editor hot path.
+    if (ev?.changes?.length) {
+      try {
+        for (const change of ev.changes) {
+          const range = {
+            startLine: change.range.startLineNumber,
+            startCol: change.range.startColumn,
+            endLine: change.range.endLineNumber,
+            endCol: change.range.endColumn,
+          };
+          if (change.text.length > 0) {
+            void recordTextChange("insert", range, change.text);
+          } else if (change.rangeLength > 0) {
+            void recordTextChange("delete", range, "");
+          }
+        }
+      } catch {
+        // capture is best-effort; swallow any failure
+      }
+    }
   };
 
   // Save the file

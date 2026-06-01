@@ -69,6 +69,10 @@ export default defineConfig({
         "@fleek-platform/sdk",
         "@fleek-platform/sdk/node",
         "files-from-path",
+        // Lit Protocol — optional TEE attestation; loaded lazily in
+        // attestation_provider.ts only when JOY_LIT_NETWORK is configured.
+        // Package is intentionally not installed by default.
+        "@lit-protocol/lit-node-client",
       ],
     },
   },

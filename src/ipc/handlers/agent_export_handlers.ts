@@ -656,6 +656,7 @@ function generateChatWidgetHtml(agent: any): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%236366F1'/%3E%3Cpath d='M56 28 L56 58 Q56 70 44 70 Q32 70 32 58' stroke='white' stroke-width='6' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='56' cy='24' r='4' fill='%23F472B6'/%3E%3C/svg%3E">
   <title>${agentName}</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

@@ -754,6 +754,7 @@ export function registerAppHandlers() {
           name: params.name,
           // Use the name as the path for now
           path: appPath,
+          assetType: params.assetType,
         })
         .returning();
 

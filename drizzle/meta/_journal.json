@@ -519,6 +519,13 @@
       "when": 1780104862777,
       "tag": "0073_strange_bill_hollister",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "6",
+      "when": 1780331550528,
+      "tag": "0074_slim_sandman",
+      "breakpoints": true
     }
   ]
 }

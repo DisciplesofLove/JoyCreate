@@ -464,7 +464,7 @@ function EarningsTab() {
         </div>
       )}
 
-      {/* Monthly chart placeholder */}
+      {/* Monthly revenue chart */}
       {earnings.byMonth.length > 0 && (
         <div>
           <h3 className="font-semibold mb-3">Monthly Revenue</h3>

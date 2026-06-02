@@ -187,7 +187,6 @@ export function CapacitorControls({ appId }: CapacitorControlsProps) {
               variant="ghost"
               size="sm"
               onClick={() => {
-                // TODO: Add actual help link
                 IpcClient.getInstance().openExternalUrl(
                   "https://joycreate.app/docs/guides/mobile-app#troubleshooting",
                 );

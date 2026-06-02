@@ -116,6 +116,9 @@ export const apps = sqliteTable("apps", {
   installCommand: text("install_command"),
   startCommand: text("start_command"),
   chatContext: text("chat_context", { mode: "json" }),
+  // Asset classification chosen at creation (app | agent | bot | algorithm |
+  // schema | nlp). Used to differentiate asset kinds in dashboards/marketplace.
+  assetType: text("asset_type"),
   isFavorite: integer("is_favorite", { mode: "boolean" })
     .notNull()
     .default(sql`0`),

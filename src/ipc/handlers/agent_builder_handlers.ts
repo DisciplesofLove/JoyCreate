@@ -20,6 +20,10 @@ import log from "electron-log";
 import { registerAgentBuilderSystemHandlers } from "./agent_builder_system_handlers";
 import { registerAgentScheduleHandlers } from "./agent_schedule_handlers";
 import { registerAgentKnowledgeHandlers } from "./agent_knowledge_handlers";
+import {
+  handleExportAgentStandalone,
+  handleExportAgentDocker,
+} from "./agent_export_handlers";
 
 import type {
   CreateAgentRequest,
@@ -357,14 +361,58 @@ export async function handleDeployAgent(
       agentId: request.agentId,
       target: request.target,
       deploymentConfigJson: request.config ?? null,
-      deploymentStatus: "pending",
+      deploymentStatus: "building",
     })
     .returning();
 
-  // TODO: Implement actual deployment logic based on target
-  // For now, just create the deployment record
+  try {
+    let endpoint: string;
+    if (request.target === "local") {
+      const result = await handleExportAgentStandalone(_event, request.agentId);
+      if (!result.success || !result.exportPath) {
+        throw new Error(result.error ?? "Standalone export failed");
+      }
+      endpoint = result.exportPath;
+    } else if (request.target === "docker") {
+      const result = await handleExportAgentDocker(_event, request.agentId);
+      if (!result.success || !result.exportPath) {
+        throw new Error(result.error ?? "Docker export failed");
+      }
+      endpoint = result.exportPath;
+    } else {
+      // vercel / aws / ipfs / custom require external provider credentials and
+      // SDKs that are not configured in-app. Mark the record failed and direct
+      // the user to the corresponding manual export flow.
+      await db
+        .update(agentDeployments)
+        .set({ deploymentStatus: "failed", updatedAt: new Date() })
+        .where(eq(agentDeployments.id, deployment.id));
+      throw new Error(
+        `Automated deployment to "${request.target}" is not available in-app. ` +
+          `Use the agent export options to generate a deployable artifact, then ` +
+          `deploy it with your provider's CLI/dashboard.`
+      );
+    }
 
-  return mapDeploymentFromDb(deployment);
+    const [updated] = await db
+      .update(agentDeployments)
+      .set({
+        deploymentStatus: "deployed",
+        endpoint,
+        deployedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(agentDeployments.id, deployment.id))
+      .returning();
+
+    return mapDeploymentFromDb(updated);
+  } catch (error) {
+    await db
+      .update(agentDeployments)
+      .set({ deploymentStatus: "failed", updatedAt: new Date() })
+      .where(eq(agentDeployments.id, deployment.id));
+    throw error instanceof Error ? error : new Error(String(error));
+  }
 }
 
 export async function handleGetAgentDeployments(

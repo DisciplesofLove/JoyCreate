@@ -137,7 +137,7 @@ export function CreateAssetDialog({
       // but we tag them with their type for future differentiation
       const result = await createApp({ 
         name: assetName.trim(),
-        // metadata: { assetType: selectedType } // TODO: Add metadata support
+        assetType: selectedType,
       });
       
       if (template && NEON_TEMPLATE_IDS.has(template.id)) {

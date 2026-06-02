@@ -1,0 +1,1 @@
+ALTER TABLE `apps` ADD `asset_type` text;

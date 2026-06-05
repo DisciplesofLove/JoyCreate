@@ -440,7 +440,15 @@ export async function onReady() {
         const bridged = gw.isBridged();
         let daemonHandlesTelegram = false;
 
-        if (bridged) {
+        // Respect the configured ownership. Default is "local" so JoyCreate's
+        // in-process bot — which has full IPC + autonomous tool access — owns
+        // Telegram. Only defer to the daemon's (API-only) bot when the user
+        // explicitly set telegramOwner="daemon". Without this guard, a daemon
+        // config rewrite that re-enables its Telegram channel would silently
+        // steal ownership and the bot would lose all its agentic abilities.
+        const telegramOwner = readSettings().telegramOwner ?? "local";
+
+        if (bridged && telegramOwner === "daemon") {
           // Check if daemon process is alive (TCP probe — not HTTP, since
           // the daemon may be busy with a long tool call) and whether its
           // config says it handles Telegram.
@@ -469,6 +477,26 @@ export async function onReady() {
               await tgBot.stop();
             }
             // Skip Telegram restart — daemon owns it
+          }
+        }
+
+        // Ownership is local but the daemon may have rewritten its config to
+        // re-enable its own Telegram channel (a known behavior on daemon
+        // restart). If the local agentic bot is already running, proactively
+        // re-disable + evict the daemon poller so it can't steal the token or
+        // answer messages without JoyCreate's IPC tools (causing 409 flapping).
+        if (bridged && telegramOwner === "local" && tgBot.getStatus().running) {
+          try {
+            const { readFileSync } = await import("node:fs");
+            const { join } = await import("node:path");
+            const { homedir } = await import("node:os");
+            const daemonCfg = JSON.parse(readFileSync(join(homedir(), ".openclaw", "openclaw.json"), "utf8"));
+            if (daemonCfg?.channels?.telegram?.enabled && daemonCfg?.channels?.telegram?.botToken) {
+              svcLogger.info("Bot watchdog: daemon re-enabled its Telegram channel — re-claiming ownership (owner=local)");
+              await tryAutoStartTelegramBot();
+            }
+          } catch {
+            // Config not readable — nothing to re-claim
           }
         }
 

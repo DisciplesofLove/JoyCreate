@@ -86,6 +86,7 @@ import {
   Video,
   Image,
 } from "lucide-react";
+import { showError, showSuccess } from "@/lib/toast";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -665,21 +666,26 @@ function CorpusManagerTab() {
   const createCorpus = async () => {
     if (!corpusName) return;
     try {
+      // Split pasted text into documents (blank-line separated), one row per document.
+      const documents = corpusText
+        .split(/\n{2,}/)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+      const data = documents.map((text, i) => ({ id: i + 1, text }));
       await invoke("scraper:dataset:create", {
         name: corpusName,
         description: corpusDesc,
-        type: "text",
-        metadata: { isCorpus: true, documentCount: corpusText ? 1 : 0 },
+        data,
       });
-      if (corpusText) {
-        // TODO: add documents to corpus
-      }
+      showSuccess(`Corpus "${corpusName}" created with ${data.length} document(s)`);
       setCreating(false);
       setCorpusName("");
       setCorpusDesc("");
       setCorpusText("");
       loadCorpora();
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      showError(`Failed to create corpus: ${(err as Error).message}`);
+    }
   };
 
   const batchProcess = async (datasetId: string) => {
@@ -935,6 +941,7 @@ function ModelTrainingTab() {
   const [models, setModels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showTrain, setShowTrain] = useState(false);
+  const [training, setTraining] = useState(false);
   const [trainConfig, setTrainConfig] = useState({
     name: "",
     baseModel: "llama-3.2-1b",
@@ -957,8 +964,33 @@ function ModelTrainingTab() {
   }, []);
 
   const startTraining = async () => {
-    // Would launch via neural network builder
-    console.log("Training with config:", trainConfig);
+    if (!trainConfig.name) return;
+    setTraining(true);
+    try {
+      const job = await invoke("model-factory:create-job", {
+        name: trainConfig.name,
+        baseModelSource: "huggingface",
+        baseModelId: trainConfig.baseModel,
+        method: "lora",
+        datasetPath: trainConfig.datasetId,
+        datasetFormat: "alpaca",
+        hyperparameters: {
+          epochs: parseInt(trainConfig.epochs, 10) || 3,
+          batchSize: parseInt(trainConfig.batchSize, 10) || 8,
+          learningRate: parseFloat(trainConfig.learningRate) || 2e-5,
+        },
+      });
+      if (!job?.id) {
+        throw new Error("Training job was not created");
+      }
+      await invoke("model-factory:start-training", job.id);
+      showSuccess(`Training started for "${trainConfig.name}"`);
+      setShowTrain(false);
+    } catch (err) {
+      showError(`Failed to start training: ${(err as Error).message}`);
+    } finally {
+      setTraining(false);
+    }
   };
 
   return (
@@ -1069,8 +1101,13 @@ function ModelTrainingTab() {
           </div>
 
           <div className="flex gap-2">
-            <Button onClick={startTraining} disabled={!trainConfig.name}>
-              <Play className="h-4 w-4 mr-1" /> Start Training
+            <Button onClick={startTraining} disabled={!trainConfig.name || training}>
+              {training ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4 mr-1" />
+              )}
+              {training ? "Starting..." : "Start Training"}
             </Button>
             <Button variant="outline" onClick={() => setShowTrain(false)}>Cancel</Button>
           </div>

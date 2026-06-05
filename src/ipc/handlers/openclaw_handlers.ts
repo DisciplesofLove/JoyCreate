@@ -21,9 +21,12 @@ import {
 import {
   getOpenClawSystemIntegration,
   OpenClawSystemIntegration,
+  type AIOperationRequest,
+  type OpenClawSystemConfig,
 } from "@/lib/openclaw_system_integration";
 
 import { localAIHub } from "@/lib/local_ai_hub";
+import type { LocalModelConfig } from "@/types/trustless_inference";
 
 import type {
   OpenClawConfig,
@@ -1096,7 +1099,7 @@ Keep the enhanced prompt under 200 words. Respond with ONLY the enhanced prompt.
   ipcMain.handle(
     "openclaw:system:config:update",
     async (_event: IpcMainInvokeEvent, updates: Record<string, unknown>) => {
-      systemIntegration.updateConfig(updates as any);
+      systemIntegration.updateConfig(updates as Partial<OpenClawSystemConfig>);
       return { success: true };
     }
   );
@@ -1125,12 +1128,12 @@ Keep the enhanced prompt under 200 words. Respond with ONLY the enhanced prompt.
     }) => {
       const response = await systemIntegration.execute({
         id: uuidv4(),
-        type: request.type as any,
-        source: request.source as any,
+        type: request.type as AIOperationRequest["type"],
+        source: request.source as AIOperationRequest["source"],
         prompt: request.prompt,
         messages: request.messages,
         systemPrompt: request.systemPrompt,
-        capabilities: request.capabilities as any,
+        capabilities: request.capabilities as AIOperationRequest["capabilities"],
         metadata: request.metadata,
         timestamp: Date.now(),
       });
@@ -1193,7 +1196,7 @@ Keep the enhanced prompt under 200 words. Respond with ONLY the enhanced prompt.
         prompt: request.prompt,
         systemPrompt: request.systemPrompt,
         messages: typedMessages,
-        modelConfig: request.modelConfig as any,
+        modelConfig: request.modelConfig as LocalModelConfig,
         timestamp: Date.now(),
       });
       return response;

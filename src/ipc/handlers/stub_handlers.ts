@@ -13,7 +13,6 @@
  * from STUB_CHANNELS below and register the real handler in ipc_host.
  *
  * Tracked clusters:
- *   - identity:*               (UnifiedIdentityHub)
  *   - openclaw:sessions/subagents/cron/celestia (AgentCommandCenter)
  *   - joycreate:agents:*       (AgentCommandCenter)
  *   - version-control:*        (data_studio_extended_client)
@@ -33,8 +32,6 @@ const logger = log.scope("ipc-stub");
 type StubBehavior = "list" | "get" | "mutation" | "void";
 
 const STUB_CHANNELS: Array<{ channel: string; behavior: StubBehavior }> = [
-  // Unified Identity Hub — implemented in identity_handlers.ts
-
   // Data Studio Extended — version control
   { channel: "version-control:initialize", behavior: "mutation" },
   { channel: "version-control:commit", behavior: "mutation" },

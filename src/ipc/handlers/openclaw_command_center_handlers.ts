@@ -27,6 +27,8 @@ import {
   chats,
   libraryItems,
   messages,
+  type AgentStatus,
+  type DeploymentTarget,
 } from "../../db/schema";
 import { getAgentSwarm, type AgentNodeId } from "../../lib/agent_swarm";
 import { celestiaBlobService } from "../../lib/celestia_blob_service";
@@ -338,7 +340,7 @@ async function updateJoyCreateAgent(agentId: number, status: string) {
   if (!agentId) throw new Error("agentId is required");
   const [updated] = await db
     .update(agents)
-    .set({ status: status as any, updatedAt: new Date() })
+    .set({ status: status as AgentStatus, updatedAt: new Date() })
     .where(eq(agents.id, agentId))
     .returning();
   if (!updated) throw new Error("Agent not found");
@@ -352,7 +354,7 @@ async function deployJoyCreateAgent(agentId: number, target: string) {
     .insert(agentDeployments)
     .values({
       agentId,
-      target: target as any,
+      target: target as DeploymentTarget,
       deploymentStatus: "pending",
       deployedAt: new Date(),
     })

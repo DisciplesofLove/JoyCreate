@@ -27,7 +27,7 @@ import {
   runCopilotCommand,
 } from "@/lib/copilot/bot_copilot_commands";
 import { homedir } from "node:os";
-import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { readSettings } from "@/main/settings";
 
@@ -67,6 +67,37 @@ async function sendChunkedMessage(
   for (const chunk of chunks) {
     await bot.sendMessage(chatId, chunk);
   }
+}
+
+/**
+ * Detect when the model produced a "I can't do that / I'm not connected" style
+ * refusal instead of using its tools. These replies are the exact symptom of
+ * the bot "acting like a plain API bot": the model declined to act even though
+ * the agentic tool was available. When we see one we escalate the original
+ * request to the autonomous brain, which is guaranteed to plan + dispatch real
+ * IPC actions.
+ */
+function looksLikeToollessRefusal(text: string | undefined): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  return (
+    // "I can't / cannot / am not able to / am unable to [have] (ability|access|tools)"
+    /\bi (?:can'?t|cannot|am not able to|am unable to|don'?t have (?:the )?(?:ability|access|tools?))\b/.test(t) ||
+    // "not connected to JoyCreate / the app"
+    /\bnot connected to (?:joy ?create|the app|joycreate)\b/.test(t) ||
+    // "I'm just/only an AI/bot/assistant"
+    /\bi'?m (?:just|only) (?:an? )?(?:ai|bot|language model|chatbot|assistant)\b/.test(t) ||
+    // "I don't have access to JoyCreate / tools / the system / your ..."
+    /\bi don'?t have (?:direct |real-?time |)?access to (?:joy ?create|tools?|the system|your)/.test(t) ||
+    // "unable to perform/execute/complete the action/task/request"
+    /\bunable to (?:perform|execute|carry out|complete) (?:that|this|the) (?:action|task|request)\b/.test(t) ||
+    // "I lack the ability / I don't have the capability"
+    /\bi (?:lack|don'?t have) (?:the )?(?:capability|capabilities|ability|access|permission)/.test(t) ||
+    // "don't have integration with / no integration into JoyCreate"
+    /\b(?:no|don'?t have|lack) (?:direct )?integration(?: with)?/.test(t) ||
+    // "As an AI / As a language model"
+    /\bas an? (?:ai|language model|chatbot|assistant|bot)\b/.test(t)
+  );
 }
 
 // =============================================================================
@@ -368,27 +399,22 @@ You don't just talk about doing things — you actually do them. When someone as
     const intent = detectIntent(content);
     logger.info(`Telegram intent: ${intent} for: "${content.slice(0, 80)}"`);
 
-    if (intent === "action" || intent === "image" || intent === "video") {
-      // Show typing indicator while processing
-      bot.sendChatAction(chatId, "typing").catch(() => {});
-      // Route through autonomous brain — can plan and execute real actions
-      handleAutonomousRequest(chatId, content, event).catch((err) => {
-        logger.error("Autonomous execution failed:", err);
-        bot.sendMessage(chatId, `Sorry, I encountered an error: ${(err as Error).message}`).catch(() => {});
-      });
-    } else {
-      // Show typing indicator while processing
-      bot.sendChatAction(chatId, "typing").catch(() => {});
-      // Plain chat — route through gateway with system prompt
-      handleChatMessage(chatId, content, event).catch((err) => {
-        logger.error("Chat response failed:", err);
-        bot.sendMessage(chatId, "Sorry, I had trouble processing that.").catch(() => {});
-      });
-      // Fire-and-forget: self-learning — check if this looks like a repeatable skill
-      import("@/lib/skill_engine")
-        .then((m) => m.learnSkillFromMessage(content))
+    // Always route through the AI model (handleChatMessage) so the model can
+    // form a natural response AND use the execute_joycreate_task tool.
+    // handleChatMessage escalates to handleAutonomousRequest internally when
+    // the model doesn't invoke the tool for an action-type request.
+    bot.sendChatAction(chatId, "typing").catch(() => {});
+    handleChatMessage(chatId, content, event, intent).catch((err) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      logger.error("Chat response failed:", err);
+      bot
+        .sendMessage(chatId, `Sorry, I hit an error processing that:\n${reason}`)
         .catch(() => {});
-    }
+    });
+    // Fire-and-forget: self-learning
+    import("@/lib/skill_engine")
+      .then((m) => m.learnSkillFromMessage(content))
+      .catch(() => {});
   });
 
   // ── Skill bot commands ──
@@ -549,15 +575,11 @@ You don't just talk about doing things — you actually do them. When someone as
     // Notify user of transcription
     await bot.sendMessage(chatId, `🎤 *Heard:* "${transcribedText}"`, { parseMode: "Markdown" });
 
-    // Route through normal intent pipeline
+    // Route through normal intent pipeline — always via AI model + tools
     const intent = detectIntent(transcribedText);
     logger.info(`Telegram voice intent: ${intent} for: "${transcribedText.slice(0, 80)}"`);
 
-    if (intent === "action" || intent === "image" || intent === "video") {
-      await handleAutonomousRequest(chatId, transcribedText, { ...event, content: transcribedText });
-    } else {
-      await handleChatMessage(chatId, transcribedText, { ...event, content: transcribedText });
-    }
+    await handleChatMessage(chatId, transcribedText, { ...event, content: transcribedText }, intent);
 
     // Cleanup temp files
     await fs.unlink(oggPath).catch(() => {});
@@ -580,9 +602,16 @@ You don't just talk about doing things — you actually do them. When someone as
   }
 
   // ── Plain chat handler (with conversation memory) ──
-  async function handleChatMessage(chatId: string, content: string, _event: Record<string, unknown>) {
+  async function handleChatMessage(
+    chatId: string,
+    content: string,
+    _event: Record<string, unknown>,
+    intent: "action" | "image" | "video" | "chat" = "chat",
+  ) {
+    const needsAction = intent === "action" || intent === "image" || intent === "video";
     try {
-      const { generateText } = await import("ai");
+      const { generateText, tool, stepCountIs } = await import("ai");
+      const { z } = await import("zod");
       const { getModelClient } = await import("@/ipc/utils/get_model_client");
       const { readSettings } = await import("@/main/settings");
 
@@ -599,22 +628,110 @@ You don't just talk about doing things — you actually do them. When someone as
 
       // Build messages array with conversation history
       const history = getChatHistory(chatId);
-      const systemWithContext = userName
-        ? `${OPENCLAW_SYSTEM_PROMPT}\n\nThe user's name is ${userName}. Use it naturally in conversation (not every message — just when it feels right, like a friend would).`
-        : OPENCLAW_SYSTEM_PROMPT;
+
+      // Append an explicit tool-usage rule so the model knows it MUST call
+      // execute_joycreate_task instead of claiming it cannot access JoyCreate.
+      const toolRule = [
+        "\n\n## TOOL USAGE — CRITICAL",
+        `You have a tool called \`execute_joycreate_task\` that gives you FULL access to JoyCreate.`,
+        needsAction
+          ? "The user's message requires a JoyCreate action. You MUST invoke execute_joycreate_task — do NOT respond with text alone."
+          : "When the user asks about their JoyCreate data or wants any action performed, ALWAYS call execute_joycreate_task. Never say you cannot access JoyCreate — the tool IS the connection.",
+      ].join("\n");
+
+      const systemWithContext =
+        (userName
+          ? `${OPENCLAW_SYSTEM_PROMPT}\n\nThe user's name is ${userName}. Use it naturally in conversation (not every message — just when it feels right, like a friend would).`
+          : OPENCLAW_SYSTEM_PROMPT) + toolRule;
 
       const messages = [
         { role: "system" as const, content: systemWithContext },
         ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
       ];
 
+      // Agentic tool — lets the conversational model actually DO things across
+      // JoyCreate (create/deploy apps & agents, send emails, generate docs/
+      // images/videos, run workflows, manage services, query marketplace/
+      // blockchain — 190+ actions). Without this the bot can only talk, which
+      // is why it was replying that it "can't use tools". The tool delegates to
+      // the autonomous brain, which plans and executes real IPC actions.
+      let lastToolSummary = "";
+      const executeJoyCreateTask = tool({
+        description:
+          "Perform a real action inside JoyCreate on the user's behalf. Use this whenever the user wants you to actually DO something — create or deploy an app, create/train/deploy an AI agent, send an email, generate a document/image/video, build an n8n workflow, manage services, publish to the marketplace, or query blockchain/marketplace data. Do NOT use it for pure conversation. Pass a complete, self-contained natural-language instruction with any names, targets, or details the user provided.",
+        inputSchema: z.object({
+          task: z
+            .string()
+            .describe(
+              "A complete natural-language description of the action to perform, including every relevant detail the user gave.",
+            ),
+        }),
+        execute: async ({ task }) => {
+          bot.sendChatAction(chatId, "typing").catch(() => {});
+          const autonomous = getOpenClawAutonomous();
+          const execution = await autonomous.execute({ input: task, requireApproval: false });
+
+          // Deliver any generated media (images/videos) to the chat.
+          await sendMediaResults(bot, chatId, execution.results);
+
+          let summary: string;
+          if (execution.status === "completed") {
+            const ok = execution.results.filter((r) => r.success).length;
+            const failed = execution.results.filter((r) => !r.success).length;
+            const steps = execution.results
+              .map(
+                (r) =>
+                  `${r.success ? "✓" : "✗"} ${r.actionId}${!r.success && r.error ? `: ${r.error.slice(0, 120)}` : ""}`,
+              )
+              .join("\n");
+            summary = `Task completed. ${ok} step(s) succeeded${failed ? `, ${failed} failed` : ""}.\nObjective: ${execution.plan?.objective ?? task}\n${steps}`;
+          } else if (execution.status === "paused") {
+            summary = `Task needs approval before continuing: ${execution.error ?? execution.plan?.objective ?? task}`;
+          } else if (execution.status === "failed") {
+            summary = `Task failed: ${execution.error ?? "unknown error"}`;
+          } else {
+            summary = `Task status: ${execution.status}`;
+          }
+          lastToolSummary = summary;
+          return summary;
+        },
+      });
+
       const result = await generateText({
         model: modelClient.model,
         messages,
+        tools: { execute_joycreate_task: executeJoyCreateTask },
+        // Allow up to 6 model+tool steps.
+        stopWhen: stepCountIs(6),
         maxOutputTokens: 4096,
       });
 
-      const text = result.text?.trim();
+      // Prefer the model's final summary; if it ended on a tool call without
+      // trailing prose, fall back to the tool's own result.
+      let text = result.text?.trim();
+      if (!text && lastToolSummary) {
+        text = lastToolSummary;
+      }
+
+      // Escalation 1: action-type message but the model never called the tool —
+      // fall straight through to the autonomous brain so the user gets real results.
+      if (needsAction && !lastToolSummary) {
+        logger.info(
+          `Model did not call tool for action intent "${intent}" — escalating to autonomous brain: "${content.slice(0, 80)}"`,
+        );
+        await handleAutonomousRequest(chatId, content, _event);
+        return;
+      }
+
+      // Escalation 2: model produced a refusal instead of calling the tool.
+      if (!lastToolSummary && looksLikeToollessRefusal(text)) {
+        logger.info(
+          `Model produced a toolless refusal — escalating to autonomous brain: "${content.slice(0, 80)}"`,
+        );
+        await handleAutonomousRequest(chatId, content, _event);
+        return;
+      }
+
       if (text) {
         addToHistory(chatId, "assistant", text);
         await sendChunkedMessage(bot, chatId, text);
@@ -805,8 +922,8 @@ You don't just talk about doing things — you actually do them. When someone as
  * or the regex didn't match.
  */
 function disableDaemonTelegramChannel(): boolean {
+  const daemonConfigPath = join(homedir(), ".openclaw", "openclaw.json");
   try {
-    const daemonConfigPath = join(homedir(), ".openclaw", "openclaw.json");
     if (!existsSync(daemonConfigPath)) return false;
     const raw = readFileSync(daemonConfigPath, "utf8");
     // Match the `"telegram": { ... "enabled": true ... }` block. The
@@ -816,6 +933,13 @@ function disableDaemonTelegramChannel(): boolean {
       "$1false",
     );
     if (next === raw) return false;
+    // The daemon marks the config read-only after each write — clear the flag
+    // first so our text-level edit can persist (see openclaw-config.md).
+    try {
+      chmodSync(daemonConfigPath, 0o666);
+    } catch {
+      // Best-effort — writeFileSync below will surface the real error.
+    }
     writeFileSync(daemonConfigPath, next, "utf8");
     logger.info(
       "Disabled daemon Telegram channel in openclaw.json (text-level edit). " +
@@ -823,7 +947,18 @@ function disableDaemonTelegramChannel(): boolean {
     );
     return true;
   } catch (err) {
-    logger.warn("Failed to disable daemon Telegram channel:", err);
+    // EBUSY/EPERM means the running daemon holds an exclusive lock. We can't
+    // persist the change, but the runtime WS-RPC eviction below still frees
+    // the token for this session — so this is non-fatal.
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
+      logger.warn(
+        `Could not persist daemon Telegram disable (${code}) — daemon holds the config lock. ` +
+          "Falling back to runtime WS-RPC eviction for this session.",
+      );
+    } else {
+      logger.warn("Failed to disable daemon Telegram channel:", err);
+    }
     return false;
   }
 }

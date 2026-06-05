@@ -149,7 +149,7 @@ export async function getAvailableModels(
         endpoint: isLocal
           ? entry.name // Ollama model name
           : isPeer
-            ? (entry as any).sourcePeerId ?? "unknown-peer"
+            ? (entry as { sourcePeerId?: string | null }).sourcePeerId ?? "unknown-peer"
             : entry.name,
         avgRating: entry.avgRating,
         totalRatings: entry.totalRatings,
@@ -453,7 +453,7 @@ async function resolveModelEndpoint(modelName: string): Promise<{
               ? "ollama"
               : "cloud",
         registryId: entry.id,
-        peerId: (entry as any).sourcePeerId ?? null,
+        peerId: (entry as { sourcePeerId?: string | null }).sourcePeerId ?? null,
         contentHash: entry.contentHash,
       };
     }
@@ -475,7 +475,7 @@ async function resolveModelEndpoint(modelName: string): Promise<{
               ? "ollama"
               : "cloud",
         registryId: match.id,
-        peerId: (match as any).sourcePeerId ?? null,
+        peerId: (match as { sourcePeerId?: string | null }).sourcePeerId ?? null,
         contentHash: match.contentHash,
       };
     }

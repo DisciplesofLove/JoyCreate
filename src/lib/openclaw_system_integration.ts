@@ -619,7 +619,7 @@ export class OpenClawSystemIntegration extends EventEmitter {
           id: uuidv4(),
           type: "chat",
           source: "system",
-          messages: messages as any,
+          messages,
           timestamp: Date.now(),
         });
         return response.content;

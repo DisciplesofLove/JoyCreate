@@ -1,6 +1,5 @@
 /**
- * Identity Components — Unified Identity Hub
- * "Create once, use everywhere"
+ * Identity Components — ENS + ERC-8004 on-chain identity
  */
 
-export { UnifiedIdentityHub } from "./UnifiedIdentityHub";
+export { EnsErc8004IdentityPanel } from "./EnsErc8004IdentityPanel";

@@ -27,7 +27,7 @@ import {
   KeyRound,
   Activity,
 } from "lucide-react";
-import { UnifiedIdentityHub } from "@/components/identity/UnifiedIdentityHub";
+import { EnsErc8004IdentityPanel } from "@/components/identity/EnsErc8004IdentityPanel";
 import { PublicProfilePanel } from "@/components/identity/me/PublicProfilePanel";
 import { SSICredentialsPanel } from "@/components/identity/me/SSICredentialsPanel";
 import { AccountBillingPanel } from "@/components/identity/me/AccountBillingPanel";
@@ -96,14 +96,14 @@ export default function UnifiedIdentityPage() {
           </TabsList>
         </div>
 
-        {/* Identity tab renders the existing UnifiedIdentityHub which manages
-            its own scrolling internally — no extra ScrollArea wrapper. */}
+        {/* Identity tab renders the ENS + ERC-8004 on-chain identity panel,
+            which manages its own scrolling internally. */}
         <TabsContent
           value="identity"
           className="flex-1 min-h-0 mt-0 data-[state=inactive]:hidden"
           forceMount
         >
-          <UnifiedIdentityHub />
+          <EnsErc8004IdentityPanel />
         </TabsContent>
 
         {/* Other tabs render simpler bodies; wrap each in a ScrollArea so they

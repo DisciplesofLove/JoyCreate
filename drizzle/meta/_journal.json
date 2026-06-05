@@ -526,6 +526,13 @@
       "when": 1780331550528,
       "tag": "0074_slim_sandman",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "6",
+      "when": 1780684479778,
+      "tag": "0075_cloudy_thundra",
+      "breakpoints": true
     }
   ]
 }

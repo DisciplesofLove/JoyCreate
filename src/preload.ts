@@ -1549,28 +1549,6 @@ const validInvokeChannels = [
   "hf:download-dataset",
   "hf:push-adapter",
   "hf:auth-status",
-  // Agent Factory - Custom AI agent creation and training
-  "agent-factory:create",
-  "agent-factory:get",
-  "agent-factory:list",
-  "agent-factory:update",
-  "agent-factory:delete",
-  "agent-factory:duplicate",
-  "agent-factory:start-training",
-  "agent-factory:training-status",
-  "agent-factory:cancel-training",
-  "agent-factory:add-skill",
-  "agent-factory:remove-skill",
-  "agent-factory:list-skills",
-  "agent-factory:add-tool",
-  "agent-factory:remove-tool",
-  "agent-factory:list-tools",
-  "agent-factory:test",
-  "agent-factory:set-adapter",
-  "agent-factory:list-templates",
-  "agent-factory:create-from-template",
-  "agent-factory:export",
-  "agent-factory:import",
   // Privacy-Preserving Inference Bridge - Local-first AI
   "privacy-inference:initialize",
   "privacy-inference:get-state",
@@ -2634,12 +2612,6 @@ const validInvokeChannels = [
   // ═══ Stub Channels — see src/ipc/handlers/stub_handlers.ts ═══
   // Safe no-op responders for renderer callers whose main-side service is not yet implemented.
   // Remove a channel from this list AND from STUB_CHANNELS once a real handler is wired.
-  // Unified Identity Hub
-  "identity:get-current",
-  "identity:create",
-  "identity:ens:list",
-  "identity:jns:list",
-  "identity:events:list",
   // OpenClaw Agent Command Center
   "openclaw:sessions:list",
   "openclaw:sessions:history",
@@ -2806,8 +2778,6 @@ const validReceiveChannels = [
   "model-factory:training-completed",
   // HuggingFace Hub events
   "hf:download-progress",
-  // Agent Factory events
-  "agent-factory:event",
   // Hyper Liquid Data Pipeline events
   "hyper-liquid:event",
   "hyper-liquid:progress",

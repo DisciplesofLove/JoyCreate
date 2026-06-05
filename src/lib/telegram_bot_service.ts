@@ -405,6 +405,11 @@ class TelegramBotService extends EventEmitter {
         }
         if (status === 409) {
           this.consecutive409Reclaims++;
+          // Emit "conflict" immediately on every 409 so the IPC layer can
+          // evict the competing daemon poller via WS RPC (throttled there).
+          // Without this, claimPollingSession() can never win because the
+          // daemon keeps re-polling the same token.
+          this.emit("conflict", { error: "409 Conflict — attempting to evict competing poller", reclaiming: true });
           if (this.consecutive409Reclaims >= 3) {
             logger.error(`409 Conflict persisted after ${this.consecutive409Reclaims} reclaim attempts — another bot instance is running on the same token. Stopping.`);
             this.polling = false;
@@ -412,9 +417,11 @@ class TelegramBotService extends EventEmitter {
             this.emit("conflict", { error: this.lastError });
             break;
           }
-          // Another poller is active on the same token — try to reclaim
+          // Another poller is active on the same token — try to reclaim.
+          // Give the daemon eviction a moment to land before re-claiming.
           logger.warn(`Telegram 409 Conflict — reclaim attempt ${this.consecutive409Reclaims}/3…`);
           try {
+            await new Promise((r) => setTimeout(r, 1500));
             await this.claimPollingSession();
             // Wait a moment before retrying to let the other poller's connection fully terminate
             await new Promise((r) => setTimeout(r, 2000));

@@ -43,6 +43,47 @@ import {
 
 const logger = log.scope("openclaw_gateway");
 
+/**
+ * Shape of an OpenClaw Gateway v3 RPC request frame (`{type:"req", method, params}`).
+ * These are emitted by the bundled OpenClaw clients (Control UI / WebChat / TUI)
+ * and relayed verbatim to the daemon by this service. We narrow to this shape
+ * only to sanitize known-incompatible params before forwarding.
+ */
+interface OpenClawRpcReqFrame {
+  type: "req";
+  method: string;
+  id?: string | number;
+  params?: Record<string, unknown>;
+}
+
+/** Methods whose daemon schema resolves the agent from the session key and
+ * rejects a root `agentId` param. Keep in sync with OpenClaw's gateway docs
+ * (chat.history / chat.send / chat.inject / chat.abort). */
+const CHAT_RPC_METHOD_PREFIX = "chat.";
+
+function isOpenClawRpcReqFrame(msg: unknown): msg is OpenClawRpcReqFrame {
+  if (typeof msg !== "object" || msg === null) return false;
+  const f = msg as Record<string, unknown>;
+  return f.type === "req" && typeof f.method === "string";
+}
+
+/** Activity-log event type union — mirrors the `eventType` enum on the
+ * `openclawActivityLog` table in db/schema.ts. */
+type ActivityLogEventType =
+  | "message_received"
+  | "message_sent"
+  | "agent_started"
+  | "agent_completed"
+  | "agent_failed"
+  | "provider_switched"
+  | "workflow_triggered"
+  | "tool_invoked"
+  | "gateway_connected"
+  | "gateway_disconnected"
+  | "chat_request"
+  | "chat_response"
+  | "system";
+
 // =============================================================================
 // GATEWAY SERVICE
 // =============================================================================
@@ -284,12 +325,15 @@ export class OpenClawGatewayService extends EventEmitter {
       const configPath = this.getConfigPath();
       if (await fs.pathExists(configPath)) {
         const saved = await fs.readJson(configPath);
+        const cfg = this.config as unknown as Record<string, unknown>;
+        const savedObj = saved as Record<string, unknown>;
         // Deep merge to preserve nested defaults (e.g. gateway.host when only gateway.port is saved)
-        for (const key of Object.keys(saved)) {
-          if (typeof saved[key] === "object" && saved[key] !== null && !Array.isArray(saved[key]) && key in this.config) {
-            (this.config as any)[key] = { ...(this.config as any)[key], ...saved[key] };
+        for (const key of Object.keys(savedObj)) {
+          const val = savedObj[key];
+          if (typeof val === "object" && val !== null && !Array.isArray(val) && key in this.config) {
+            cfg[key] = { ...(cfg[key] as Record<string, unknown>), ...(val as Record<string, unknown>) };
           } else {
-            (this.config as any)[key] = saved[key];
+            cfg[key] = val;
           }
         }
       }
@@ -1045,6 +1089,31 @@ export class OpenClawGatewayService extends EventEmitter {
   // MESSAGE HANDLING
   // ===========================================================================
   
+  /**
+   * Serialize a relayed protocol frame for the daemon bridge, sanitizing
+   * known-incompatible params. The bundled OpenClaw Control UI / WebChat client
+   * emits `chat.*` RPC frames that may carry a root `agentId`; newer daemons
+   * resolve the owning agent from the session key and reject a root `agentId`
+   * with `GatewayRequestError: invalid chat.history params: at root: unexpected
+   * property 'agentId'`. Strip it before forwarding so the frame validates.
+   */
+  private serializeForwardedFrame(message: OpenClawMessage): string {
+    if (
+      isOpenClawRpcReqFrame(message) &&
+      message.method.startsWith(CHAT_RPC_METHOD_PREFIX) &&
+      message.params &&
+      typeof message.params === "object" &&
+      "agentId" in message.params
+    ) {
+      const { agentId: _agentId, ...rest } = message.params;
+      logger.debug(
+        `Stripping root 'agentId' from forwarded ${message.method} frame (daemon resolves agent from session key)`,
+      );
+      return JSON.stringify({ ...message, params: rest });
+    }
+    return JSON.stringify(message);
+  }
+  
   private async handleMessage(clientId: string, message: OpenClawMessage): Promise<void> {
     logger.debug(`Received message from ${clientId}:`, message.type);
     
@@ -1071,7 +1140,7 @@ export class OpenClawGatewayService extends EventEmitter {
         default:
           // Forward unknown protocol messages (e.g. "req") to daemon when bridged
           if (this.bridgeClient && this.bridgeClient.readyState === WebSocket.OPEN) {
-            this.bridgeClient.send(JSON.stringify(message));
+            this.bridgeClient.send(this.serializeForwardedFrame(message));
           } else {
             logger.warn(`Unknown message type: ${message.type}`);
           }
@@ -1305,7 +1374,7 @@ export class OpenClawGatewayService extends EventEmitter {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      throw new Error(`${provider.name} error: ${(error as any).error?.message || response.statusText}`);
+      throw new Error(`${provider.name} error: ${(error as { error?: { message?: string } }).error?.message || response.statusText}`);
     }
 
     const data = await response.json();
@@ -1365,7 +1434,7 @@ export class OpenClawGatewayService extends EventEmitter {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      throw new Error(`Google Gemini error: ${(error as any).error?.message || response.statusText}`);
+      throw new Error(`Google Gemini error: ${(error as { error?: { message?: string } }).error?.message || response.statusText}`);
     }
 
     const data = await response.json();
@@ -2142,7 +2211,7 @@ ${this.claudeCodeConfig.sandboxMode ? "SANDBOX MODE: Changes will be previewed b
       const d = (data ?? {}) as Record<string, any>;
       
       // Map event type to activity event type
-      const mapping: Record<string, string> = {
+      const mapping: Record<string, ActivityLogEventType> = {
         "gateway:connected": "gateway_connected",
         "gateway:disconnected": "gateway_disconnected",
         "gateway:error": "system",
@@ -2161,14 +2230,15 @@ ${this.claudeCodeConfig.sandboxMode ? "SANDBOX MODE: Changes will be previewed b
       // Extract channel message details if present
       const message = d.message as Record<string, any> | undefined;
       const channel = message?.channel || d.channel;
-      const direction = type === "message:received" ? "inbound"
+      const direction: "inbound" | "outbound" | "internal" =
+        type === "message:received" ? "inbound"
         : type === "message:sent" ? "outbound"
         : "internal";
       
       db.insert(openclawActivityLog)
         .values({
           id: makeId(),
-          eventType: eventType as any,
+          eventType,
           channel: channel || null,
           channelMessageId: message?.id || d.channelMessageId || null,
           actor: d.actor || d.clientId || "openclaw",
@@ -2183,7 +2253,7 @@ ${this.claudeCodeConfig.sandboxMode ? "SANDBOX MODE: Changes will be previewed b
           tokensUsed: d.tokensUsed || null,
           durationMs: d.durationMs || d.latencyMs || null,
           localProcessed: d.localProcessed ?? false,
-          direction: direction as any,
+          direction,
           metadataJson: d,
           externalEventId: d.externalEventId || null,
         })

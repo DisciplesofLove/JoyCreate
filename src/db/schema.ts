@@ -3502,39 +3502,3 @@ export const apiUsageRecords = sqliteTable("api_usage_records", {
     .default(sql`(unixepoch())`),
 });
 
-
-// ============================================================================
-// UNIVERSAL IDENTITY (single-user, local-first)
-//   - one row per identity in `unified_identities` (typically just one)
-//   - all subsystem records (UniversalIdentity, ENS list, JNS list, events)
-//     are persisted as JSON blobs to avoid migrating the full 50+ field type
-// ============================================================================
-
-export const unifiedIdentities = sqliteTable("unified_identities", {
-  did: text("did").primaryKey(),
-  isCurrent: integer("is_current", { mode: "boolean" }).notNull().default(false),
-  identityJson: text("identity_json").notNull(),
-  ensRecordsJson: text("ens_records_json").notNull().default("[]"),
-  jnsRecordsJson: text("jns_records_json").notNull().default("[]"),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .notNull()
-    .default(sql`(unixepoch())`),
-  updatedAt: integer("updated_at", { mode: "timestamp" })
-    .notNull()
-    .default(sql`(unixepoch())`),
-});
-
-export const unifiedIdentityEvents = sqliteTable("unified_identity_events", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  eventId: text("event_id").notNull().unique(),
-  did: text("did").notNull(),
-  type: text("type").notNull(),
-  description: text("description").notNull(),
-  triggeredBy: text("triggered_by").notNull(),
-  dataHash: text("data_hash").notNull(),
-  changesJson: text("changes_json"),
-  metadataJson: text("metadata_json"),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .notNull()
-    .default(sql`(unixepoch())`),
-});

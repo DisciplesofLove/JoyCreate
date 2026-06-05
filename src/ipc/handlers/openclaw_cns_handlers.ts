@@ -12,7 +12,7 @@ import log from "electron-log";
 import { v4 as uuidv4 } from "uuid";
 
 import { getOpenClawCNS, type CNSConfig, type AIRequest } from "@/lib/openclaw_cns";
-import { getOpenClawOllamaBridge } from "@/lib/openclaw_ollama_bridge";
+import { getOpenClawOllamaBridge, type OllamaInferenceRequest } from "@/lib/openclaw_ollama_bridge";
 import { getOpenClawN8nBridge } from "@/lib/openclaw_n8n_bridge";
 import {
   attachOpenClawAgentBridge,
@@ -192,7 +192,7 @@ export function registerOpenClawCNSHandlers(): void {
       const bridge = getOpenClawOllamaBridge();
       return await bridge.inference({
         model: args.model,
-        messages: args.messages as any,
+        messages: args.messages as OllamaInferenceRequest["messages"],
         prompt: args.prompt,
         systemPrompt: args.systemPrompt,
         temperature: args.temperature,
@@ -218,7 +218,7 @@ export function registerOpenClawCNSHandlers(): void {
   });
 
   ipcMain.handle("cns:ollama:recommend-model", async (_event, task: {
-    type: string;
+    type: "chat" | "code" | "vision" | "embedding" | "analysis" | "creative";
     complexity?: number;
     inputLength?: number;
     requiresVision?: boolean;
@@ -227,7 +227,7 @@ export function registerOpenClawCNSHandlers(): void {
   }) => {
     try {
       const bridge = getOpenClawOllamaBridge();
-      return bridge.recommendModel(task as any);
+      return bridge.recommendModel(task);
     } catch (error) {
       logger.error("Ollama recommend model failed:", error);
       throw error;

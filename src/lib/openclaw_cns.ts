@@ -840,19 +840,10 @@ export class OpenClawCNS extends EventEmitter {
     recipient: string
   ): Promise<void> {
     try {
-      const gateway = getOpenClawGateway();
-      
-      // Check if gateway has sendMessage method
-      if (typeof (gateway as any).sendMessage === "function") {
-        await (gateway as any).sendMessage({
-          channel: channel as any,
-          recipient,
-          content: message,
-        });
-      } else {
-        // Fallback: emit event for external handling
-        this.emit("message:send-requested", { channel, recipient, message });
-      }
+      // The gateway delivers outbound channel messages through its external
+      // client event (`response:external`). It has no direct `sendMessage`,
+      // so we emit the request for the channel handlers to deliver.
+      this.emit("message:send-requested", { channel, recipient, message });
     } catch (error) {
       logger.warn("Could not send message via gateway:", error);
       this.emit("message:send-requested", { channel, recipient, message });
@@ -886,13 +877,12 @@ export class OpenClawCNS extends EventEmitter {
     let gatewayConnected = false;
     try {
       const gateway = getOpenClawGateway();
-      // Check if gateway has isConnected method
-      if (typeof (gateway as any).isConnected === "function") {
-        gatewayConnected = (gateway as any).isConnected();
-      } else if (typeof (gateway as any).getStatus === "function") {
-        const status = (gateway as any).getStatus();
-        gatewayConnected = status?.connected ?? false;
-      }
+      // Use the real gateway state: it reports "connected" for the in-process
+      // gateway and `bridged` when forwarding to the external daemon. The old
+      // code probed non-existent `isConnected`/`getStatus` methods and so
+      // always reported disconnected.
+      const state = gateway.getGatewayState();
+      gatewayConnected = state.status === "connected" || state.bridged === true;
     } catch {
       // Gateway not available
     }

@@ -22,9 +22,9 @@ import { guarded } from "@/ipc/utils/guarded_handle";
 import type { UnifiedPublishPayload, PublishResult } from "@/types/publish_types";
 import { JOYMARKETPLACE_API } from "@/config/joymarketplace";
 import {
-  publishAndForget,
-  type PublishOutcome,
-} from "@/lib/joymarketplace/publish_orchestrator";
+  publishAndMonetize,
+  type PublishAndMonetizeOutcome,
+} from "@/lib/joymarketplace/publish_and_monetize";
 
 const logger = log.scope("agent_marketplace");
 
@@ -44,17 +44,24 @@ export async function publishAgentToMarketplace(payload: {
   priceUsdc?: number;
   royaltyBps?: number;
   category?: string;
+  license?: string;
+  /** Store slug override; defaults to the configured marketplaceStoreSlug. */
+  storeSlug?: string;
   dryRun?: boolean;
-}): Promise<PublishOutcome & { agentId: number }> {
+}): Promise<PublishAndMonetizeOutcome & { agentId: number }> {
   const { agentId } = payload;
-  logger.info(`Publishing agent ${agentId} to marketplace (dryRun=${Boolean(payload.dryRun)})`);
+  const dryRun = Boolean(payload.dryRun);
+  logger.info(`Publishing agent ${agentId} to marketplace (dryRun=${dryRun})`);
 
   const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
   if (!agent) {
+    const message = `Agent not found: ${agentId}`;
     return {
       ok: false,
-      dryRun: Boolean(payload.dryRun),
-      errors: [`Agent not found: ${agentId}`],
+      dryRun,
+      publish: { ok: false, dryRun, errors: [message] },
+      chain: null,
+      errors: [message],
       agentId,
     };
   }
@@ -98,20 +105,24 @@ export async function publishAgentToMarketplace(payload: {
     knowledgeBases: kbs,
   };
 
-  const outcome = await publishAndForget({
-    assetType: "agent",
-    name: agent.name,
-    description: agent.description ?? undefined,
-    contentBuffer: Buffer.from(JSON.stringify(agentBundle, null, 2)),
-    contentMimeType: "application/json",
-    metadata: {
-      agentType: agent.type,
-      modelId: agent.modelId,
-      toolCount: tools.length,
-      knowledgeBaseCount: kbs.length,
-      hasCustomUI: Boolean((agent.configJson as { uiComponents?: unknown[] } | null)?.uiComponents?.length),
-      category: payload.category ?? "ai-agent",
+  const outcome = await publishAndMonetize({
+    publish: {
+      assetType: "agent",
+      name: agent.name,
+      description: agent.description ?? undefined,
+      contentBuffer: Buffer.from(JSON.stringify(agentBundle, null, 2)),
+      contentMimeType: "application/json",
+      metadata: {
+        agentType: agent.type,
+        modelId: agent.modelId,
+        toolCount: tools.length,
+        knowledgeBaseCount: kbs.length,
+        hasCustomUI: Boolean((agent.configJson as { uiComponents?: unknown[] } | null)?.uiComponents?.length),
+        category: payload.category ?? "ai-agent",
+      },
+      license: payload.license,
     },
+    storeSlug: payload.storeSlug,
     priceUsdc: payload.priceUsdc ?? 0,
     royaltyBps: payload.royaltyBps ?? 250,
     dryRun: payload.dryRun,
@@ -136,7 +147,7 @@ export async function publishAgentToMarketplace(payload: {
           // publish state lives in `publishStatus`.
           status: "deployed" as const,
           publishStatus: "published" as const,
-          marketplaceId: outcome.tokenId ?? undefined,
+          marketplaceId: outcome.publish.tokenId ?? undefined,
           publishedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -148,10 +159,13 @@ export async function publishAgentToMarketplace(payload: {
 
   if (outcome.ok) {
     logger.info(
-      `Agent ${agentId} ${outcome.dryRun ? "dry-run" : "published"} as token ${outcome.tokenId}`,
+      `Agent ${agentId} ${outcome.dryRun ? "dry-run" : "published"} as ` +
+        `token ${outcome.publish.tokenId ?? "n/a"} drop ${outcome.dropId ?? "n/a"}`,
     );
   } else {
-    logger.warn(`Agent ${agentId} publish blocked at ${outcome.blockedAt}: ${outcome.errors?.join("; ")}`);
+    logger.warn(
+      `Agent ${agentId} publish failed: ${outcome.errors.join("; ") || "unknown error"}`,
+    );
   }
 
   return { ...outcome, agentId };
@@ -185,8 +199,8 @@ export function registerAgentMarketplaceHandlers(): void {
     "agent:publish-to-marketplace",
     guarded("agent:publish-to-marketplace", async (
       _e,
-      payload: UnifiedPublishPayload & { dryRun?: boolean },
-    ): Promise<PublishResult & { onchain: PublishOutcome }> => {
+      payload: UnifiedPublishPayload & { dryRun?: boolean; storeSlug?: string },
+    ): Promise<PublishResult & { onchain: PublishAndMonetizeOutcome }> => {
       const outcome = await publishAgentToMarketplace({
         agentId: Number(payload.sourceId),
         // payload.price is in CENTS (legacy convention); orchestrator wants USD dollars
@@ -196,23 +210,24 @@ export function registerAgentMarketplaceHandlers(): void {
           typeof (payload as { royaltyBps?: number }).royaltyBps === "number"
             ? (payload as { royaltyBps?: number }).royaltyBps
             : undefined,
-        category: payload.category,
+        category: typeof payload.category === "string" ? payload.category : undefined,
+        license: payload.license,
+        storeSlug: payload.storeSlug,
         dryRun: payload.dryRun,
       });
 
       // Map orchestrator outcome to the renderer-facing PublishResult shape.
       // We carry the full outcome under `.onchain` so the UI can surface
-      // dry-run gas estimates / blockedAt reasons.
+      // dry-run gas estimates / store drop / blockedAt reasons.
+      const tokenId = outcome.publish.tokenId;
       return {
-        assetId: outcome.tokenId ?? `pending-${Date.now()}`,
+        assetId: tokenId ?? outcome.dropId ?? `pending-${Date.now()}`,
         assetUrl:
           outcome.marketplaceUrl ??
-          (outcome.tokenId
-            ? `https://joymarketplace.io/asset/${outcome.tokenId}`
-            : ""),
+          (tokenId ? `https://joymarketplace.io/asset/${tokenId}` : ""),
         status: outcome.ok ? (outcome.dryRun ? "draft" : "published") : "draft",
         onchain: outcome,
-      } as PublishResult & { onchain: PublishOutcome };
+      } as PublishResult & { onchain: PublishAndMonetizeOutcome };
     }),
   );
 

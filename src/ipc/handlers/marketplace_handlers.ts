@@ -202,7 +202,7 @@ async function bundleApp(appId: number): Promise<AppBundle> {
 /**
  * Create a ZIP file from the app
  */
-async function createAppZip(appId: number): Promise<string> {
+export async function createAppZip(appId: number): Promise<string> {
   const appRecord = await db.query.apps.findFirst({
     where: eq(apps.id, appId),
   });

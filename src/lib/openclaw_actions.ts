@@ -191,14 +191,14 @@ export const ACTION_CATALOG: ActionDefinition[] = [
     id: "marketplace.publish",
     category: "marketplace",
     name: "Publish to Marketplace",
-    description: "Publish an app to JoyMarketplace for others to discover and install",
+    description: "License an app to our JoyMarketplace store (mints + creates an on-chain store drop on Arbitrum) so others can discover and buy it",
     parameters: [
       { name: "appId", type: "number", required: true, description: "The app ID" },
       { name: "name", type: "string", required: true, description: "Display name" },
       { name: "description", type: "string", required: true, description: "App description" },
       { name: "category", type: "string", required: true, description: "Asset category" },
     ],
-    channel: "marketplace:publish",
+    channel: "app:publish-to-marketplace",
   },
   {
     id: "marketplace.browse",
@@ -2204,6 +2204,22 @@ export async function dispatchAction(
       type: (params.type as string) || "document",
       tone: (params.tone as string) || "professional",
       length: (params.length as string) || "detailed",
+    };
+  } else if (actionId === "marketplace.publish") {
+    // The on-chain app handler expects a UnifiedPublishPayload (sourceId, not
+    // appId). Reshape the bot-facing params so the handler mints + licenses
+    // the app to our JoyMarketplace store. Defaults: free + MIT.
+    dispatchParams = {
+      assetType: "app",
+      sourceId: params.appId,
+      name: params.name,
+      shortDescription: params.description,
+      description: params.description,
+      category: (params.category as string) || "web-app",
+      tags: [],
+      pricingModel: "free",
+      license: "mit",
+      version: "1.0.0",
     };
   } else if (actionId === "landing_page.create") {
     const userPrompt = String(params.prompt ?? "").trim();

@@ -50,6 +50,7 @@ import { registerJoyBridgeHandlers } from "./handlers/joybridge_handlers";
 import { registerMarketplaceInboundHandlers } from "./handlers/marketplace_inbound_handlers";
 import { registerDataMarketHandlers } from "./handlers/data_market_handlers";
 import { registerErc8004Handlers } from "./handlers/erc8004_handlers";
+import { registerJnsHandlers } from "./handlers/jns_handlers";
 import { registerGlueHandlers } from "./handlers/glue_handlers";
 import { registerX402Handlers } from "./handlers/x402_handlers";
 import { registerBrokerHandlers } from "./handlers/broker_handlers";
@@ -173,6 +174,7 @@ import { registerVideoStudioHandlers } from "./handlers/video_studio_handlers";
 import { registerMarketplaceBrowseHandlers } from "./handlers/marketplace_browse_handlers";
 import { registerCreatorDashboardHandlers } from "./handlers/creator_dashboard_handlers";
 import { registerAgentMarketplaceHandlers } from "./handlers/agent_marketplace_handlers";
+import { registerAppMarketplaceHandlers } from "./handlers/app_marketplace_handlers";
 import { registerWorkflowMarketplaceHandlers } from "./handlers/workflow_marketplace_handlers";
 import { registerBlueprintMarketplaceHandlers } from "./handlers/blueprint_marketplace_handlers";
 import { registerJoyAssistantHandlers } from "./handlers/joy_assistant_handlers";
@@ -263,6 +265,7 @@ export function registerIpcHandlers() {
   registerMarketplaceInboundHandlers(); // Inbound: Joy Marketplace → JoyCreate webhook handler
   registerDataMarketHandlers(); // Arbitrum Stylus: DataProvenance + DataLease
   registerErc8004Handlers(); // Arbitrum Stylus: ERC-8004 Identity/Reputation/Validation registries
+  registerJnsHandlers(); // JNS (Joy Name System): read-only .joy name resolution (sibling of ENS)
   registerGlueHandlers(); // Arbitrum Stylus: StoreRegistry/EditionController/AgentMandate glue contracts
   registerX402Handlers(); // X402 pay-per-prompt: USDC EIP-3009 settlement + RevenueSplitter 80/10/10
   registerBrokerHandlers(); // ERC-1144 interface broker: machine-readable resource blueprints
@@ -572,6 +575,9 @@ export function registerIpcHandlers() {
 
   // Agent Marketplace Publishing — Publish/unpublish agents to JoyMarketplace
   registerAgentMarketplaceHandlers();
+
+  // App Marketplace Publishing — Publish apps to JoyMarketplace (Arbitrum store drop)
+  registerAppMarketplaceHandlers();
 
   // Workflow Marketplace Publishing — Publish/unpublish workflows to JoyMarketplace
   registerWorkflowMarketplaceHandlers();

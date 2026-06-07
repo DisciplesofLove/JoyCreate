@@ -54,7 +54,14 @@ export function JoyMarketplaceSettings() {
   const [saving, setSaving] = useState(false);
   const { settings, updateSettings } = useSettings();
   const marketplaceChain =
-    (settings as { marketplaceChain?: string } | null)?.marketplaceChain ?? "polygonAmoy";
+    (settings as { marketplaceChain?: string } | null)?.marketplaceChain ?? "arbitrumSepolia";
+  const configuredStoreSlug =
+    (settings as { marketplaceStoreSlug?: string } | null)?.marketplaceStoreSlug ?? "";
+  const [storeSlug, setStoreSlug] = useState("");
+
+  useEffect(() => {
+    setStoreSlug(configuredStoreSlug);
+  }, [configuredStoreSlug]);
 
   async function refresh(): Promise<void> {
     try {
@@ -215,22 +222,53 @@ export function JoyMarketplaceSettings() {
               <SelectValue placeholder="Select network" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="polygonAmoy">
-                Polygon Amoy (default — USDC)
-              </SelectItem>
               <SelectItem value="arbitrumSepolia">
-                Arbitrum Sepolia (testnet — ETH)
+                Arbitrum Sepolia (default — testnet)
               </SelectItem>
               <SelectItem value="arbitrumOne">
-                Arbitrum One (mainnet — ETH)
+                Arbitrum One (mainnet — not yet deployed)
+              </SelectItem>
+              <SelectItem value="polygonAmoy">
+                Polygon Amoy (legacy — USDC)
               </SelectItem>
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground mt-1">
-            Default is Polygon Amoy. Switching to an Arbitrum network is
-            additive — previously published items are not migrated and remain
-            visible. Arbitrum routes use ETH (not USDC) for pricing and gas;
-            bridge ETH to your wallet before publishing.
+            Default is Arbitrum Sepolia — the Web 4.0 stack (store registry,
+            edition drops, ERC-1144 discovery, x402 USDC payments) is deployed
+            there. Switching networks is additive — previously published items
+            are not migrated and remain visible. Arbitrum One is not yet
+            deployed; Polygon Amoy is the legacy USDC route.
+          </p>
+        </div>
+        <div className="pt-2">
+          <Label htmlFor="marketplace-store-slug" className="flex items-center gap-1">
+            <ShoppingCart className="h-3 w-3" />
+            Store slug (&ldquo;our store&rdquo;)
+          </Label>
+          <Input
+            id="marketplace-store-slug"
+            placeholder="my-store"
+            value={storeSlug}
+            onChange={(e) => setStoreSlug(e.target.value)}
+            onBlur={() => {
+              const next = storeSlug.trim();
+              if (next === configuredStoreSlug) return;
+              void updateSettings({ marketplaceStoreSlug: next })
+                .then(() =>
+                  toast.success(next ? `Store slug: ${next}` : "Store slug cleared"),
+                )
+                .catch((err: unknown) =>
+                  toast.error(
+                    err instanceof Error ? err.message : "Failed to save store slug",
+                  ),
+                );
+            }}
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            The storefront that published assets are licensed to. Auto-registered
+            on-chain on first publish. Leave blank to mint without creating a
+            purchasable x402 drop.
           </p>
         </div>
       </CardContent>

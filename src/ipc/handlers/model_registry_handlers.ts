@@ -38,9 +38,119 @@ import {
   parseSemver,
   type ModelChunkManifest,
 } from "@/lib/model_p2p_distribution";
+import {
+  publishAndMonetize,
+  type PublishAndMonetizeOutcome,
+} from "@/lib/joymarketplace/publish_and_monetize";
 
 const logger = log.scope("model_registry_handlers");
 const handle = createLoggedHandler(logger);
+
+export interface PublishModelToMarketplacePayload {
+  modelId: string;
+  name?: string;
+  description?: string;
+  /** Human USDC price (e.g. 1.5). 0 = free. */
+  priceUsdc?: number;
+  royaltyBps?: number;
+  category?: string;
+  license?: string;
+  /** Store slug override; defaults to the configured marketplaceStoreSlug. */
+  storeSlug?: string;
+  metadata?: Record<string, unknown>;
+  dryRun?: boolean;
+}
+
+/**
+ * License a registered model to our JoyMarketplace store via the on-chain
+ * monetize orchestrator (pin manifest -> mint -> store drop on Arbitrum).
+ *
+ * This is ADDITIVE to `publishModel` (P2P pin + Celestia attest) — the
+ * decentralized registry path is untouched. The marketplace drop pins the
+ * model's manifest (metadata + contentHash) and uses contentHash as the
+ * on-chain asset leaf. Never throws.
+ */
+export async function publishModelToMarketplace(
+  payload: PublishModelToMarketplacePayload,
+): Promise<PublishAndMonetizeOutcome & { modelId: string }> {
+  const { modelId } = payload;
+  const dryRun = Boolean(payload.dryRun);
+  logger.info(`Publishing model ${modelId} to marketplace (dryRun=${dryRun})`);
+
+  const entry = await getModelEntry(modelId);
+  if (!entry) {
+    const message = `Model not found: ${modelId}`;
+    return {
+      ok: false,
+      dryRun,
+      publish: { ok: false, dryRun, errors: [message] },
+      chain: null,
+      errors: [message],
+      modelId,
+    };
+  }
+
+  const manifest = {
+    type: "model_registry_entry",
+    id: entry.id,
+    name: entry.name,
+    description: entry.description,
+    version: entry.version,
+    family: entry.family,
+    author: entry.author,
+    modelType: entry.modelType,
+    baseModelId: entry.baseModelId,
+    adapterType: entry.adapterType,
+    contentHash: entry.contentHash,
+    manifestCid: entry.manifestCid,
+    bundleCid: entry.bundleCid,
+    parameters: entry.parameters,
+    contextLength: entry.contextLength,
+    quantization: entry.quantization,
+    format: entry.format,
+    capabilities: entry.capabilities,
+    license: entry.license,
+  };
+
+  const outcome = await publishAndMonetize({
+    publish: {
+      assetType: "model",
+      name: payload.name ?? entry.name,
+      description: payload.description ?? entry.description ?? undefined,
+      contentBuffer: Buffer.from(JSON.stringify(manifest, null, 2), "utf8"),
+      contentMimeType: "application/json",
+      metadata: {
+        ...payload.metadata,
+        modelId: entry.id,
+        family: entry.family,
+        modelType: entry.modelType,
+        version: entry.version,
+        parameters: entry.parameters ?? undefined,
+        category: payload.category ?? "model",
+      },
+      license: payload.license ?? entry.license,
+    },
+    storeSlug: payload.storeSlug,
+    priceUsdc: payload.priceUsdc ?? 0,
+    royaltyBps: payload.royaltyBps ?? 250,
+    // Use the model's content hash as the deterministic on-chain asset leaf.
+    assetLeafSource: entry.contentHash,
+    dryRun,
+  });
+
+  if (outcome.ok) {
+    logger.info(
+      `Model ${modelId} ${outcome.dryRun ? "dry-run" : "published"} as ` +
+        `token ${outcome.publish.tokenId ?? "n/a"} drop ${outcome.dropId ?? "n/a"}`,
+    );
+  } else {
+    logger.warn(
+      `Model ${modelId} publish failed: ${outcome.errors.join("; ") || "unknown error"}`,
+    );
+  }
+
+  return { ...outcome, modelId };
+}
 
 export function registerModelRegistryHandlers() {
   // Register a new model in the local registry
@@ -112,6 +222,15 @@ export function registerModelRegistryHandlers() {
     async (_event, args: { modelId: string }) => {
       if (!args.modelId) throw new Error("Missing required field: modelId");
       return publishModel(args.modelId);
+    },
+  );
+
+  // License a model to our JoyMarketplace store (Arbitrum drop via publishAndMonetize)
+  handle(
+    "model-registry:publish-to-marketplace",
+    async (_event, args: PublishModelToMarketplacePayload) => {
+      if (!args.modelId) throw new Error("Missing required field: modelId");
+      return publishModelToMarketplace(args);
     },
   );
 

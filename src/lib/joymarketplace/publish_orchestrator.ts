@@ -50,7 +50,16 @@ const logger = log.scope("publish_orchestrator");
 // Types
 // ---------------------------------------------------------------------------
 
-export type AssetType = "agent" | "document" | "image" | "video" | "model" | "blueprint" | "workflow" | "dataset";
+export type AssetType =
+  | "app"
+  | "agent"
+  | "document"
+  | "image"
+  | "video"
+  | "model"
+  | "blueprint"
+  | "workflow"
+  | "dataset";
 
 export interface PublishInput {
   assetType: AssetType;
@@ -518,6 +527,9 @@ export class PublishOrchestrator {
           return ".png";
         case "video":
           return ".mp4";
+        case "app":
+          return ".zip";
+        case "workflow":
         case "agent":
         case "document":
           return ".json";

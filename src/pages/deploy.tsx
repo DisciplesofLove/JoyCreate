@@ -78,6 +78,10 @@ import type {
   PricingModel,
   MarketplaceAsset,
 } from "@/types/marketplace_types";
+import type {
+  UnifiedCategory,
+} from "@/types/publish_types";
+import { usePublishApp } from "@/hooks/use_publish_app";
 
 const CATEGORIES: { value: AssetCategory; label: string; icon: any }[] = [
   { value: "web-app", label: "Web Application", icon: Globe },
@@ -176,25 +180,12 @@ export default function DeployPage() {
     },
   });
 
-  // Publish mutation
-  const publishMutation = useMutation({
-    mutationFn: (request: PublishAppRequest) => MarketplaceClient.publish(request),
-    onSuccess: (response) => {
-      if (response.success) {
-        toast.success("App published successfully!");
-        setPublishDialogOpen(false);
-        queryClient.invalidateQueries({ queryKey: ["marketplace-assets"] });
-        if (response.assetUrl) {
-          MarketplaceClient.openInBrowser(`/assets/${response.assetId}`);
-        }
-      } else {
-        toast.error(`Publish failed: ${response.message}`);
-      }
-    },
-    onError: (error: Error) => {
-      toast.error(`Publish error: ${error.message}`);
-    },
-  });
+  // Publish via the on-chain app marketplace hook (publishAndForget mint +
+  // EditionController store drop on Arbitrum). Mirrors usePublishAgent /
+  // usePublishWorkflow. The legacy `MarketplaceClient.publish` stub never
+  // minted; this licenses the app to our JoyMarketplace store. Per-call
+  // onSuccess (in handlePublish) handles dialog close + browser open.
+  const publishMutation = usePublishApp();
 
   // Export ZIP mutation
   const exportZipMutation = useMutation({
@@ -226,17 +217,36 @@ export default function DeployPage() {
     }
     
     publishMutation.mutate({
-      appId: selectedAppId,
-      name: publishForm.name!,
+      assetType: "app",
+      sourceId: selectedAppId,
+      name: publishForm.name,
       shortDescription: publishForm.shortDescription || "",
       description: publishForm.description || "",
-      category: publishForm.category as AssetCategory,
+      category: (publishForm.category as UnifiedCategory) ?? "web-app",
       tags: publishForm.tags || [],
-      pricingModel: publishForm.pricingModel as PricingModel,
-      price: publishForm.pricingModel !== "free" ? (publishForm.price || 0) * 100 : undefined,
+      pricingModel: (publishForm.pricingModel as PricingModel) ?? "free",
+      // price in CENTS; free listings omit price.
+      price:
+        publishForm.pricingModel !== "free"
+          ? (publishForm.price || 0) * 100
+          : undefined,
+      license: "mit",
       version: publishForm.version || "1.0.0",
-      techStack: publishForm.techStack,
-      features: publishForm.features,
+      metadata: {
+        techStack: publishForm.techStack,
+        features: publishForm.features,
+      },
+    }, {
+      onSuccess: (result) => {
+        toast.success(
+          `App published${result.assetId ? ` (token ${result.assetId})` : ""}!`,
+        );
+        setPublishDialogOpen(false);
+        queryClient.invalidateQueries({ queryKey: ["marketplace-assets"] });
+        if (result.assetId) {
+          MarketplaceClient.openInBrowser(`/assets/${result.assetId}`);
+        }
+      },
     });
   };
 

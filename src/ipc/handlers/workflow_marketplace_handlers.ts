@@ -1,6 +1,12 @@
 /**
  * Workflow Marketplace IPC Handlers
  * Publishing, unpublishing, and installing workflows from JoyMarketplace
+ *
+ * Publishing routes through the on-chain `publishAndMonetize` orchestrator
+ * (pin -> mint -> store drop on Arbitrum) instead of the Supabase
+ * `/v1/assets/publish` endpoint (which doesn't exist for joy_xxx keys and
+ * double-prefixed `/v1`). The orchestrator NEVER throws — every failure is
+ * reported via the outcome's `errors` so the renderer can surface it.
  */
 
 import { ipcMain, app } from "electron";
@@ -9,11 +15,13 @@ import { sql } from "drizzle-orm";
 import log from "electron-log";
 import * as fs from "fs-extra";
 import * as path from "path";
+import { guarded } from "@/ipc/utils/guarded_handle";
 import type { UnifiedPublishPayload, PublishResult } from "@/types/publish_types";
-import type { PublishAppResponse } from "@/types/marketplace_types";
 import { JOYMARKETPLACE_API } from "@/config/joymarketplace";
-import { readSettings } from "@/main/settings";
-import { publishAndForget } from "@/lib/joymarketplace/publish_orchestrator";
+import {
+  publishAndMonetize,
+  type PublishAndMonetizeOutcome,
+} from "@/lib/joymarketplace/publish_and_monetize";
 
 const logger = log.scope("workflow_marketplace");
 
@@ -48,143 +56,162 @@ async function readWorkflowFile(
   return fs.readJson(filePath);
 }
 
+export interface PublishWorkflowPayload {
+  workflowId: string;
+  name?: string;
+  description?: string;
+  /** Human USDC price (e.g. 1.5). 0 = free. */
+  priceUsdc?: number;
+  royaltyBps?: number;
+  category?: string;
+  license?: string;
+  /** Store slug override; defaults to the configured marketplaceStoreSlug. */
+  storeSlug?: string;
+  metadata?: Record<string, unknown>;
+  dryRun?: boolean;
+}
+
+/**
+ * Publish a single workflow to JoyMarketplace via the on-chain monetize
+ * orchestrator. Exported as a callable so bots / autonomous flows can invoke
+ * it directly. Returns the outcome augmented with the workflow id. Never throws.
+ */
+export async function publishWorkflowToMarketplace(
+  payload: PublishWorkflowPayload,
+): Promise<PublishAndMonetizeOutcome & { workflowId: string }> {
+  const workflowId = String(payload.workflowId);
+  const dryRun = Boolean(payload.dryRun);
+  logger.info(`Publishing workflow ${workflowId} to marketplace (dryRun=${dryRun})`);
+
+  const workflowJson = await readWorkflowFile(workflowId);
+
+  // Extract metadata from the workflow structure.
+  const nodes = (workflowJson.nodes as Array<Record<string, unknown>>) ?? [];
+  const connections =
+    (workflowJson.connections as Record<string, unknown>) ?? {};
+  const triggerNode = nodes.find((n) => {
+    const t = typeof n.type === "string" ? n.type : "";
+    return t.includes("Trigger") || t.includes("webhook") || t.includes("cron");
+  });
+  const triggerType =
+    triggerNode && typeof triggerNode.type === "string"
+      ? triggerNode.type
+      : "manual";
+
+  // Sanitize workflow: strip credential IDs/secrets, keep type references only.
+  const sanitizedWorkflow = JSON.parse(
+    JSON.stringify(workflowJson),
+  ) as Record<string, unknown>;
+  for (const node of (sanitizedWorkflow.nodes ?? []) as Array<
+    Record<string, unknown>
+  >) {
+    const credentials = node.credentials as Record<string, unknown> | undefined;
+    if (credentials) {
+      for (const key of Object.keys(credentials)) {
+        const cred = credentials[key];
+        if (typeof cred === "object" && cred !== null) {
+          credentials[key] = { name: (cred as { name?: string }).name ?? key };
+        }
+      }
+    }
+  }
+
+  const outcome = await publishAndMonetize({
+    publish: {
+      assetType: "workflow",
+      name: payload.name ?? workflowId,
+      description: payload.description,
+      contentBuffer: Buffer.from(JSON.stringify(sanitizedWorkflow), "utf8"),
+      contentMimeType: "application/json",
+      metadata: {
+        ...payload.metadata,
+        workflowId,
+        nodeCount: nodes.length,
+        triggerType,
+        connectionCount: Object.keys(connections).length,
+        requiresCredentials: nodes.some((n) => Boolean(n.credentials)),
+        category: payload.category ?? "ai-workflow",
+      },
+      license: payload.license,
+    },
+    storeSlug: payload.storeSlug,
+    priceUsdc: payload.priceUsdc ?? 0,
+    royaltyBps: payload.royaltyBps ?? 250,
+    dryRun,
+  });
+
+  // Track publish status locally (best-effort; table may predate migration).
+  if (outcome.ok && !outcome.dryRun) {
+    const marketplaceId =
+      outcome.publish.tokenId ?? outcome.dropId ?? workflowId;
+    const listingName = payload.name ?? workflowId;
+    try {
+      await db.run(sql`
+        INSERT INTO workflow_listings (workflow_id, name, marketplace_id, publish_status, published_at)
+        VALUES (${workflowId}, ${listingName}, ${marketplaceId}, 'published', unixepoch())
+        ON CONFLICT(workflow_id) DO UPDATE SET
+          marketplace_id = ${marketplaceId},
+          publish_status = 'published',
+          published_at = unixepoch(),
+          name = ${listingName}
+      `);
+    } catch {
+      // table may not exist before migration runs
+      logger.warn("workflow_listings table not yet available");
+    }
+  }
+
+  if (outcome.ok) {
+    logger.info(
+      `Workflow ${workflowId} ${outcome.dryRun ? "dry-run" : "published"} as ` +
+        `token ${outcome.publish.tokenId ?? "n/a"} drop ${outcome.dropId ?? "n/a"}`,
+    );
+  } else {
+    logger.warn(
+      `Workflow ${workflowId} publish failed: ${outcome.errors.join("; ") || "unknown error"}`,
+    );
+  }
+
+  return { ...outcome, workflowId };
+}
+
 export function registerWorkflowMarketplaceHandlers() {
-  // Publish a workflow to JoyMarketplace
+  // Publish a workflow to JoyMarketplace (Arbitrum store drop)
   ipcMain.handle(
     "workflow:publish-to-marketplace",
-    async (_, payload: UnifiedPublishPayload): Promise<PublishResult> => {
-      const workflowId = String(payload.sourceId);
-      logger.info(`Publishing workflow ${workflowId} to marketplace`);
-
-      // Read the workflow JSON
-      const workflowJson = await readWorkflowFile(workflowId);
-
-      // Extract metadata from the workflow structure
-      const nodes = (workflowJson.nodes as any[]) ?? [];
-      const connections = (workflowJson.connections as Record<string, unknown>) ?? {};
-      const triggerNode = nodes.find(
-        (n: any) =>
-          n.type?.includes("Trigger") ||
-          n.type?.includes("webhook") ||
-          n.type?.includes("cron")
-      );
-
-      // Sanitize workflow: remove credentials values (keep type references)
-      const sanitizedWorkflow = JSON.parse(JSON.stringify(workflowJson));
-      for (const node of (sanitizedWorkflow.nodes ?? []) as any[]) {
-        if (node.credentials) {
-          for (const key of Object.keys(node.credentials)) {
-            const cred = node.credentials[key];
-            if (typeof cred === "object" && cred !== null) {
-              // Keep only the credential type name, strip IDs and secrets
-              node.credentials[key] = { name: cred.name ?? key };
-            }
-          }
-        }
-      }
-
-      const { apiKey, publisherId } = await getCredentials();
-
-      const response = await fetch(`${MARKETPLACE_API_URL}/v1/assets/publish`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-          "X-Publisher-ID": publisherId,
-        },
-        body: JSON.stringify({
-          ...payload,
-          assetType: "workflow",
-          category: payload.category || "ai-workflow",
-          metadata: {
-            nodeCount: nodes.length,
-            triggerType: triggerNode?.type ?? "manual",
-            connectionCount: Object.keys(connections).length,
-            requiresCredentials: nodes.some((n: any) => n.credentials),
-            credentialTypes: [
-              ...new Set(
-                nodes
-                  .filter((n: any) => n.credentials)
-                  .flatMap((n: any) => Object.keys(n.credentials))
-              ),
-            ],
-          },
-          bundle: sanitizedWorkflow,
-        }),
+    guarded("workflow:publish-to-marketplace", async (
+      _e,
+      payload: UnifiedPublishPayload & { dryRun?: boolean; storeSlug?: string },
+    ): Promise<PublishResult & { onchain: PublishAndMonetizeOutcome }> => {
+      const outcome = await publishWorkflowToMarketplace({
+        workflowId: String(payload.sourceId),
+        name: payload.name,
+        description: payload.description,
+        // payload.price is in CENTS (legacy convention); orchestrator wants dollars.
+        priceUsdc:
+          typeof payload.price === "number" ? payload.price / 100 : undefined,
+        royaltyBps:
+          typeof (payload as { royaltyBps?: number }).royaltyBps === "number"
+            ? (payload as { royaltyBps?: number }).royaltyBps
+            : undefined,
+        category:
+          typeof payload.category === "string" ? payload.category : undefined,
+        license: payload.license,
+        storeSlug: payload.storeSlug,
+        metadata: payload.metadata,
+        dryRun: payload.dryRun,
       });
 
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`Marketplace API error: ${response.status} — ${body}`);
-      }
-
-      const result = (await response.json()) as PublishAppResponse;
-      if (!result.success || !result.assetId) {
-        throw new Error(result.message || "Failed to publish workflow");
-      }
-
-      // Track publish status locally in the workflow_listings table
-      try {
-        await db.run(sql`
-          INSERT INTO workflow_listings (workflow_id, name, marketplace_id, publish_status, published_at)
-          VALUES (${workflowId}, ${payload.name}, ${result.assetId}, 'published', unixepoch())
-          ON CONFLICT(workflow_id) DO UPDATE SET
-            marketplace_id = ${result.assetId},
-            publish_status = 'published',
-            published_at = unixepoch(),
-            name = ${payload.name}
-        `);
-      } catch {
-        // table may not exist before migration runs
-        logger.warn("workflow_listings table not yet available");
-      }
-
-      logger.info(`Workflow ${workflowId} published as ${result.assetId}`);
-
-      // DEAI Phase 1A — optional dual-write: also publish on-chain via the
-      // PublishOrchestrator. Gated by `marketplaceWorkflowOnChain`. Failure
-      // here MUST NOT fail the legacy Supabase publish above; the on-chain
-      // path is additive ("only enhancing the monetization", existing
-      // marketplace items must never be lost).
-      try {
-        const settings = readSettings();
-        if (settings.marketplaceWorkflowOnChain === true) {
-          const onchainOutcome = await publishAndForget({
-            assetType: "workflow",
-            name: payload.name,
-            description: payload.description,
-            contentBuffer: Buffer.from(JSON.stringify(sanitizedWorkflow), "utf8"),
-            contentMimeType: "application/json",
-            metadata: {
-              workflowId,
-              marketplaceAssetId: result.assetId,
-              nodeCount: nodes.length,
-              triggerType: triggerNode?.type ?? "manual",
-              category: payload.category || "ai-workflow",
-            },
-            priceUsdc: typeof payload.price === "number" ? payload.price * 10_000 : 0,
-            royaltyBps: 250,
-          });
-          logger.info(
-            `Workflow ${workflowId} on-chain dual-write ok=${onchainOutcome.ok}`,
-            onchainOutcome,
-          );
-        }
-      } catch (err) {
-        logger.warn(
-          `Workflow ${workflowId} on-chain dual-write failed (legacy publish unaffected)`,
-          err,
-        );
-      }
-
+      const tokenId = outcome.publish.tokenId;
       return {
-        assetId: result.assetId,
+        assetId: tokenId ?? outcome.dropId ?? `pending-${Date.now()}`,
         assetUrl:
-          result.assetUrl ??
-          `https://joymarketplace.io/assets/${result.assetId}`,
-        status: result.status,
-      };
-    }
+          outcome.marketplaceUrl ??
+          (tokenId ? `https://joymarketplace.io/asset/${tokenId}` : ""),
+        status: outcome.ok ? (outcome.dryRun ? "draft" : "published") : "draft",
+        onchain: outcome,
+      } as PublishResult & { onchain: PublishAndMonetizeOutcome };
+    }),
   );
 
   // Install a workflow from marketplace

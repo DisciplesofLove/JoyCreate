@@ -5,9 +5,10 @@
  * contract addresses, ABI, and currency descriptor used by the publisher,
  * orchestrator, and on-chain listener.
  *
- * Default is "polygonAmoy" — switching to any Arbitrum value is opt-in via
- * Settings → Marketplace network and is purely additive: no existing
- * Polygon-pinned items are touched.
+ * Default is "arbitrumSepolia" — the Web 4.0 stack (StoreRegistry +
+ * EditionController + ERC-1144 broker + x402 USDC rail) is deployed there.
+ * Switching to another value via Settings → Marketplace network is additive:
+ * previously published items are not migrated or hidden.
  */
 
 import {
@@ -26,7 +27,7 @@ import { GOLDSKY_SUBGRAPHS } from "@/config/subgraphs";
 
 export type MarketplaceChainId = "polygonAmoy" | "arbitrumSepolia" | "arbitrumOne";
 
-export const DEFAULT_MARKETPLACE_CHAIN: MarketplaceChainId = "polygonAmoy";
+export const DEFAULT_MARKETPLACE_CHAIN: MarketplaceChainId = "arbitrumSepolia";
 
 export interface MarketplaceChainConfig {
   id: MarketplaceChainId;

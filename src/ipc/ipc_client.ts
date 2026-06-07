@@ -5689,6 +5689,14 @@ export class IpcClient {
     return this.ipcRenderer.invoke("agent:install-from-marketplace", input);
   }
 
+  // ── App Marketplace ────────────────────────────────────────────────────
+
+  public async appPublishToMarketplace(
+    payload: UnifiedPublishPayload & { dryRun?: boolean; storeSlug?: string },
+  ): Promise<PublishResult> {
+    return this.ipcRenderer.invoke("app:publish-to-marketplace", payload);
+  }
+
   // ── Workflow Marketplace ───────────────────────────────────────────────
 
   public async workflowPublishToMarketplace(payload: UnifiedPublishPayload): Promise<PublishResult> {
@@ -6298,6 +6306,13 @@ export class IpcClient {
     return this.ipcRenderer.invoke("erc8004:get-validation", args);
   }
 
+  // ── JNS (Joy Name System) ────────────────────────────────────────────────
+  public async jnsResolveName(
+    args: { name: string; chain?: JnsChainId },
+  ): Promise<JnsResolution> {
+    return this.ipcRenderer.invoke("jns:resolve-name", args);
+  }
+
   // ── JOY Marketplace glue (StoreRegistry / EditionController / AgentMandate) ──
   public async glueStatus(
     args?: { chain?: GlueChainId },
@@ -6644,6 +6659,36 @@ export interface Erc8004ReputationScore {
 export interface Erc8004ValidationRecord {
   request: { validator: string; serverAgentId: string; exists: boolean };
   response: { responded: boolean; score: number };
+}
+
+// ── JNS (Joy Name System) shared types ─────────────────────────────────────
+/** Chains where the Joy ENS (.joy / joymarketplace.io) registry is deployed. */
+export type JnsChainId = "polygonAmoy" | "arbitrumSepolia";
+
+export interface JnsRecords {
+  name?: string;
+  avatar?: string;
+  url?: string;
+  description?: string;
+  storeId?: string;
+  storeName?: string;
+}
+
+export interface JnsResolution {
+  /** Fully-qualified name that was resolved (e.g. "alice.joy"). */
+  name: string;
+  /** ENS namehash node for the name. */
+  node: string;
+  /** Chain the lookup ran against. */
+  chain: JnsChainId;
+  /** True when the name has an owner (is registered). */
+  registered: boolean;
+  /** ENS registry owner of the name, or null when unregistered. */
+  owner: string | null;
+  /** Resolver `addr(node)` record, or null when unset. */
+  address: string | null;
+  /** JoyResolver text records. */
+  records: JnsRecords;
 }
 
 // ── JOY Marketplace glue contract types ────────────────────────────────────

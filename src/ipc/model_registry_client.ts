@@ -15,6 +15,7 @@ import type {
   ModelChunkManifest,
   DownloadResult,
 } from "@/lib/model_p2p_distribution";
+import type { PublishAndMonetizeOutcome } from "@/lib/joymarketplace/publish_and_monetize";
 
 class ModelRegistryClient {
   private static instance: ModelRegistryClient;
@@ -74,6 +75,25 @@ class ModelRegistryClient {
   /** Publish a model to the decentralized network */
   async publish(modelId: string): Promise<PublishResult> {
     return this.ipcRenderer.invoke("model-registry:publish", { modelId });
+  }
+
+  /** License a model to our JoyMarketplace store (Arbitrum drop via monetize) */
+  async publishToMarketplace(payload: {
+    modelId: string;
+    name?: string;
+    description?: string;
+    priceUsdc?: number;
+    royaltyBps?: number;
+    category?: string;
+    license?: string;
+    storeSlug?: string;
+    metadata?: Record<string, unknown>;
+    dryRun?: boolean;
+  }): Promise<PublishAndMonetizeOutcome & { modelId: string }> {
+    return this.ipcRenderer.invoke(
+      "model-registry:publish-to-marketplace",
+      payload,
+    );
   }
 
   /** Rate a model */

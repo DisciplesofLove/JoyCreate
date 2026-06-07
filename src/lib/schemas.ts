@@ -415,6 +415,14 @@ export const UserSettingsSchema = z.object({
     .enum(["polygonAmoy", "arbitrumSepolia", "arbitrumOne"])
     .optional(),
 
+  /**
+   * Creator store slug ("our store") that published assets are licensed to.
+   * Used as the StoreRegistry slug for the EditionController drop on Arbitrum;
+   * auto-registered on first publish if it does not yet exist. When unset,
+   * assets still mint but no purchasable x402 drop is created.
+   */
+  marketplaceStoreSlug: z.string().optional(),
+
   ////////////////////////////////
   // GENIUS CORE (local ONNX runtime)
   ////////////////////////////////

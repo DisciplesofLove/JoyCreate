@@ -1,11 +1,12 @@
 /**
- * ENS + ERC-8004 Identity Panel.
+ * ENS + JNS + ERC-8004 Identity Panel.
  *
- * Replaces the legacy local DID/JNS "Unified Identity Hub". Identity is now
- * anchored to ENS names and on-chain ERC-8004 agent registration, with
- * reputation read from the on-chain ReputationRegistry. The local off-chain
- * reputation rollup remains a cache and is surfaced on the full 8004scan
- * explorer.
+ * Consolidates the legacy DID/JNS "Unified Identity Hub". Identity is anchored
+ * to two sibling name systems — ENS (`.eth`, via the standard ETH registrar)
+ * and JNS (the Joy Name System, `.joy`) — plus on-chain ERC-8004 agent
+ * registration, with reputation read from the on-chain ReputationRegistry. The
+ * local off-chain reputation rollup remains a cache and is surfaced on the full
+ * 8004scan explorer.
  */
 
 import { useState } from "react";
@@ -18,6 +19,7 @@ import {
   useErc8004Agent,
   useErc8004Reputation,
 } from "@/hooks/useErc8004";
+import { useJnsResolve } from "@/hooks/use_jns";
 import type { Erc8004ChainId } from "@/ipc/ipc_client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -82,6 +84,13 @@ export function EnsErc8004IdentityPanel() {
               <span>
                 <strong>ENS</strong> — human-readable name and the root of your
                 identity hierarchy.
+              </span>
+            </div>
+            <div className="flex items-start gap-2">
+              <Globe className="w-4 h-4 mt-0.5 text-teal-400 shrink-0" />
+              <span>
+                <strong>JNS</strong> — the Joy Name System (<code>.joy</code>),
+                the sibling of ENS for the JoyCreate namespace.
               </span>
             </div>
             <div className="flex items-start gap-2">
@@ -187,6 +196,9 @@ export function EnsErc8004IdentityPanel() {
           </CardContent>
         </Card>
 
+        {/* Resolve a JNS (.joy) name */}
+        <JnsLookupCard />
+
         {/* Link to full explorer */}
         <Card>
           <CardContent className="flex items-center justify-between py-4">
@@ -207,5 +219,107 @@ export function EnsErc8004IdentityPanel() {
         </Card>
       </div>
     </div>
+  );
+}
+
+/**
+ * JNS (.joy) name lookup — the sibling of ENS resolution. Reads owner, address,
+ * and creator text records for a Joy Name System name via the `jns:resolve-name`
+ * IPC channel. The chain is inferred from the name suffix.
+ */
+function JnsLookupCard() {
+  const [nameInput, setNameInput] = useState("");
+  const [queryName, setQueryName] = useState<string | undefined>();
+  const jns = useJnsResolve(queryName);
+  const result = jns.data;
+
+  const handleLookup = () => {
+    const trimmed = nameInput.trim();
+    if (trimmed) setQueryName(trimmed);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Resolve a JNS (.joy) name</CardTitle>
+        <CardDescription>
+          Look up a Joy Name System name — the sibling of ENS. JNS resolves{" "}
+          <code>.joy</code> names to a wallet address and creator records.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="jns-name">JNS name</Label>
+          <div className="flex gap-2">
+            <Input
+              id="jns-name"
+              placeholder="alice.joy"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleLookup();
+              }}
+            />
+            <Button
+              variant="outline"
+              disabled={!nameInput.trim() || jns.isFetching}
+              onClick={handleLookup}
+            >
+              <Search className="w-4 h-4 mr-1" />
+              Resolve
+            </Button>
+          </div>
+        </div>
+
+        {jns.isError && (
+          <p className="text-sm text-destructive">
+            {(jns.error as Error)?.message ?? "Lookup failed."}
+          </p>
+        )}
+
+        {result && !result.registered && (
+          <p className="text-sm text-muted-foreground">
+            <span className="font-mono">{result.name}</span> is not registered
+            yet.
+          </p>
+        )}
+
+        {result?.registered && (
+          <div className="rounded-lg border p-4 space-y-2 text-sm">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">{result.chain}</Badge>
+              <span className="font-medium font-mono">{result.name}</span>
+            </div>
+            {result.address && (
+              <div>
+                <span className="text-muted-foreground">Address:</span>{" "}
+                <span className="font-mono break-all">{result.address}</span>
+              </div>
+            )}
+            <div className="font-mono text-muted-foreground break-all">
+              Owner: {result.owner}
+            </div>
+            {result.records.url && (
+              <div>
+                <span className="text-muted-foreground">URL:</span>{" "}
+                {result.records.url}
+              </div>
+            )}
+            {result.records.description && (
+              <p className="text-muted-foreground">
+                {result.records.description}
+              </p>
+            )}
+            {result.records.storeName && (
+              <div>
+                <span className="text-muted-foreground">Store:</span>{" "}
+                {result.records.storeName}
+                {result.records.storeId ? ` (#${result.records.storeId})` : ""}
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

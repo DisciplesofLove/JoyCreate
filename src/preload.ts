@@ -734,6 +734,8 @@ const validInvokeChannels = [
   "erc8004:validation-request",
   "erc8004:validation-response",
   "erc8004:get-validation",
+  // JNS (Joy Name System) — read-only .joy name resolution (sibling of ENS)
+  "jns:resolve-name",
   // JOY Marketplace glue — StoreRegistry / EditionController / AgentMandate
   "glue:status",
   "glue:register-store",
@@ -904,6 +906,8 @@ const validInvokeChannels = [
   "agent:unpublish",
   "agent:update-listing",
   "agent:install-from-marketplace",
+  // App Marketplace Publishing (Arbitrum store drop via publishAndMonetize)
+  "app:publish-to-marketplace",
   // Workflow Marketplace Publishing
   "workflow:publish-to-marketplace",
   "workflow:install-from-marketplace",
@@ -2259,6 +2263,7 @@ const validInvokeChannels = [
   "model-registry:search",
   "model-registry:list-local",
   "model-registry:publish",
+  "model-registry:publish-to-marketplace",
   "model-registry:rate",
   "model-registry:mab-signal",
   "model-registry:record-usage",

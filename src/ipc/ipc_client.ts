@@ -2148,26 +2148,34 @@ export class IpcClient {
     return this.ipcRenderer.invoke("brand-kit:render-for-agent", { agentId });
   }
 
-  // ─── Social posting ──────────────────────────────────────────────────────────────
+  // ─── Social media suite ───────────────────────────────────────────────────────────
 
+  // Accounts + providers
   async listSocialProviders(): Promise<
-    import("@/db/social_schema").SocialProvider[]
+    import("@/lib/social/registry").SocialProviderInfo[]
   > {
     return this.ipcRenderer.invoke("social:list-providers");
   }
 
   async listSocialAccounts(): Promise<
-    Array<import("./handlers/social_handlers").SocialAccountDto>
+    import("./handlers/social_handlers").SocialAccountDto[]
   > {
     return this.ipcRenderer.invoke("social:list-accounts");
   }
 
-  async connectSocialAccount(input: {
-    provider: import("@/db/social_schema").SocialProvider;
-    authCode?: string;
-    extras?: Record<string, unknown>;
+  async getSocialAccount(
+    accountId: number,
+  ): Promise<import("./handlers/social_handlers").SocialAccountDto> {
+    return this.ipcRenderer.invoke("social:get-account", { accountId });
+  }
+
+  async updateSocialAccount(input: {
+    accountId: number;
+    enabled?: boolean;
+    autoReply?: boolean;
+    label?: string;
   }): Promise<import("./handlers/social_handlers").SocialAccountDto> {
-    return this.ipcRenderer.invoke("social:connect-account", input);
+    return this.ipcRenderer.invoke("social:update-account", input);
   }
 
   async disconnectSocialAccount(
@@ -2176,34 +2184,295 @@ export class IpcClient {
     return this.ipcRenderer.invoke("social:disconnect-account", { accountId });
   }
 
-  async postSocial(input: {
-    accountId: number;
-    payload: import("@/db/social_schema").SocialPostPayload;
-  }): Promise<{ externalPostId: string; permalink?: string }> {
-    return this.ipcRenderer.invoke("social:post", input);
+  // Posts
+  async listSocialPosts(args?: {
+    status?:
+      | import("@/db/social_schema").SocialPostStatus
+      | import("@/db/social_schema").SocialPostStatus[];
+    campaignId?: number;
+    limit?: number;
+  }): Promise<import("./handlers/social_handlers").SocialPostDto[]> {
+    return this.ipcRenderer.invoke("social:list-posts", args);
+  }
+
+  async getSocialPost(
+    postId: number,
+  ): Promise<import("./handlers/social_handlers").SocialPostDto> {
+    return this.ipcRenderer.invoke("social:get-post", { postId });
+  }
+
+  async createSocialPost(input: {
+    content: import("@/db/social_schema").SocialPostContent;
+    accountIds: number[];
+    scheduledFor?: number | null;
+    campaignId?: number | null;
+    source?: import("@/db/social_schema").SocialPostSource;
+    status?: import("@/db/social_schema").SocialPostStatus;
+  }): Promise<import("./handlers/social_handlers").SocialPostDto> {
+    return this.ipcRenderer.invoke("social:create-post", input);
+  }
+
+  async updateSocialPost(input: {
+    postId: number;
+    content?: import("@/db/social_schema").SocialPostContent;
+    scheduledFor?: number | null;
+  }): Promise<import("./handlers/social_handlers").SocialPostDto> {
+    return this.ipcRenderer.invoke("social:update-post", input);
+  }
+
+  async deleteSocialPost(postId: number): Promise<{ deleted: number }> {
+    return this.ipcRenderer.invoke("social:delete-post", { postId });
+  }
+
+  async publishSocialPost(
+    postId: number,
+  ): Promise<import("@/lib/social/publisher").PublishResult> {
+    return this.ipcRenderer.invoke("social:publish-post", { postId });
   }
 
   async scheduleSocialPost(input: {
-    accountId: number;
-    payload: import("@/db/social_schema").SocialPostPayload;
+    postId: number;
     scheduledFor: number;
-  }): Promise<import("./handlers/social_handlers").SocialScheduledPostDto> {
+  }): Promise<import("./handlers/social_handlers").SocialPostDto> {
     return this.ipcRenderer.invoke("social:schedule-post", input);
   }
 
-  async listScheduledSocialPosts(args?: {
-    accountId?: number;
-    sinceMs?: number;
-  }): Promise<
-    Array<import("./handlers/social_handlers").SocialScheduledPostDto>
-  > {
-    return this.ipcRenderer.invoke("social:list-scheduled", args);
+  async approveSocialPost(
+    postId: number,
+  ): Promise<import("./handlers/social_handlers").SocialPostDto> {
+    return this.ipcRenderer.invoke("social:approve-post", { postId });
   }
 
-  async cancelScheduledSocialPost(
-    id: number,
-  ): Promise<import("./handlers/social_handlers").SocialScheduledPostDto> {
-    return this.ipcRenderer.invoke("social:cancel-scheduled", { id });
+  async rejectSocialPost(
+    postId: number,
+  ): Promise<import("./handlers/social_handlers").SocialPostDto> {
+    return this.ipcRenderer.invoke("social:reject-post", { postId });
+  }
+
+  // Content + campaigns
+  async generateSocialDrafts(input: {
+    topics: string[];
+    provider?: import("@/db/social_schema").SocialProvider;
+    tone?: string;
+    audience?: string;
+    brandVoice?: string;
+    count?: number;
+    includeImagePrompt?: boolean;
+  }): Promise<import("@/lib/social/content_engine").GeneratedDraft[]> {
+    return this.ipcRenderer.invoke("social:generate-drafts", input);
+  }
+
+  async parseSocialSetup(
+    instruction: string,
+  ): Promise<import("@/lib/social/content_engine").ParsedCampaignSetup> {
+    return this.ipcRenderer.invoke("social:parse-setup", { instruction });
+  }
+
+  async planSocialCalendar(input: {
+    campaignId?: number;
+    cadence?: import("@/db/social_schema").SocialCampaignCadence;
+    topics?: string[];
+    count?: number;
+    fromMs?: number;
+  }): Promise<import("@/lib/social/content_engine").PlannedSlot[]> {
+    return this.ipcRenderer.invoke("social:plan-calendar", input);
+  }
+
+  async generateSocialImage(input: {
+    prompt: string;
+    provider: string;
+    model: string;
+    width?: number;
+    height?: number;
+    negativePrompt?: string;
+    style?: string;
+  }): Promise<{ filePath: string; dataUrl: string }> {
+    return this.ipcRenderer.invoke("social:generate-image", input);
+  }
+
+  async listSocialCampaigns(): Promise<
+    import("./handlers/social_content_handlers").SocialCampaignDto[]
+  > {
+    return this.ipcRenderer.invoke("social:list-campaigns");
+  }
+
+  async getSocialCampaign(
+    campaignId: number,
+  ): Promise<import("./handlers/social_content_handlers").SocialCampaignDto> {
+    return this.ipcRenderer.invoke("social:get-campaign", { campaignId });
+  }
+
+  async createSocialCampaign(input: {
+    name: string;
+    description?: string;
+    topics: string[];
+    tone?: string;
+    audience?: string;
+    cadence?: import("@/db/social_schema").SocialCampaignCadence;
+    targetAccountIds: number[];
+    autoGenerate?: boolean;
+    autoPublish?: boolean;
+    status?: import("@/db/social_schema").SocialCampaignStatus;
+  }): Promise<import("./handlers/social_content_handlers").SocialCampaignDto> {
+    return this.ipcRenderer.invoke("social:create-campaign", input);
+  }
+
+  async updateSocialCampaign(input: {
+    campaignId: number;
+    name?: string;
+    description?: string | null;
+    topics?: string[];
+    tone?: string | null;
+    audience?: string | null;
+    cadence?: import("@/db/social_schema").SocialCampaignCadence | null;
+    targetAccountIds?: number[];
+    autoGenerate?: boolean;
+    autoPublish?: boolean;
+    status?: import("@/db/social_schema").SocialCampaignStatus;
+  }): Promise<import("./handlers/social_content_handlers").SocialCampaignDto> {
+    return this.ipcRenderer.invoke("social:update-campaign", input);
+  }
+
+  async deleteSocialCampaign(
+    campaignId: number,
+  ): Promise<{ deleted: number }> {
+    return this.ipcRenderer.invoke("social:delete-campaign", { campaignId });
+  }
+
+  async generateCampaignNow(input: {
+    campaignId: number;
+    count?: number;
+  }): Promise<{ created: number; postIds: number[] }> {
+    return this.ipcRenderer.invoke("social:campaign-generate-now", input);
+  }
+
+  // Engagement inbox
+  async listSocialEngagements(args?: {
+    status?: import("@/db/social_schema").SocialEngagementStatus;
+    accountId?: number;
+    limit?: number;
+  }): Promise<import("./handlers/social_engagement_handlers").SocialEngagementDto[]> {
+    return this.ipcRenderer.invoke("social:list-engagements", args);
+  }
+
+  async syncSocialEngagements(args?: {
+    accountId?: number;
+  }): Promise<{ inserted: number }> {
+    return this.ipcRenderer.invoke("social:sync-engagements", args);
+  }
+
+  async suggestSocialReply(input: {
+    engagementId: number;
+    tone?: string;
+    postContext?: string;
+  }): Promise<{ text: string }> {
+    return this.ipcRenderer.invoke("social:suggest-reply", input);
+  }
+
+  async sendSocialReply(input: {
+    engagementId: number;
+    text: string;
+  }): Promise<import("./handlers/social_engagement_handlers").SocialReplyDto> {
+    return this.ipcRenderer.invoke("social:reply", input);
+  }
+
+  async approveSocialReply(
+    replyId: number,
+  ): Promise<import("./handlers/social_engagement_handlers").SocialReplyDto> {
+    return this.ipcRenderer.invoke("social:approve-reply", { replyId });
+  }
+
+  async dismissSocialReply(
+    replyId: number,
+  ): Promise<import("./handlers/social_engagement_handlers").SocialReplyDto> {
+    return this.ipcRenderer.invoke("social:dismiss-reply", { replyId });
+  }
+
+  async markSocialEngagement(input: {
+    engagementId: number;
+    status: import("@/db/social_schema").SocialEngagementStatus;
+  }): Promise<import("./handlers/social_engagement_handlers").SocialEngagementDto> {
+    return this.ipcRenderer.invoke("social:mark-engagement", input);
+  }
+
+  // Analytics
+  async getSocialAnalyticsOverview(): Promise<
+    import("./handlers/social_analytics_handlers").SocialAnalyticsOverview
+  > {
+    return this.ipcRenderer.invoke("social:analytics-overview");
+  }
+
+  async syncSocialMetrics(args?: {
+    postId?: number;
+  }): Promise<{ snapshots: number }> {
+    return this.ipcRenderer.invoke("social:sync-metrics", args);
+  }
+
+  async getSocialPostMetrics(
+    postId: number,
+  ): Promise<import("./handlers/social_analytics_handlers").SocialPostMetricSeries[]> {
+    return this.ipcRenderer.invoke("social:post-metrics", { postId });
+  }
+
+  // Agent
+  async getSocialAgentSettings(): Promise<
+    import("./handlers/social_agent_handlers").SocialAgentSettingsDto
+  > {
+    return this.ipcRenderer.invoke("social:get-agent-settings");
+  }
+
+  async setSocialAgentSettings(
+    patch: import("@/lib/social/social_agent").AgentSettingsPatch,
+  ): Promise<import("./handlers/social_agent_handlers").SocialAgentSettingsDto> {
+    return this.ipcRenderer.invoke("social:set-agent-settings", patch);
+  }
+
+  async getSocialAgentStatus(): Promise<
+    import("./handlers/social_agent_handlers").SocialAgentStatusDto
+  > {
+    return this.ipcRenderer.invoke("social:agent-status");
+  }
+
+  async runSocialAgentNow(): Promise<{
+    generated: number;
+    engagements: number;
+    repliesDrafted: number;
+    repliesSent: number;
+  }> {
+    return this.ipcRenderer.invoke("social:agent-run-now");
+  }
+
+  // OAuth + provider config
+  async listSupportedSocialProviders(): Promise<
+    import("@/db/social_schema").SocialProvider[]
+  > {
+    return this.ipcRenderer.invoke("social:list-supported");
+  }
+
+  async getSocialProviderConfig(): Promise<
+    Array<{
+      provider: import("@/db/social_schema").SocialProvider;
+      configured: boolean;
+      oauth: boolean;
+      redirectUri: string;
+    }>
+  > {
+    return this.ipcRenderer.invoke("social:get-provider-config");
+  }
+
+  async setSocialAppCredentials(input: {
+    provider: import("@/db/social_schema").SocialProvider;
+    clientId: string;
+    clientSecret?: string;
+    redirectUri?: string;
+  }): Promise<{ configured: boolean }> {
+    return this.ipcRenderer.invoke("social:set-app-credentials", input);
+  }
+
+  async beginSocialOAuth(
+    provider: import("@/db/social_schema").SocialProvider,
+  ): Promise<import("./handlers/social_handlers").SocialAccountDto> {
+    return this.ipcRenderer.invoke("social:begin-oauth", { provider });
   }
 
   // ─── Podcast briefing ───────────────────────────────────────────────────────────────

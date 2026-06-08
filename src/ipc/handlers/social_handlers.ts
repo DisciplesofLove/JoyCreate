@@ -1,36 +1,52 @@
 /**
- * Social posting handlers.
+ * Social accounts + posts handlers.
  *
  * Channels:
- *   social:list-accounts
- *   social:connect-account
- *   social:disconnect-account
- *   social:post                  (immediate)
- *   social:schedule-post
- *   social:list-scheduled
- *   social:cancel-scheduled
+ *   social:list-providers      provider catalogue (capabilities + readiness)
+ *   social:list-accounts       connected accounts
+ *   social:get-account         single account
+ *   social:update-account      toggle enabled / auto-reply / rename
+ *   social:disconnect-account  remove an account + its stored tokens
+ *   social:list-posts          posts (optionally filtered) with targets
+ *   social:get-post            single post with targets
+ *   social:create-post         create a draft / scheduled post
+ *   social:update-post         edit a non-posted post
+ *   social:delete-post         delete a post + targets
+ *   social:publish-post        publish now (fan-out)
+ *   social:schedule-post       schedule for later
+ *   social:approve-post        approve (schedule or publish)
+ *   social:reject-post         cancel a post
  *
- * Scheduled posts piggy-back on `SchedulerService` via a one-shot cron
- * computed from `scheduledFor`. The fired tool action is `social.post`
- * with `{ scheduledPostId }`, dispatched through the existing tools
- * runtime once a matching tool is registered.
+ * Handlers throw on error; the renderer surfaces failures via TanStack Query.
  */
 
+import { type SQL, and, desc, eq, inArray } from "drizzle-orm";
 import log from "electron-log";
-import { and, asc, eq, gte } from "drizzle-orm";
 
+import { deleteTokens } from "@/lib/social/credentials";
+import {
+  type PublishResult,
+  cancelSchedule,
+  createPost,
+  publishPost,
+  schedulePost,
+} from "@/lib/social/publisher";
+import {
+  type SocialProviderInfo,
+  listProviderInfo,
+} from "@/lib/social/registry";
 import { db } from "../../db";
 import {
-  socialAccounts,
-  socialScheduledPosts,
   type SocialAccountCredentials,
   type SocialAccountRow,
-  type SocialPostPayload,
+  type SocialPostContent,
+  type SocialPostRow,
+  type SocialPostTargetRow,
   type SocialProvider,
-  type SocialScheduledPostRow,
+  socialAccounts,
+  socialPostTargets,
+  socialPosts,
 } from "../../db/social_schema";
-import { getSocialAdapter, listSupportedProviders } from "@/lib/social/registry";
-import { getSchedulerService } from "@/lib/scheduler_service";
 import { createLoggedHandler } from "./safe_handle";
 
 const logger = log.scope("social");
@@ -45,25 +61,42 @@ export interface SocialAccountDto {
   displayName: string | null;
   avatarUrl: string | null;
   enabled: boolean;
+  autoReply: boolean;
+  tokenStatus: SocialAccountRow["tokenStatus"];
   expiresAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
 
-export interface SocialScheduledPostDto {
+export interface SocialPostTargetDto {
   id: number;
   accountId: number;
-  payload: SocialPostPayload;
-  scheduledFor: number;
-  status: SocialScheduledPostRow["status"];
+  provider: SocialProvider | null;
+  status: SocialPostTargetRow["status"];
   externalPostId: string | null;
+  permalink: string | null;
+  errorMessage: string | null;
+  postedAt: number | null;
+}
+
+export interface SocialPostDto {
+  id: number;
+  campaignId: number | null;
+  content: SocialPostContent;
+  status: SocialPostRow["status"];
+  source: SocialPostRow["source"];
+  scheduledFor: number | null;
+  approvedAt: number | null;
+  aiModel: string | null;
+  aiPrompt: string | null;
   errorMessage: string | null;
   postedAt: number | null;
   createdAt: number;
   updatedAt: number;
+  targets: SocialPostTargetDto[];
 }
 
-function toAccountDto(row: SocialAccountRow): SocialAccountDto {
+export function toAccountDto(row: SocialAccountRow): SocialAccountDto {
   const creds = (row.credentialsJson as SocialAccountCredentials | null) ?? {};
   return {
     id: row.id,
@@ -74,141 +107,145 @@ function toAccountDto(row: SocialAccountRow): SocialAccountDto {
     displayName: creds.displayName ?? null,
     avatarUrl: creds.avatarUrl ?? null,
     enabled: row.enabled,
+    autoReply: row.autoReply,
+    tokenStatus: row.tokenStatus,
     expiresAt: creds.expiresAt ?? null,
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),
   };
 }
 
-function toScheduledDto(row: SocialScheduledPostRow): SocialScheduledPostDto {
+function toTargetDto(
+  row: SocialPostTargetRow,
+  providerByAccount: Map<number, SocialProvider>,
+): SocialPostTargetDto {
   return {
     id: row.id,
     accountId: row.accountId,
-    payload: row.payloadJson as SocialPostPayload,
-    scheduledFor: row.scheduledFor,
+    provider: providerByAccount.get(row.accountId) ?? null,
     status: row.status,
     externalPostId: row.externalPostId,
+    permalink: row.permalink,
+    errorMessage: row.errorMessage,
+    postedAt: row.postedAt ? row.postedAt.getTime() : null,
+  };
+}
+
+function toPostDto(
+  row: SocialPostRow,
+  targets: SocialPostTargetRow[],
+  providerByAccount: Map<number, SocialProvider>,
+): SocialPostDto {
+  return {
+    id: row.id,
+    campaignId: row.campaignId,
+    content: row.contentJson as SocialPostContent,
+    status: row.status,
+    source: row.source,
+    scheduledFor: row.scheduledFor,
+    approvedAt: row.approvedAt ? row.approvedAt.getTime() : null,
+    aiModel: row.aiModel,
+    aiPrompt: row.aiPrompt,
     errorMessage: row.errorMessage,
     postedAt: row.postedAt ? row.postedAt.getTime() : null,
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),
+    targets: targets.map((t) => toTargetDto(t, providerByAccount)),
   };
 }
 
-function validatePayload(payload: unknown): SocialPostPayload {
-  if (!payload || typeof payload !== "object") {
-    throw new Error("social: payload required");
-  }
-  const p = payload as Record<string, unknown>;
-  if (typeof p.text !== "string" || p.text.trim().length === 0) {
-    throw new Error("social: payload.text required");
-  }
-  if (p.mediaUrls !== undefined && !Array.isArray(p.mediaUrls)) {
-    throw new Error("social: payload.mediaUrls must be an array");
-  }
-  return {
-    text: p.text,
-    mediaUrls: (p.mediaUrls as string[] | undefined) ?? [],
-    extras: (p.extras as Record<string, unknown> | undefined) ?? {},
-  };
+async function providerMap(): Promise<Map<number, SocialProvider>> {
+  const rows = await db
+    .select({ id: socialAccounts.id, provider: socialAccounts.provider })
+    .from(socialAccounts);
+  return new Map(rows.map((r) => [r.id, r.provider]));
 }
 
-function isSocialProvider(value: unknown): value is SocialProvider {
-  return (
-    typeof value === "string" &&
-    (value === "twitter" ||
-      value === "linkedin" ||
-      value === "instagram" ||
-      value === "facebook")
-  );
-}
-
-async function loadAccount(accountId: number): Promise<SocialAccountRow> {
-  const [row] = await db
+async function loadPostDto(postId: number): Promise<SocialPostDto> {
+  const [post] = await db
     .select()
-    .from(socialAccounts)
-    .where(eq(socialAccounts.id, accountId))
+    .from(socialPosts)
+    .where(eq(socialPosts.id, postId))
     .limit(1);
-  if (!row) throw new Error(`social: account ${accountId} not found`);
-  if (!row.enabled) throw new Error(`social: account ${accountId} is disabled`);
-  return row;
+  if (!post) throw new Error(`Post not found: ${postId}`);
+  const targets = await db
+    .select()
+    .from(socialPostTargets)
+    .where(eq(socialPostTargets.postId, postId));
+  return toPostDto(post, targets, await providerMap());
 }
 
-/** Convert a unix-ms timestamp into a one-shot 5-field cron expression. */
-function timestampToCron(ms: number): string {
-  const d = new Date(ms);
-  d.setSeconds(0, 0);
-  // Cron month is 1-12, JS month is 0-11.
-  return `${d.getMinutes()} ${d.getHours()} ${d.getDate()} ${d.getMonth() + 1} *`;
+function validateContent(content: unknown): SocialPostContent {
+  if (!content || typeof content !== "object") {
+    throw new Error("Post content is required.");
+  }
+  const c = content as Record<string, unknown>;
+  if (typeof c.text !== "string" || c.text.trim().length === 0) {
+    throw new Error("Post content text is required.");
+  }
+  return content as SocialPostContent;
 }
 
 export function registerSocialHandlers(): void {
-  handle("social:list-providers", async (): Promise<SocialProvider[]> => {
-    return listSupportedProviders();
-  });
+  handle(
+    "social:list-providers",
+    async (): Promise<SocialProviderInfo[]> => {
+      return listProviderInfo();
+    },
+  );
 
   handle("social:list-accounts", async (): Promise<SocialAccountDto[]> => {
-    const rows = await db.select().from(socialAccounts);
+    const rows = await db
+      .select()
+      .from(socialAccounts)
+      .orderBy(desc(socialAccounts.createdAt));
     return rows.map(toAccountDto);
   });
 
   handle(
-    "social:connect-account",
-    async (
-      _e,
-      input: {
-        provider: SocialProvider;
-        authCode?: string;
-        extras?: Record<string, unknown>;
-      },
-    ): Promise<SocialAccountDto> => {
-      if (!input || !isSocialProvider(input.provider)) {
-        throw new Error("social: provider is required");
-      }
-      const adapter = getSocialAdapter(input.provider);
-      const { externalId, label, credentials } = await adapter.connect({
-        authCode: input.authCode,
-        extras: input.extras,
-      });
-
-      // Upsert on (provider, externalId) — keep the prior row id when it exists.
-      const [existing] = await db
+    "social:get-account",
+    async (_e, args: { accountId: number }): Promise<SocialAccountDto> => {
+      const [row] = await db
         .select()
         .from(socialAccounts)
-        .where(
-          and(
-            eq(socialAccounts.provider, input.provider),
-            eq(socialAccounts.externalId, externalId),
-          ),
-        )
+        .where(eq(socialAccounts.id, args.accountId))
         .limit(1);
+      if (!row) throw new Error(`Account not found: ${args.accountId}`);
+      return toAccountDto(row);
+    },
+  );
 
-      const now = new Date();
-      if (existing) {
-        const [row] = await db
-          .update(socialAccounts)
-          .set({
-            label,
-            credentialsJson: credentials,
-            enabled: true,
-            updatedAt: now,
-          })
-          .where(eq(socialAccounts.id, existing.id))
-          .returning();
-        return toAccountDto(row);
+  handle(
+    "social:update-account",
+    async (
+      _e,
+      args: {
+        accountId: number;
+        enabled?: boolean;
+        autoReply?: boolean;
+        label?: string;
+      },
+    ): Promise<SocialAccountDto> => {
+      if (typeof args?.accountId !== "number") {
+        throw new Error("accountId is required.");
+      }
+      const patch: {
+        enabled?: boolean;
+        autoReply?: boolean;
+        label?: string;
+        updatedAt: Date;
+      } = { updatedAt: new Date() };
+      if (typeof args.enabled === "boolean") patch.enabled = args.enabled;
+      if (typeof args.autoReply === "boolean") patch.autoReply = args.autoReply;
+      if (typeof args.label === "string" && args.label.trim()) {
+        patch.label = args.label.trim();
       }
       const [row] = await db
-        .insert(socialAccounts)
-        .values({
-          provider: input.provider,
-          externalId,
-          label,
-          credentialsJson: credentials,
-          enabled: true,
-          createdAt: now,
-          updatedAt: now,
-        })
+        .update(socialAccounts)
+        .set(patch)
+        .where(eq(socialAccounts.id, args.accountId))
         .returning();
+      if (!row) throw new Error(`Account not found: ${args.accountId}`);
       return toAccountDto(row);
     },
   );
@@ -216,8 +253,23 @@ export function registerSocialHandlers(): void {
   handle(
     "social:disconnect-account",
     async (_e, args: { accountId: number }): Promise<{ deleted: number }> => {
-      if (!args || typeof args.accountId !== "number") {
-        throw new Error("social: accountId required");
+      if (typeof args?.accountId !== "number") {
+        throw new Error("accountId is required.");
+      }
+      const [existing] = await db
+        .select()
+        .from(socialAccounts)
+        .where(eq(socialAccounts.id, args.accountId))
+        .limit(1);
+      if (existing) {
+        const creds = existing.credentialsJson as SocialAccountCredentials | null;
+        if (creds?.vaultSecretId) {
+          try {
+            deleteTokens(creds.vaultSecretId);
+          } catch (err) {
+            logger.warn(`failed to delete tokens: ${err}`);
+          }
+        }
       }
       const r = await db
         .delete(socialAccounts)
@@ -227,92 +279,29 @@ export function registerSocialHandlers(): void {
     },
   );
 
-  handle(
-    "social:post",
-    async (
-      _e,
-      input: { accountId: number; payload: SocialPostPayload },
-    ): Promise<{ externalPostId: string; permalink?: string }> => {
-      if (!input || typeof input.accountId !== "number") {
-        throw new Error("social: accountId required");
-      }
-      const payload = validatePayload(input.payload);
-      const account = await loadAccount(input.accountId);
-      const adapter = getSocialAdapter(account.provider);
-      const result = await adapter.post(
-        (account.credentialsJson as SocialAccountCredentials) ?? {},
-        payload,
-      );
-      return { externalPostId: result.externalPostId, permalink: result.permalink };
-    },
-  );
+  // ── Posts ──────────────────────────────────────────────────────────────
 
   handle(
-    "social:schedule-post",
+    "social:list-posts",
     async (
       _e,
-      input: {
-        accountId: number;
-        payload: SocialPostPayload;
-        scheduledFor: number;
+      args?: {
+        status?: SocialPostRow["status"] | SocialPostRow["status"][];
+        campaignId?: number;
+        limit?: number;
       },
-    ): Promise<SocialScheduledPostDto> => {
-      if (!input || typeof input.accountId !== "number") {
-        throw new Error("social: accountId required");
+    ): Promise<SocialPostDto[]> => {
+      const conditions: SQL[] = [];
+      if (args?.status) {
+        const statuses = Array.isArray(args.status)
+          ? args.status
+          : [args.status];
+        if (statuses.length > 0) {
+          conditions.push(inArray(socialPosts.status, statuses));
+        }
       }
-      if (typeof input.scheduledFor !== "number" || input.scheduledFor <= Date.now()) {
-        throw new Error("social: scheduledFor must be a future unix-ms timestamp");
-      }
-      const payload = validatePayload(input.payload);
-      const account = await loadAccount(input.accountId);
-
-      const now = new Date();
-      const [row] = await db
-        .insert(socialScheduledPosts)
-        .values({
-          accountId: account.id,
-          payloadJson: payload,
-          scheduledFor: input.scheduledFor,
-          status: "pending",
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning();
-      if (!row) throw new Error("social: insert returned no row");
-
-      // Register a one-shot cron via the scheduler.
-      const scheduler = getSchedulerService();
-      const sched = scheduler.create({
-        name: `social-post-${row.id}`,
-        cron: timestampToCron(input.scheduledFor),
-        action: {
-          toolName: "social.post",
-          args: { scheduledPostId: row.id },
-        },
-        ownerId: String(account.id),
-        ownerKind: "agent",
-        enabled: true,
-      });
-      await db
-        .update(socialScheduledPosts)
-        .set({ scheduleId: sched.id, updatedAt: new Date() })
-        .where(eq(socialScheduledPosts.id, row.id));
-      return toScheduledDto({ ...row, scheduleId: sched.id });
-    },
-  );
-
-  handle(
-    "social:list-scheduled",
-    async (
-      _e,
-      args?: { accountId?: number; sinceMs?: number },
-    ): Promise<SocialScheduledPostDto[]> => {
-      const conditions = [] as any[];
-      if (args?.accountId !== undefined) {
-        conditions.push(eq(socialScheduledPosts.accountId, args.accountId));
-      }
-      if (args?.sinceMs !== undefined) {
-        conditions.push(gte(socialScheduledPosts.scheduledFor, args.sinceMs));
+      if (typeof args?.campaignId === "number") {
+        conditions.push(eq(socialPosts.campaignId, args.campaignId));
       }
       const where =
         conditions.length === 0
@@ -320,93 +309,225 @@ export function registerSocialHandlers(): void {
           : conditions.length === 1
             ? conditions[0]
             : and(...conditions);
-      const q = db
+      const base = db
         .select()
-        .from(socialScheduledPosts)
-        .orderBy(asc(socialScheduledPosts.scheduledFor));
-      const rows = where ? await q.where(where) : await q;
-      return rows.map(toScheduledDto);
+        .from(socialPosts)
+        .orderBy(desc(socialPosts.createdAt))
+        .limit(Math.min(Math.max(args?.limit ?? 200, 1), 500));
+      const posts = where ? await base.where(where) : await base;
+      if (posts.length === 0) return [];
+
+      const postIds = posts.map((p) => p.id);
+      const targets = await db
+        .select()
+        .from(socialPostTargets)
+        .where(inArray(socialPostTargets.postId, postIds));
+      const map = await providerMap();
+      const byPost = new Map<number, SocialPostTargetRow[]>();
+      for (const t of targets) {
+        const list = byPost.get(t.postId) ?? [];
+        list.push(t);
+        byPost.set(t.postId, list);
+      }
+      return posts.map((p) => toPostDto(p, byPost.get(p.id) ?? [], map));
     },
   );
 
   handle(
-    "social:cancel-scheduled",
-    async (_e, args: { id: number }): Promise<SocialScheduledPostDto> => {
-      if (!args || typeof args.id !== "number") {
-        throw new Error("social: id required");
+    "social:get-post",
+    async (_e, args: { postId: number }): Promise<SocialPostDto> => {
+      if (typeof args?.postId !== "number") {
+        throw new Error("postId is required.");
+      }
+      return loadPostDto(args.postId);
+    },
+  );
+
+  handle(
+    "social:create-post",
+    async (
+      _e,
+      input: {
+        content: SocialPostContent;
+        accountIds: number[];
+        scheduledFor?: number | null;
+        campaignId?: number | null;
+        source?: SocialPostRow["source"];
+        status?: SocialPostRow["status"];
+      },
+    ): Promise<SocialPostDto> => {
+      const content = validateContent(input?.content);
+      if (!Array.isArray(input.accountIds) || input.accountIds.length === 0) {
+        throw new Error("At least one target account is required.");
+      }
+      const { post } = await createPost({
+        content,
+        accountIds: input.accountIds,
+        status: input.status ?? "draft",
+        source: input.source ?? "manual",
+        campaignId: input.campaignId ?? null,
+        scheduledFor: input.scheduledFor ?? null,
+      });
+      if (
+        typeof input.scheduledFor === "number" &&
+        input.scheduledFor > Date.now()
+      ) {
+        await schedulePost(post.id, input.scheduledFor);
+      }
+      return loadPostDto(post.id);
+    },
+  );
+
+  handle(
+    "social:update-post",
+    async (
+      _e,
+      input: {
+        postId: number;
+        content?: SocialPostContent;
+        scheduledFor?: number | null;
+      },
+    ): Promise<SocialPostDto> => {
+      if (typeof input?.postId !== "number") {
+        throw new Error("postId is required.");
       }
       const [existing] = await db
         .select()
-        .from(socialScheduledPosts)
-        .where(eq(socialScheduledPosts.id, args.id))
+        .from(socialPosts)
+        .where(eq(socialPosts.id, input.postId))
         .limit(1);
-      if (!existing) throw new Error(`social: scheduled post ${args.id} not found`);
-      if (existing.status !== "pending") {
-        throw new Error(`social: scheduled post ${args.id} cannot be cancelled (status=${existing.status})`);
+      if (!existing) throw new Error(`Post not found: ${input.postId}`);
+      if (
+        existing.status === "publishing" ||
+        existing.status === "posted" ||
+        existing.status === "partially_posted"
+      ) {
+        throw new Error(`Cannot edit a ${existing.status} post.`);
       }
-      if (existing.scheduleId) {
-        try {
-          getSchedulerService().remove(existing.scheduleId as any);
-        } catch (err) {
-          logger.warn("scheduler remove failed", { id: existing.scheduleId, err });
-        }
+      const patch: {
+        contentJson?: SocialPostContent;
+        scheduledFor?: number | null;
+        updatedAt: Date;
+      } = { updatedAt: new Date() };
+      if (input.content !== undefined) {
+        patch.contentJson = validateContent(input.content);
       }
-      const [row] = await db
-        .update(socialScheduledPosts)
-        .set({ status: "cancelled", updatedAt: new Date() })
-        .where(eq(socialScheduledPosts.id, args.id))
-        .returning();
-      return toScheduledDto(row);
+      if (input.scheduledFor !== undefined) {
+        patch.scheduledFor = input.scheduledFor;
+      }
+      await db
+        .update(socialPosts)
+        .set(patch)
+        .where(eq(socialPosts.id, input.postId));
+      if (
+        input.scheduledFor !== undefined &&
+        input.scheduledFor !== null &&
+        input.scheduledFor > Date.now() &&
+        existing.status === "scheduled"
+      ) {
+        await schedulePost(input.postId, input.scheduledFor);
+      }
+      return loadPostDto(input.postId);
     },
   );
-}
 
-/**
- * Tool entry point invoked by the scheduler when a queued post fires.
- * Exported so the tools registry can mount it as `social.post`.
- */
-export async function executeScheduledSocialPost(args: {
-  scheduledPostId: number;
-}): Promise<{ externalPostId: string; permalink?: string }> {
-  if (!args || typeof args.scheduledPostId !== "number") {
-    throw new Error("social.post: scheduledPostId required");
-  }
-  const [row] = await db
-    .select()
-    .from(socialScheduledPosts)
-    .where(eq(socialScheduledPosts.id, args.scheduledPostId))
-    .limit(1);
-  if (!row) throw new Error(`social.post: scheduled post ${args.scheduledPostId} missing`);
-  if (row.status !== "pending") {
-    throw new Error(`social.post: status is ${row.status}`);
-  }
-  try {
-    const account = await loadAccount(row.accountId);
-    const adapter = getSocialAdapter(account.provider);
-    const result = await adapter.post(
-      (account.credentialsJson as SocialAccountCredentials) ?? {},
-      row.payloadJson as SocialPostPayload,
-    );
-    await db
-      .update(socialScheduledPosts)
-      .set({
-        status: "posted",
-        externalPostId: result.externalPostId,
-        postedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(socialScheduledPosts.id, row.id));
-    return { externalPostId: result.externalPostId, permalink: result.permalink };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await db
-      .update(socialScheduledPosts)
-      .set({
-        status: "failed",
-        errorMessage: message,
-        updatedAt: new Date(),
-      })
-      .where(eq(socialScheduledPosts.id, row.id));
-    throw err;
-  }
+  handle(
+    "social:delete-post",
+    async (_e, args: { postId: number }): Promise<{ deleted: number }> => {
+      if (typeof args?.postId !== "number") {
+        throw new Error("postId is required.");
+      }
+      const [existing] = await db
+        .select()
+        .from(socialPosts)
+        .where(eq(socialPosts.id, args.postId))
+        .limit(1);
+      if (existing?.scheduleId) cancelSchedule(existing.scheduleId);
+      await db
+        .delete(socialPostTargets)
+        .where(eq(socialPostTargets.postId, args.postId));
+      const r = await db
+        .delete(socialPosts)
+        .where(eq(socialPosts.id, args.postId))
+        .returning({ id: socialPosts.id });
+      return { deleted: r.length };
+    },
+  );
+
+  handle(
+    "social:publish-post",
+    async (_e, args: { postId: number }): Promise<PublishResult> => {
+      if (typeof args?.postId !== "number") {
+        throw new Error("postId is required.");
+      }
+      return publishPost(args.postId);
+    },
+  );
+
+  handle(
+    "social:schedule-post",
+    async (
+      _e,
+      args: { postId: number; scheduledFor: number },
+    ): Promise<SocialPostDto> => {
+      if (typeof args?.postId !== "number") {
+        throw new Error("postId is required.");
+      }
+      await schedulePost(args.postId, args.scheduledFor);
+      return loadPostDto(args.postId);
+    },
+  );
+
+  handle(
+    "social:approve-post",
+    async (_e, args: { postId: number }): Promise<SocialPostDto> => {
+      if (typeof args?.postId !== "number") {
+        throw new Error("postId is required.");
+      }
+      const [post] = await db
+        .select()
+        .from(socialPosts)
+        .where(eq(socialPosts.id, args.postId))
+        .limit(1);
+      if (!post) throw new Error(`Post not found: ${args.postId}`);
+      await db
+        .update(socialPosts)
+        .set({
+          approvedAt: new Date(),
+          approvedBy: "user",
+          updatedAt: new Date(),
+        })
+        .where(eq(socialPosts.id, args.postId));
+      if (
+        typeof post.scheduledFor === "number" &&
+        post.scheduledFor > Date.now()
+      ) {
+        await schedulePost(args.postId, post.scheduledFor);
+      } else {
+        await publishPost(args.postId);
+      }
+      return loadPostDto(args.postId);
+    },
+  );
+
+  handle(
+    "social:reject-post",
+    async (_e, args: { postId: number }): Promise<SocialPostDto> => {
+      if (typeof args?.postId !== "number") {
+        throw new Error("postId is required.");
+      }
+      const [post] = await db
+        .select()
+        .from(socialPosts)
+        .where(eq(socialPosts.id, args.postId))
+        .limit(1);
+      if (!post) throw new Error(`Post not found: ${args.postId}`);
+      cancelSchedule(post.scheduleId);
+      await db
+        .update(socialPosts)
+        .set({ status: "cancelled", scheduleId: null, updatedAt: new Date() })
+        .where(eq(socialPosts.id, args.postId));
+      return loadPostDto(args.postId);
+    },
+  );
 }

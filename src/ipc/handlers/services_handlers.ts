@@ -13,6 +13,19 @@ import path from "node:path";
 import fs from "fs-extra";
 import log from "electron-log";
 import { app } from "electron";
+import { getTailscaleConfig } from "@/lib/tailscale_service";
+
+// SECURITY: any externally-launched service (n8n, celestia, etc.) must default
+// to loopback. Only fall back to 0.0.0.0 when the user has explicitly opted in
+// to Tailscale-exposed services via Settings -> Tailscale -> Expose services.
+function managedServiceBindHost(): string {
+  try {
+    const ts = getTailscaleConfig();
+    return ts.enabled && ts.exposeServices ? "0.0.0.0" : "127.0.0.1";
+  } catch {
+    return "127.0.0.1";
+  }
+}
 
 const logger = log.scope("services_handlers");
 
@@ -301,10 +314,11 @@ async function startN8nService(): Promise<ServiceStatus> {
       ? `"${localN8n}"`
       : `"${resolveNodeCli("npx")}" n8n`;
     
+    const n8nBindHost = managedServiceBindHost();
     if (pgReady) {
-      logger.info(`PostgreSQL detected on ${pgHost}:${pgPort} — using postgresdb backend`);
+      logger.info(`PostgreSQL detected on ${pgHost}:${pgPort} — using postgresdb backend (bind ${n8nBindHost})`);
       n8nCommand = [
-        `echo Starting n8n with PostgreSQL on port ${config.port}...`,
+        `echo Starting n8n with PostgreSQL on port ${config.port} (bind ${n8nBindHost})...`,
         `set "DB_TYPE=postgresdb"`,
         `set "DB_POSTGRESDB_HOST=${pgHost}"`,
         `set "DB_POSTGRESDB_PORT=${pgPort}"`,
@@ -314,17 +328,19 @@ async function startN8nService(): Promise<ServiceStatus> {
         `set "DB_POSTGRESDB_SCHEMA=n8n"`,
         `set "DB_POSTGRESDB_CONNECTION_TIMEOUT=60000"`,
         `set "N8N_PORT=${config.port}"`,
+        `set "N8N_LISTEN_ADDRESS=${n8nBindHost}"`,
         `set "N8N_SECURE_COOKIE=false"`,
         `${n8nLauncher}`,
       ].join(" && ");
     } else {
-      logger.info("PostgreSQL not available \u2014 using SQLite backend");
+      logger.info(`PostgreSQL not available — using SQLite backend (bind ${n8nBindHost})`);
       const sqlitePath = path.join(getUserDataPath(), "n8n", "n8n.sqlite");
       n8nCommand = [
-        `echo Starting n8n with SQLite on port ${config.port}...`,
+        `echo Starting n8n with SQLite on port ${config.port} (bind ${n8nBindHost})...`,
         `set "DB_TYPE=sqlite"`,
         `set "DB_SQLITE_DATABASE=${sqlitePath}"`,
         `set "N8N_PORT=${config.port}"`,
+        `set "N8N_LISTEN_ADDRESS=${n8nBindHost}"`,
         `set "N8N_SECURE_COOKIE=false"`,
         `set "N8N_USER_FOLDER=${path.join(getUserDataPath(), "n8n")}"`,
         `${n8nLauncher}`,
@@ -510,7 +526,12 @@ async function startCelestiaService(): Promise<ServiceStatus> {
     if (await fs.pathExists(scriptPath)) {
       launchPowerShellScript("Celestia Light Node", scriptPath);
     } else {
-      const celestiaCommand = `wsl bash -c "celestia light start --core.ip rpc.celestia.pops.one --p2p.network celestia --rpc.addr 0.0.0.0 --rpc.port 26658 --rpc.skip-auth"`;
+      // SECURITY: bind celestia RPC to loopback by default. The CLI's
+      // `--rpc.skip-auth` means anyone who reaches this port can sign + broadcast.
+      // Only fall back to 0.0.0.0 when the user explicitly opted into exposing
+      // services over Tailscale.
+      const celestiaRpcAddr = managedServiceBindHost();
+      const celestiaCommand = `wsl bash -c "celestia light start --core.ip rpc.celestia.pops.one --p2p.network celestia --rpc.addr ${celestiaRpcAddr} --rpc.port 26658 --rpc.skip-auth"`;
       launchInExternalTerminal("Celestia Light Node", celestiaCommand);
     }
     

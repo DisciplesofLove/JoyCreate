@@ -674,6 +674,8 @@ function InferencePlayground() {
   const [numCtx, setNumCtx] = useState(4096);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [enableVerification, setEnableVerification] = useState(true);
+  // Live-streaming flag for the active assistant turn
+  const [isStreaming, setIsStreaming] = useState(false);
   // Model pull state
   const [showPullDialog, setShowPullDialog] = useState(false);
   const [pullModelName, setPullModelName] = useState("");
@@ -693,18 +695,77 @@ function InferencePlayground() {
         ? trustlessInferenceClient.getConversation(activeConversationId)
         : null,
     enabled: !!activeConversationId,
-    refetchInterval: 2000,
+    // Pause polling while a response streams so refetches don't clobber the
+    // optimistic, token-by-token assistant bubble.
+    refetchInterval: isStreaming ? false : 2000,
   });
 
-  // Send message mutation
+  // Stream a single conversation turn: persists server-side while rendering
+  // the assistant response token-by-token by patching the cached conversation.
+  // Resolves when the stream completes, rejects on error.
+  const runStreamingTurn = (convId: string, message: string): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const config = { temperature, maxTokens, topP, topK, repeatPenalty, numCtx };
+      type ConvCache = {
+        messages: { role: string; content: string }[];
+      } & Record<string, unknown>;
+      const convKey = ["trustless-conversation", convId];
+
+      setIsStreaming(true);
+
+      // Optimistically show the user's turn plus an empty assistant bubble.
+      queryClient.setQueryData(convKey, (prev: unknown) => {
+        const conv = prev as ConvCache | null | undefined;
+        if (!conv) return prev;
+        return {
+          ...conv,
+          messages: [
+            ...conv.messages,
+            { role: "user", content: message },
+            { role: "assistant", content: "" },
+          ],
+        };
+      });
+
+      let acc = "";
+      void trustlessInferenceClient
+        .streamMessage(
+          { conversationId: convId, message, config },
+          {
+            onToken: (content) => {
+              acc += content;
+              queryClient.setQueryData(convKey, (prev: unknown) => {
+                const conv = prev as ConvCache | null | undefined;
+                if (!conv) return prev;
+                const messages = [...conv.messages];
+                const last = messages[messages.length - 1];
+                if (last && last.role === "assistant") {
+                  messages[messages.length - 1] = { ...last, content: acc };
+                } else {
+                  messages.push({ role: "assistant", content: acc });
+                }
+                return { ...conv, messages };
+              });
+            },
+            onDone: () => {
+              setIsStreaming(false);
+              resolve();
+            },
+            onError: (error) => {
+              setIsStreaming(false);
+              reject(new Error(error));
+            },
+          }
+        )
+        .catch((err: unknown) => {
+          setIsStreaming(false);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        });
+    });
+
+  // Send message mutation (streams the assistant response live)
   const sendMutation = useMutation({
-    mutationFn: (message: string) =>
-      trustlessInferenceClient.sendMessage({
-        conversationId: activeConversationId!,
-        message,
-        config: { temperature, maxTokens, topP, topK, repeatPenalty, numCtx },
-        skipVerification: !enableVerification,
-      }),
+    mutationFn: (message: string) => runStreamingTurn(activeConversationId!, message),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["trustless-conversation", activeConversationId],
@@ -748,15 +809,12 @@ function InferencePlayground() {
           systemPrompt: systemPrompt || undefined,
         });
         setActiveConversationId(conv.id);
+        // Seed the cache so optimistic streaming updates have a base to patch.
+        queryClient.setQueryData(["trustless-conversation", conv.id], conv);
         queryClient.invalidateQueries({ queryKey: ["trustless-conversations"] });
 
-        // Now send the message to the new conversation
-        await trustlessInferenceClient.sendMessage({
-          conversationId: conv.id,
-          message: msg,
-          config: { temperature, maxTokens, topP, topK, repeatPenalty, numCtx },
-          skipVerification: !enableVerification,
-        });
+        // Stream the first turn live.
+        await runStreamingTurn(conv.id, msg);
         queryClient.invalidateQueries({
           queryKey: ["trustless-conversation", conv.id],
         });

@@ -639,6 +639,8 @@ const validInvokeChannels = [
   "trustless:get-model-info",
   "trustless:run-inference",
   "trustless:start-stream",
+  "trustless:stream-message",
+  "trustless:stream-message",
   "trustless:verify-record",
   "trustless:get-record",
   "trustless:list-records",

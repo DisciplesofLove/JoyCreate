@@ -709,6 +709,118 @@ class TrustlessInferenceService {
     };
   }
 
+  /**
+   * Streaming counterpart of {@link sendMessage}. Persists the user turn,
+   * yields assistant tokens as they arrive (push-based, no polling), then
+   * persists the assistant turn + updates the conversation when complete.
+   */
+  async *streamMessage(
+    conversationId: string,
+    userMessage: string,
+    config?: {
+      temperature?: number;
+      maxTokens?: number;
+      topP?: number;
+      topK?: number;
+      repeatPenalty?: number;
+      numCtx?: number;
+      seed?: number;
+      stop?: string[];
+    }
+  ): AsyncGenerator<
+    { type: "token"; content: string } | { type: "done"; recordId?: string; cid?: string },
+    void,
+    unknown
+  > {
+    const [convRow] = await db
+      .select()
+      .from(playgroundConversations)
+      .where(eq(playgroundConversations.id, conversationId))
+      .limit(1);
+    if (!convRow) {
+      throw new Error(`Conversation not found: ${conversationId}`);
+    }
+
+    const existing = await db
+      .select()
+      .from(playgroundMessages)
+      .where(eq(playgroundMessages.conversationId, conversationId))
+      .orderBy(asc(playgroundMessages.ordinal));
+    const nextOrdinal = existing.length;
+
+    // Persist the user turn first.
+    await db.insert(playgroundMessages).values({
+      id: uuidv4(),
+      conversationId,
+      role: "user",
+      content: userMessage,
+      ordinal: nextOrdinal,
+      createdAt: new Date(),
+    });
+
+    // Build full messages array including system prompt + prior history.
+    const allMessages: InferenceMessage[] = [];
+    if (convRow.systemPrompt) {
+      allMessages.push({ role: "system", content: convRow.systemPrompt });
+    }
+    for (const m of existing) {
+      allMessages.push({ role: m.role as InferenceMessage["role"], content: m.content });
+    }
+    allMessages.push({ role: "user", content: userMessage });
+
+    // Stream tokens and accumulate the full assistant response.
+    let output = "";
+    let record: InferenceRecord | undefined;
+    const stream = this.streamVerifiedInference(
+      convRow.provider as LocalModelProvider,
+      convRow.modelId,
+      allMessages,
+      {
+        systemPrompt: convRow.systemPrompt ?? undefined,
+        config: config ? { options: config } : undefined,
+      }
+    );
+    for await (const chunk of stream) {
+      if (chunk.type === "token") {
+        output += chunk.content;
+        yield { type: "token", content: chunk.content };
+      } else {
+        record = chunk.record;
+      }
+    }
+
+    // Persist the assistant turn.
+    await db.insert(playgroundMessages).values({
+      id: uuidv4(),
+      conversationId,
+      role: "assistant",
+      content: output,
+      recordId: record?.id ?? null,
+      cid: record?.cid ?? null,
+      ordinal: nextOrdinal + 1,
+      createdAt: new Date(),
+    });
+
+    // Update conversation: title (first turn) + recordIds + updatedAt.
+    const newRecordIds = record?.id
+      ? [...(convRow.recordIds ?? []), record.id]
+      : convRow.recordIds ?? [];
+    const isFirstUserTurn = existing.filter((m) => m.role === "user").length === 0;
+    const newTitle = isFirstUserTurn
+      ? userMessage.slice(0, 60) + (userMessage.length > 60 ? "..." : "")
+      : convRow.title;
+    await db
+      .update(playgroundConversations)
+      .set({
+        title: newTitle,
+        recordIds: newRecordIds,
+        updatedAt: new Date(),
+      })
+      .where(eq(playgroundConversations.id, conversationId));
+
+    yield { type: "done", recordId: record?.id, cid: record?.cid };
+  }
+
   // ============================================================================
   // Marketplace Monetization
   // ============================================================================

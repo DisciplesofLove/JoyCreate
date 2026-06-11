@@ -9,6 +9,8 @@
  * See /memories/repo/x402-deploy.md for deploy tx hashes.
  */
 
+import { envAddress } from "@/config/env_address";
+
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 /** Canonical x402 network identifiers. */
@@ -42,7 +44,7 @@ export const USDC_DECIMALS = 6;
 /** RevenueSplitter — receives the X402 payment and fans out 80/10/10. */
 export const REVENUE_SPLITTER_CONTRACTS: Record<X402ChainId, string> = {
   arbitrumSepolia: "0x34fa204ca5db1a25a0003b1c7b45ab9c858d63bf",
-  arbitrumOne: ZERO_ADDRESS,
+  arbitrumOne: envAddress("VITE_REVENUE_SPLITTER_ARB_ONE", ZERO_ADDRESS),
 };
 
 /** Split in basis points (must match the on-chain RevenueSplitter config). */
@@ -51,6 +53,33 @@ export const REVENUE_SPLIT_BPS = {
   platform: 1000,
   protocol: 1000,
 } as const;
+
+/**
+ * Store-registration fee (LR6 / G4), charged at the HTTP/MCP layer and routed
+ * through the RevenueSplitter — the StoreRegistry contract itself holds no funds.
+ * Atomic USDC base units (6dp); "1000000" = 1 USDC.
+ */
+export const STORE_REGISTRATION_FEE_ATOMIC = "1000000" as const;
+
+/**
+ * Fee recipient passed as the splitter's `creator` for a registration settlement.
+ * The platform Treasury receives the registration fee (split 80/10/10 with the
+ * platform/protocol sinks, all of which are platform-controlled). ZERO_ADDRESS
+ * disables the fee path on a chain (e.g. mainnet until LR7 fills it in).
+ */
+export const REGISTRATION_FEE_RECIPIENTS: Record<X402ChainId, string> = {
+  arbitrumSepolia: "0x5939229582A5b42A6C5f55Fe55eC47523Cd5B9FE",
+  arbitrumOne: envAddress("VITE_REGISTRATION_FEE_RECIPIENT_ARB_ONE", ZERO_ADDRESS),
+};
+
+export function getRegistrationFeeRecipient(chain: X402ChainId): string {
+  return REGISTRATION_FEE_RECIPIENTS[chain];
+}
+
+/** Whether a store-registration fee can be charged + settled on this chain. */
+export function isRegistrationFeeReady(chain: X402ChainId): boolean {
+  return isX402Ready(chain) && REGISTRATION_FEE_RECIPIENTS[chain] !== ZERO_ADDRESS;
+}
 
 export const DEFAULT_X402_CHAIN: X402ChainId = "arbitrumSepolia";
 

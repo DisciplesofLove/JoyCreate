@@ -386,6 +386,11 @@ export const agents = sqliteTable("agents", {
   publishCurrency: text("publish_currency").default("USD"),
   // On-chain publish tracking — set when an agent's most-recent publish was a dry-run.
   dryRunAt: integer("dry_run_at", { mode: "timestamp" }),
+  // ERC-8004 identity link (LRA). Set when this local agent is registered as an
+  // on-chain agent so its skills can be published + monetised as a Licensed
+  // Runtime Asset. Nullable until the agent is bridged on-chain.
+  erc8004AgentId: text("erc8004_agent_id"),
+  erc8004Chain: text("erc8004_chain"),
   // Optional brand kit — injects voice / colors / fonts into prompts.
   brandKitId: integer("brand_kit_id"),
   createdAt: integer("created_at", { mode: "timestamp" })

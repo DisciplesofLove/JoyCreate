@@ -68,6 +68,17 @@ vi.mock("@/lib/onchain/interface_broker", () => ({
   buildDropBlueprint: vi.fn(async () => ({ id: "bp-7" })),
 }));
 
+vi.mock("@/lib/onchain/agent_card", () => ({
+  ensureStoreIdentity: vi.fn(async () => ({
+    agentId: "5",
+    agentCardCid: "bafycard",
+    agentCardUri: "ipfs://bafycard",
+    minted: true,
+    reused: false,
+    txHash: "0xid",
+  })),
+}));
+
 vi.mock("@/main/settings", () => ({
   readSettings: vi.fn(() => ({
     marketplaceChain: "arbitrumSepolia",
@@ -86,6 +97,7 @@ import {
   createDrop,
 } from "@/lib/onchain/glue_client";
 import { buildDropBlueprint } from "@/lib/onchain/interface_broker";
+import { ensureStoreIdentity } from "@/lib/onchain/agent_card";
 import { isGlueReady } from "@/config/glue";
 import { readSettings } from "@/main/settings";
 import { publishAndMonetize } from "@/lib/joymarketplace/publish_and_monetize";
@@ -139,6 +151,14 @@ describe("publishAndMonetize", () => {
     vi.mocked(buildDropBlueprint).mockResolvedValue({
       id: "bp-7",
     } as unknown as Awaited<ReturnType<typeof buildDropBlueprint>>);
+    vi.mocked(ensureStoreIdentity).mockResolvedValue({
+      agentId: "5",
+      agentCardCid: "bafycard",
+      agentCardUri: "ipfs://bafycard",
+      minted: true,
+      reused: false,
+      txHash: "0xid",
+    });
   });
 
   it("mints, auto-registers the store, and creates the drop on Arbitrum Sepolia", async () => {
@@ -154,20 +174,31 @@ describe("publishAndMonetize", () => {
     expect(outcome.chain).toBe("arbitrumSepolia");
     expect(outcome.storeId).toBe("42");
     expect(outcome.storeRegistered).toBe(true);
+    expect(outcome.agentId).toBe("5");
+    expect(outcome.agentCardCid).toBe("bafycard");
     expect(outcome.dropId).toBe("7");
     expect(outcome.dropTxHash).toBe("0xdrop");
     expect(outcome.blueprint).toBeDefined();
     expect(outcome.marketplaceUrl).toBe("https://joymarketplace.io/asset/123");
     expect(outcome.errors).toEqual([]);
 
-    // Store resolved/registered under the configured slug, default agent id.
+    // Store resolved/registered under the configured slug; the freshly minted
+    // ERC-8004 identity is bound to the store.
     expect(resolveStoreBySlug).toHaveBeenCalledWith("arbitrumSepolia", "my-store");
+    expect(ensureStoreIdentity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        chain: "arbitrumSepolia",
+        slug: "my-store",
+        type: "store",
+      }),
+    );
     expect(registerStore).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         chain: "arbitrumSepolia",
         slug: "my-store",
-        agentId: "0",
+        agentId: "5",
       }),
     );
 
@@ -184,7 +215,11 @@ describe("publishAndMonetize", () => {
     expect(pubArgs.royaltyBps).toBe(250);
     expect(pubArgs.storeSlug).toBe("my-store");
 
-    expect(buildDropBlueprint).toHaveBeenCalledWith("arbitrumSepolia", "7");
+    expect(buildDropBlueprint).toHaveBeenCalledWith(
+      "arbitrumSepolia",
+      "7",
+      expect.objectContaining({ license: expect.objectContaining({ id: expect.any(String) }) }),
+    );
   });
 
   it("reuses an existing store without auto-registering", async () => {
@@ -199,8 +234,48 @@ describe("publishAndMonetize", () => {
     expect(outcome.storeId).toBe("99");
     expect(outcome.storeRegistered).toBe(false);
     expect(registerStore).not.toHaveBeenCalled();
+    // No new store -> no identity mint.
+    expect(ensureStoreIdentity).not.toHaveBeenCalled();
     expect(createDrop).toHaveBeenCalledTimes(1);
     expect(vi.mocked(createDrop).mock.calls[0][1].storeId).toBe("99");
+  });
+
+  it("registers the store without an identity when minting fails", async () => {
+    vi.mocked(publishAndForget).mockResolvedValue(mintedOutcome());
+    vi.mocked(ensureStoreIdentity).mockRejectedValue(
+      new Error("ERC-8004 registries not deployed"),
+    );
+
+    const outcome = await publishAndMonetize({
+      publish: basePublishInput(),
+      priceUsdc: 1,
+    });
+
+    // Store still registers (with agent id "0") and the drop still lands.
+    expect(registerStore).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ slug: "my-store", agentId: "0" }),
+    );
+    expect(outcome.storeRegistered).toBe(true);
+    expect(outcome.agentId).toBeUndefined();
+    expect(outcome.dropId).toBe("7");
+    expect(outcome.errors.some((e) => /identity:/.test(e))).toBe(true);
+  });
+
+  it("uses an explicit agentId without minting a new identity", async () => {
+    vi.mocked(publishAndForget).mockResolvedValue(mintedOutcome());
+
+    await publishAndMonetize({
+      publish: basePublishInput(),
+      priceUsdc: 1,
+      agentId: "77",
+    });
+
+    expect(ensureStoreIdentity).not.toHaveBeenCalled();
+    expect(registerStore).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ slug: "my-store", agentId: "77" }),
+    );
   });
 
   it("keccak-hashes a non-hex assetLeafSource", async () => {

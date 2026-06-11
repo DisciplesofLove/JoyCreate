@@ -45,6 +45,10 @@ import {
   storeCount,
   transferStore,
 } from "@/lib/onchain/glue_client";
+import {
+  settleRegistrationFee,
+  type RegistrationFeeResult,
+} from "@/lib/x402/registration_fee";
 
 const logger = log.scope("glue_handlers");
 
@@ -82,17 +86,29 @@ export function registerGlueHandlers(): void {
   // --- StoreRegistry ----------------------------------------------------
   ipcMain.handle(
     "glue:register-store",
-    async (_e, params: { chain?: string; slug: string; agentId?: string }) => {
+    async (
+      _e,
+      params: { chain?: string; slug: string; agentId?: string; payFee?: boolean },
+    ) => {
       const chain = resolveChain(params?.chain);
       if (!params?.slug) throw new Error("slug is required");
       const wallet = await loadWallet(chain);
+      // LR6 / G4: charge the x402 store-registration fee before registering.
+      // Settlement throws on failure so a fee-ready chain never registers free.
+      let registrationFee: RegistrationFeeResult | undefined;
+      if (params.payFee) {
+        registrationFee = await settleRegistrationFee(wallet, {
+          chain,
+          slug: params.slug,
+        });
+      }
       const result = await registerStore(wallet, {
         chain,
         slug: params.slug,
         agentId: params.agentId ?? "0",
       });
       logger.info(`registered store ${result.storeId} (${params.slug})`);
-      return result;
+      return { ...result, registrationFee };
     },
   );
 

@@ -19,6 +19,7 @@ export const GOLDSKY_SUBGRAPHS = {
     stores:
       env?.VITE_STORES_SUBGRAPH_AMOY ??
       "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-amoy/0.0.3/gn",
+    marketplace: env?.VITE_MARKETPLACE_SUBGRAPH_AMOY ?? "",
   },
   arbitrumSepolia: {
     drop:
@@ -27,15 +28,19 @@ export const GOLDSKY_SUBGRAPHS = {
     stores:
       env?.VITE_STORES_SUBGRAPH_ARB_SEPOLIA ??
       "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.2/gn",
+    // LR6 unified ERC-8004 + glue subgraph. Empty until the manual Goldsky
+    // deploy lands (see subgraph/README.md); callers fall back to RPC reads.
+    marketplace: env?.VITE_MARKETPLACE_SUBGRAPH_ARB_SEPOLIA ?? "",
   },
   arbitrumOne: {
     drop: env?.VITE_DROP_SUBGRAPH_ARB_ONE ?? "",
     stores: env?.VITE_STORES_SUBGRAPH_ARB_ONE ?? "",
+    marketplace: env?.VITE_MARKETPLACE_SUBGRAPH_ARB_ONE ?? "",
   },
 } as const;
 
 export type SubgraphChainId = keyof typeof GOLDSKY_SUBGRAPHS;
-export type SubgraphKind = "drop" | "stores";
+export type SubgraphKind = "drop" | "stores" | "marketplace";
 
 /**
  * Query a Goldsky subgraph with a GraphQL query.

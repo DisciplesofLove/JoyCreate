@@ -586,12 +586,34 @@ print(json.dumps(output))
       throw error;
     }
   }
-  
-  private async generateSpeech(id: string, request: TTSRequest): Promise<string> {
+
+  /**
+   * Synthesize speech to a WAV file WITHOUT playing it back, returning the
+   * file path and duration. Used by the video editor to create voiceover
+   * audio tracks. `engine` optionally overrides the configured TTS model for
+   * this single call (e.g. force local Piper or cloud ElevenLabs).
+   */
+  async synthesizeToFile(
+    request: TTSRequest & { engine?: VoiceConfig["ttsModel"] },
+  ): Promise<TTSResult> {
+    const id = crypto.randomUUID();
+    const audioPath = await this.generateSpeech(id, request, request.engine);
+    const duration = await this.getAudioDuration(audioPath);
+    return { id, audioPath, duration, text: request.text };
+  }
+
+  private async generateSpeech(
+    id: string,
+    request: TTSRequest,
+    engineOverride?: VoiceConfig["ttsModel"],
+  ): Promise<string> {
     const outputPath = path.join(TTS_CACHE_DIR, `${id}.wav`);
-    
+    const engine = engineOverride ?? this.config.ttsModel;
+
     // Check cache first
-    const cacheKey = this.hashText(request.text + (request.voice || this.config.ttsVoice));
+    const cacheKey = this.hashText(
+      `${engine}:${request.voice || this.config.ttsVoice}:${request.text}`,
+    );
     const cachedPath = path.join(TTS_CACHE_DIR, `${cacheKey}.wav`);
     
     if (existsSync(cachedPath)) {
@@ -599,8 +621,8 @@ print(json.dumps(output))
       return cachedPath;
     }
     
-    // Generate using configured TTS model
-    switch (this.config.ttsModel) {
+    // Generate using configured (or overridden) TTS model
+    switch (engine) {
       case "piper":
         await this.generateWithPiper(request, outputPath);
         break;

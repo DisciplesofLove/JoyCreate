@@ -769,7 +769,8 @@ export function CreateBotDialog({ open, onOpenChange, onCreate }: CreateBotDialo
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="anthropic/claude-opus-4-7">Claude Opus 4.7 (Latest)</SelectItem>
+                    <SelectItem value="anthropic/claude-opus-4-8">Claude Opus 4.8 (Latest)</SelectItem>
+                    <SelectItem value="anthropic/claude-opus-4-7">Claude Opus 4.7</SelectItem>
                     <SelectItem value="anthropic/claude-sonnet-4-6">Claude Sonnet 4.6 (Latest)</SelectItem>
                     <SelectItem value="anthropic/claude-sonnet-4-5">Claude Sonnet 4</SelectItem>
                     <SelectItem value="anthropic/claude-opus-4-6">Claude Opus 4.6</SelectItem>

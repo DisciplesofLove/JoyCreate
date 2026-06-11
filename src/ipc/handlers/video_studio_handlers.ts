@@ -13,6 +13,7 @@ import { createProvenanceManifest } from "@/types/provenance";
 import { getDomainEventBus } from "@/lib/events/domain_event_bus";
 import { renderTimeline, probeVideo, extractThumbnail } from "@/lib/video/ffmpeg";
 import { timelineDuration, type VideoTimeline } from "@/lib/video/timeline_types";
+import { voiceAssistant, type VoiceConfig } from "@/lib/voice_assistant";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -50,6 +51,13 @@ interface RenderTimelineParams {
   timeline: VideoTimeline;
   projectId?: number;
   projectName?: string;
+}
+
+interface GenerateVoiceoverParams {
+  text: string;
+  voice?: string;
+  speed?: number;
+  engine?: VoiceConfig["ttsModel"];
 }
 
 interface CreateProjectParams {
@@ -1066,6 +1074,37 @@ Rules:
       hasAudio: probe.hasAudio,
     };
   });
+
+  // ── Voiceover (text-to-speech → audio file for the timeline) ─────────────
+  ipcMain.handle(
+    "video-studio:generate-voiceover",
+    async (_, params: GenerateVoiceoverParams) => {
+      const text = params.text?.trim();
+      if (!text) throw new Error("Voiceover text is required");
+
+      const result = await voiceAssistant.synthesizeToFile({
+        text,
+        voice: params.voice,
+        speed: params.speed,
+        engine: params.engine,
+      });
+
+      if (!result.audioPath || !fs.existsSync(result.audioPath)) {
+        throw new Error("Voiceover synthesis produced no audio file");
+      }
+
+      // Copy the synthesized WAV into the video-studio directory so it persists
+      // alongside the project (the TTS cache may be cleared independently).
+      const destPath = path.join(getVideoStoreDir(), uniqueVideoFilename("voiceover", "wav"));
+      await fs.promises.copyFile(result.audioPath, destPath);
+
+      return {
+        filePath: destPath,
+        duration: result.duration,
+        text: result.text,
+      };
+    },
+  );
 
   // ── Render timeline (editor export) ──────────────────────────────────────
   ipcMain.handle("video-studio:render", async (event, params: RenderTimelineParams) => {

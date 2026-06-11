@@ -325,7 +325,6 @@ class TrustlessInferenceService {
   > {
     const requestId = uuidv4();
     const timestamp = Date.now();
-    const collectedChunks: string[] = [];
 
     const streamOpts = options?.config?.options as Record<string, unknown> | undefined;
     const modelConfig: LocalModelConfig = {
@@ -354,38 +353,45 @@ class TrustlessInferenceService {
       timestamp,
     };
 
-    // Stream tokens using callback-based API
+    // Push-based bridge: `streamChat`'s callback enqueues each token and wakes
+    // the generator, which yields immediately. No polling / fixed delay — a
+    // token reaches the renderer the moment the provider emits it.
+    const queue: string[] = [];
+    let finished = false;
+    let notify: (() => void) | null = null;
+    const wake = () => {
+      const fn = notify;
+      notify = null;
+      fn?.();
+    };
+
     const streamPromise = localModelService.streamChat(request, (chunk: string) => {
-      collectedChunks.push(chunk);
+      queue.push(chunk);
+      wake();
+    });
+    // Track settlement on a separate branch so a rejection here is not flagged
+    // as unhandled — the real error is surfaced by `await streamPromise` below.
+    void streamPromise.then(
+      () => {},
+      () => {},
+    ).finally(() => {
+      finished = true;
+      wake();
     });
 
-    // Poll for new chunks and yield them
-    let lastIndex = 0;
-    const pollInterval = 10; // ms
-    
+    // Drain: yield queued tokens, otherwise await the next wake.
     while (true) {
-      // Check for new chunks
-      while (lastIndex < collectedChunks.length) {
-        yield { type: "token", content: collectedChunks[lastIndex] };
-        lastIndex++;
+      if (queue.length > 0) {
+        yield { type: "token", content: queue.shift() as string };
+        continue;
       }
-
-      // Check if stream is done by using Promise.race with a small delay
-      const streamDone = await Promise.race([
-        streamPromise.then(() => true),
-        new Promise<false>(resolve => setTimeout(() => resolve(false), pollInterval))
-      ]);
-
-      if (streamDone) {
-        // Yield any remaining chunks
-        while (lastIndex < collectedChunks.length) {
-          yield { type: "token", content: collectedChunks[lastIndex] };
-          lastIndex++;
-        }
-        break;
-      }
+      if (finished) break;
+      await new Promise<void>((resolve) => {
+        notify = resolve;
+      });
     }
 
+    // Surfaces any stream error and yields the final aggregated response.
     const response = await streamPromise;
 
     // Get model info for verification

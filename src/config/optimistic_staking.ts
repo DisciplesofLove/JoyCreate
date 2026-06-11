@@ -11,12 +11,14 @@
  * /memories/repo/optimistic-staking-stylus.md for tx hashes.
  */
 
+import { envAddress } from "@/config/env_address";
+
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 export const OPTIMISTIC_STAKING_CONTRACTS = {
   arbitrumSepolia: "0x5f587e50a9de2409e5f43d70dc0a22b88bf61904",
-  arbitrumOne: ZERO_ADDRESS,
-} as const;
+  arbitrumOne: envAddress("VITE_OPTIMISTIC_STAKING_ARB_ONE", ZERO_ADDRESS),
+};
 
 export type OptimisticStakingChainId = keyof typeof OPTIMISTIC_STAKING_CONTRACTS;
 

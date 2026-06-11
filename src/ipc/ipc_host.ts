@@ -50,6 +50,7 @@ import { registerJoyBridgeHandlers } from "./handlers/joybridge_handlers";
 import { registerMarketplaceInboundHandlers } from "./handlers/marketplace_inbound_handlers";
 import { registerDataMarketHandlers } from "./handlers/data_market_handlers";
 import { registerErc8004Handlers } from "./handlers/erc8004_handlers";
+import { registerRuntimeHandlers } from "./handlers/runtime_handlers";
 import { registerJnsHandlers } from "./handlers/jns_handlers";
 import { registerGlueHandlers } from "./handlers/glue_handlers";
 import { registerX402Handlers } from "./handlers/x402_handlers";
@@ -270,6 +271,7 @@ export function registerIpcHandlers() {
   registerMarketplaceInboundHandlers(); // Inbound: Joy Marketplace → JoyCreate webhook handler
   registerDataMarketHandlers(); // Arbitrum Stylus: DataProvenance + DataLease
   registerErc8004Handlers(); // Arbitrum Stylus: ERC-8004 Identity/Reputation/Validation registries
+  registerRuntimeHandlers(); // LR12: metered local skill runtime invoke + optional reputation feedback
   registerJnsHandlers(); // JNS (Joy Name System): read-only .joy name resolution (sibling of ENS)
   registerGlueHandlers(); // Arbitrum Stylus: StoreRegistry/EditionController/AgentMandate glue contracts
   registerX402Handlers(); // X402 pay-per-prompt: USDC EIP-3009 settlement + RevenueSplitter 80/10/10

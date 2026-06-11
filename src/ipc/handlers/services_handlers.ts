@@ -12,6 +12,7 @@ import { spawn, ChildProcess, exec, execSync } from "child_process";
 import path from "node:path";
 import fs from "fs-extra";
 import log from "electron-log";
+import killPort from "kill-port";
 import { app } from "electron";
 import { getTailscaleConfig } from "@/lib/tailscale_service";
 
@@ -153,6 +154,21 @@ async function checkPortInUse(port: number): Promise<boolean> {
   });
 }
 
+/**
+ * Free a TCP port by killing whatever process currently holds it. Cross-platform
+ * via `kill-port` (tcp). Best-effort — never throws so the caller can proceed to
+ * (re)start its service even if nothing was bound.
+ */
+async function freePort(port: number): Promise<void> {
+  try {
+    await killPort(port, "tcp");
+    logger.info(`Freed port ${port} (killed prior holder)`);
+  } catch (err) {
+    // No holder, or already exited — nothing to free.
+    logger.info(`freePort(${port}) — nothing to kill (${(err as Error).message})`);
+  }
+}
+
 async function checkServiceHealth(url: string): Promise<boolean> {
   try {
     const controller = new AbortController();
@@ -266,19 +282,15 @@ function launchPowerShellScript(
 async function startN8nService(): Promise<ServiceStatus> {
   const config = SERVICE_CONFIGS.n8n;
   
-  // Check if port is in use (maybe started externally)
+  // If the port is already taken (e.g. a stale local n8n or the Docker n8n
+  // container), free it first so the managed local n8n can bind cleanly.
+  // Configured policy: kill whatever holds 5678, then start the local n8n.
   const portInUse = await checkPortInUse(config.port!);
   if (portInUse) {
-    const isHealthy = await checkServiceHealth(config.healthCheckUrl!);
-    if (isHealthy) {
-      logger.info("n8n already running");
-      return {
-        id: "n8n",
-        name: config.name,
-        running: true,
-        port: config.port,
-      };
-    }
+    logger.warn(`Port ${config.port} in use — freeing it before starting local n8n`);
+    await freePort(config.port!);
+    // Give the OS a moment to release the socket before rebinding.
+    await new Promise((r) => setTimeout(r, 1500));
   }
   
   try {
@@ -330,6 +342,7 @@ async function startN8nService(): Promise<ServiceStatus> {
         `set "N8N_PORT=${config.port}"`,
         `set "N8N_LISTEN_ADDRESS=${n8nBindHost}"`,
         `set "N8N_SECURE_COOKIE=false"`,
+        `set "N8N_MIGRATE_FS_STORAGE_PATH=true"`,
         `${n8nLauncher}`,
       ].join(" && ");
     } else {
@@ -343,6 +356,7 @@ async function startN8nService(): Promise<ServiceStatus> {
         `set "N8N_LISTEN_ADDRESS=${n8nBindHost}"`,
         `set "N8N_SECURE_COOKIE=false"`,
         `set "N8N_USER_FOLDER=${path.join(getUserDataPath(), "n8n")}"`,
+        `set "N8N_MIGRATE_FS_STORAGE_PATH=true"`,
         `${n8nLauncher}`,
       ].join(" && ");
     }

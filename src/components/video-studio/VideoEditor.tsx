@@ -42,6 +42,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { VoiceAssistantClient } from "@/ipc/voice_assistant_client";
+import {
   X,
   Play,
   Pause,
@@ -62,6 +68,7 @@ import {
   SkipBack,
   Layers,
   Settings2,
+  Mic,
 } from "lucide-react";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -107,7 +114,11 @@ interface EditorOverlay {
 
 interface EditorAudio {
   id: string;
-  videoId: number;
+  /** DB id of a source video whose audio is extracted (undefined for voiceover). */
+  videoId?: number;
+  /** Absolute path to a standalone audio file (e.g. generated voiceover). */
+  filePath?: string;
+  kind?: "video" | "voiceover";
   start: number;
   trimStart: number;
   trimEnd: number;
@@ -592,6 +603,7 @@ export function VideoEditor({
       const track: EditorAudio = {
         id: nextId("aud"),
         videoId: vid,
+        kind: "video",
         start: 0,
         trimStart: 0,
         trimEnd: dur,
@@ -603,6 +615,24 @@ export function VideoEditor({
       toast.success("Audio track added");
     },
     [galleryVideos],
+  );
+
+  const addVoiceoverTrack = useCallback(
+    (filePath: string, duration: number, label: string) => {
+      const track: EditorAudio = {
+        id: nextId("aud"),
+        filePath,
+        kind: "voiceover",
+        start: playhead,
+        trimStart: 0,
+        trimEnd: duration,
+        volume: 1,
+        label,
+      };
+      setAudioTracks((prev) => [...prev, track]);
+      setSelectedAudioId(track.id);
+    },
+    [playhead],
   );
 
   const updateAudio = useCallback((id: string, patch: Partial<EditorAudio>) => {
@@ -754,6 +784,7 @@ export function VideoEditor({
         audioTracks: audioTracks.map((a) => ({
           id: a.id,
           videoId: a.videoId,
+          filePath: a.filePath,
           start: a.start,
           trimStart: a.trimStart,
           trimEnd: a.trimEnd,
@@ -1017,6 +1048,7 @@ export function VideoEditor({
           </Button>
           <AddImageMenu images={galleryImages} onAdd={addImageOverlay} />
           <AddAudioMenu videos={galleryVideos} onAdd={addAudioTrack} />
+          <VoiceoverButton onGenerated={addVoiceoverTrack} />
           <div className="flex-1" />
           <span className="text-[10px] text-muted-foreground">
             {clips.length} clips · {overlays.length} overlays · {audioTracks.length} audio
@@ -1124,7 +1156,11 @@ export function VideoEditor({
                       setSelectedOverlayId(null);
                     }}
                   >
-                    <Music className="w-2.5 h-2.5 mr-1 shrink-0" />
+                    {a.kind === "voiceover" ? (
+                      <Mic className="w-2.5 h-2.5 mr-1 shrink-0" />
+                    ) : (
+                      <Music className="w-2.5 h-2.5 mr-1 shrink-0" />
+                    )}
                     <span className="truncate">{a.label}</span>
                   </div>
                 );
@@ -1374,6 +1410,132 @@ function AddAudioMenu({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function VoiceoverButton({
+  onGenerated,
+}: {
+  onGenerated: (filePath: string, duration: number, label: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [engine, setEngine] = useState<"piper" | "elevenlabs">("piper");
+  const [voice, setVoice] = useState<string>("");
+  const [generating, setGenerating] = useState(false);
+
+  const { data: caps } = useQuery({
+    queryKey: ["voice", "capabilities"],
+    queryFn: () => VoiceAssistantClient.getCapabilities(),
+    enabled: open,
+    staleTime: 60_000,
+  });
+
+  const piperVoices = caps?.installedPiperModels ?? [];
+
+  useEffect(() => {
+    if (caps && !caps.hasPiper) setEngine("elevenlabs");
+  }, [caps]);
+
+  const handleGenerate = useCallback(async () => {
+    const script = text.trim();
+    if (!script) {
+      toast.error("Enter some text for the voiceover");
+      return;
+    }
+    setGenerating(true);
+    try {
+      const result = await IpcClient.getInstance().generateVoiceover({
+        text: script,
+        voice: engine === "piper" && voice ? voice : undefined,
+        engine,
+      });
+      const label = script.length > 24 ? `${script.slice(0, 24)}…` : script;
+      onGenerated(result.filePath, result.duration, label);
+      toast.success("Voiceover added to timeline");
+      setText("");
+      setOpen(false);
+    } catch (err) {
+      toast.error(
+        `Voiceover failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+      );
+    } finally {
+      setGenerating(false);
+    }
+  }, [text, engine, voice, onGenerated]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm">
+          <Mic className="w-3.5 h-3.5 mr-1" /> Voiceover
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 space-y-3" align="start">
+        <div className="space-y-1">
+          <Label className="text-xs font-medium">AI Voiceover</Label>
+          <p className="text-[10px] text-muted-foreground">
+            Type a script and generate narration. It's added as an audio track at the
+            playhead and mixed into the final render.
+          </p>
+        </div>
+        <Textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Enter the text you want spoken…"
+          className="min-h-24 text-xs"
+        />
+        <div className="space-y-1">
+          <Label className="text-[11px]">Engine</Label>
+          <Select value={engine} onValueChange={(v) => setEngine(v as "piper" | "elevenlabs")}>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="piper" disabled={caps != null && !caps.hasPiper} className="text-xs">
+                Local (Piper){caps != null && !caps.hasPiper ? " — not installed" : ""}
+              </SelectItem>
+              <SelectItem value="elevenlabs" className="text-xs">
+                ElevenLabs (cloud)
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {engine === "piper" && piperVoices.length > 0 && (
+          <div className="space-y-1">
+            <Label className="text-[11px]">Voice</Label>
+            <Select value={voice} onValueChange={setVoice}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="Default voice" />
+              </SelectTrigger>
+              <SelectContent>
+                {piperVoices.map((m) => (
+                  <SelectItem key={m} value={m} className="text-xs">
+                    {m}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        <Button
+          size="sm"
+          className="w-full"
+          onClick={handleGenerate}
+          disabled={generating || !text.trim()}
+        >
+          {generating ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> Generating…
+            </>
+          ) : (
+            <>
+              <Mic className="w-3.5 h-3.5 mr-1" /> Generate &amp; Add
+            </>
+          )}
+        </Button>
+      </PopoverContent>
+    </Popover>
   );
 }
 

@@ -2593,6 +2593,44 @@ export const videoProjects = sqliteTable("video_projects", {
     .default(sql`(unixepoch())`),
 });
 
+// -- Studio Jobs (async queue for long-running video/audio work) ------
+// Long-running provider work (text-to-video generation, ffmpeg render,
+// voiceover synthesis) runs OUT of the IPC `invoke` call. Each job is a row
+// here so progress survives app restarts and the renderer polls/subscribes
+// via `studio:job-progress` events instead of blocking on a single invoke.
+export const studioJobs = sqliteTable("studio_jobs", {
+  /** Client-generated UUID so the renderer can track a job before it commits. */
+  id: text("id").primaryKey(),
+  /** What the job does. */
+  kind: text("kind", {
+    enum: ["generate-video", "render", "voiceover"],
+  }).notNull(),
+  /** Generation provider (e.g. runway/fal/replicate); null for render/voiceover. */
+  provider: text("provider"),
+  /** Lifecycle state. */
+  status: text("status", {
+    enum: ["queued", "running", "succeeded", "failed", "canceled"],
+  })
+    .notNull()
+    .default("queued"),
+  /** Completion fraction 0..1. */
+  progress: real("progress").notNull().default(0),
+  /** Input parameters for the job (provider request, timeline, tts options, etc.). */
+  paramsJson: text("params_json", { mode: "json" }).$type<Record<string, unknown>>(),
+  /** Result payload on success (e.g. { videoId } or { filePath, duration }). */
+  resultJson: text("result_json", { mode: "json" }).$type<Record<string, unknown> | null>(),
+  /** Failure message when status = "failed". */
+  error: text("error"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  startedAt: integer("started_at", { mode: "timestamp" }),
+  finishedAt: integer("finished_at", { mode: "timestamp" }),
+});
+
 // ── OpenClaw Bot Activity Log ────────────────────────────────
 // Persists ALL gateway events so activity is available even when
 // JoyCreate was closed while the bot was running.

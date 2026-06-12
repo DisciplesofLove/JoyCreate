@@ -417,7 +417,72 @@ class TrustlessInferenceService {
         proof
       );
 
+      // Auto-pin if configured
+      if (this.config.autoPin) {
+        await heliaVerificationService.pinRecord(record.id);
+      }
+
+      // Auto-anchor to Celestia DA so the record gets a verifiable
+      // block-height "CA number" the renderer can display. Mirrors the
+      // blocking `runInference` path — without this, streamed records never
+      // get the Celestia anchor / Verified checkmark.
+      if (this.config.autoAnchorCelestia) {
+        try {
+          const { celestiaBlobService } = await import(
+            "@/lib/celestia_blob_service"
+          );
+          const anchorPayload = {
+            type: "joycreate-inference-anchor",
+            recordId: record.id,
+            cid: record.cid,
+            requestCid: proof.requestCid,
+            responseCid: proof.responseCid,
+            proofCid: proof.proofCid,
+            modelId: modelInfo.id,
+            modelProvider: provider,
+            createdAt: new Date(record.createdAt).toISOString(),
+          };
+          const anchor = await celestiaBlobService.submitJSON(anchorPayload, {
+            label: `inference:${record.id}`,
+            dataType: "inference-anchor",
+          });
+          record.celestiaHeight = anchor.height;
+          record.celestiaCommitment = anchor.commitment;
+          record.celestiaNamespace = anchor.namespace;
+          record.celestiaAnchoredAt = new Date().toISOString();
+          await heliaVerificationService.updateRecord(record);
+          logger.info("Streamed inference anchored to Celestia", {
+            id: record.id,
+            height: anchor.height,
+          });
+        } catch (anchorErr) {
+          logger.warn(
+            "Celestia anchor unavailable \u2014 streamed inference still verified locally",
+            {
+              id: record.id,
+              error:
+                anchorErr instanceof Error
+                  ? anchorErr.message
+                  : String(anchorErr),
+            },
+          );
+        }
+      }
+
+      // Verify the record so `record.verified` is set — this is the flag the
+      // renderer uses to show the green Verified checkmark.
+      const verification = await heliaVerificationService.verifyInferenceRecord(
+        record.id
+      );
+      record.verified = verification.valid;
+
       this.inferenceHistory.unshift(record);
+      if (this.inferenceHistory.length > this.config.maxRecordsInMemory) {
+        this.inferenceHistory = this.inferenceHistory.slice(
+          0,
+          this.config.maxRecordsInMemory
+        );
+      }
     } catch (verificationError) {
       logger.warn("Helia verification unavailable after stream — returning result without proof", {
         error: verificationError instanceof Error ? verificationError.message : String(verificationError),

@@ -289,6 +289,41 @@ interface DeleteCustomModelParams {
   modelApiName: string;
 }
 
+export type StudioJobKind = "generate-video" | "render" | "voiceover";
+export type StudioJobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "canceled";
+
+/** Lifecycle event pushed over `studio:job-progress`. */
+export interface StudioJobEvent {
+  id: string;
+  kind: StudioJobKind;
+  provider?: string | null;
+  status: StudioJobStatus;
+  progress: number;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+}
+
+/** Persisted studio job row returned by the query handlers. */
+export interface StudioJobDto {
+  id: string;
+  kind: StudioJobKind;
+  provider: string | null;
+  status: StudioJobStatus;
+  progress: number;
+  params: Record<string, unknown> | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+}
+
 export class IpcClient {
   private static instance: IpcClient;
   private ipcRenderer: IpcRenderer;
@@ -329,6 +364,7 @@ export class IpcClient {
   private videoRenderProgressHandlers: Set<
     (evt: { fraction: number; stage: string }) => void
   >;
+  private studioJobProgressHandlers: Set<(evt: StudioJobEvent) => void>;
   private constructor() {
     this.ipcRenderer = ((window as any).electron?.ipcRenderer ?? {
       invoke: async (..._args: any[]) => null,
@@ -352,6 +388,7 @@ export class IpcClient {
     this.whitehatMcpPendingHandlers = new Set();
     this.gauntletProgressHandlers = new Set();
     this.videoRenderProgressHandlers = new Set();
+    this.studioJobProgressHandlers = new Set();
     // Set up listeners for stream events
     this.ipcRenderer.on("chat:response:chunk", (data) => {
       if (
@@ -496,6 +533,15 @@ export class IpcClient {
       if (data && typeof data === "object" && "fraction" in data) {
         for (const handler of this.videoRenderProgressHandlers) {
           handler(data as unknown as { fraction: number; stage: string });
+        }
+      }
+    });
+
+    // Studio job queue — async job lifecycle events
+    this.ipcRenderer.on("studio:job-progress", (data) => {
+      if (data && typeof data === "object" && "id" in data && "status" in data) {
+        for (const handler of this.studioJobProgressHandlers) {
+          handler(data as unknown as StudioJobEvent);
         }
       }
     });
@@ -5838,6 +5884,52 @@ export class IpcClient {
     this.videoRenderProgressHandlers.add(handler);
     return () => {
       this.videoRenderProgressHandlers.delete(handler);
+    };
+  }
+
+  // ── Studio Jobs (async queue) ─────────────────────────────────────────────
+
+  /** Start a video generation as a background job; returns the job id. */
+  public async generateVideoAsync(params: {
+    prompt: string;
+    negativePrompt?: string;
+    provider: string;
+    model?: string;
+    width: number;
+    height: number;
+    duration?: number;
+    fps?: number;
+    seed?: string;
+    style?: string;
+    sourceType?: string;
+    referenceImageBase64?: string;
+    referenceVideoId?: number;
+    strength?: number;
+    motionAmount?: number;
+  }): Promise<{ jobId: string }> {
+    return this.ipcRenderer.invoke("video-studio:generate-async", params);
+  }
+
+  public async listStudioJobs(params?: {
+    limit?: number;
+    status?: StudioJobStatus;
+  }): Promise<StudioJobDto[]> {
+    return this.ipcRenderer.invoke("studio-jobs:list", params);
+  }
+
+  public async getStudioJob(id: string): Promise<StudioJobDto> {
+    return this.ipcRenderer.invoke("studio-jobs:get", id);
+  }
+
+  public async cancelStudioJob(id: string): Promise<StudioJobDto> {
+    return this.ipcRenderer.invoke("studio-jobs:cancel", id);
+  }
+
+  /** Subscribe to studio job lifecycle events. Returns an unsubscribe fn. */
+  public onStudioJobProgress(handler: (evt: StudioJobEvent) => void): () => void {
+    this.studioJobProgressHandlers.add(handler);
+    return () => {
+      this.studioJobProgressHandlers.delete(handler);
     };
   }
 

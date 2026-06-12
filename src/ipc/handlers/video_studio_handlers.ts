@@ -14,6 +14,7 @@ import { getDomainEventBus } from "@/lib/events/domain_event_bus";
 import { renderTimeline, probeVideo, extractThumbnail } from "@/lib/video/ffmpeg";
 import { timelineDuration, type VideoTimeline } from "@/lib/video/timeline_types";
 import { voiceAssistant, type VoiceConfig } from "@/lib/voice_assistant";
+import { enqueueJob } from "@/lib/studio_jobs";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -778,71 +779,99 @@ function getProviderCatalog(): Record<string, ProviderCatalogEntry> {
 
 // ── Handler Registration ───────────────────────────────────────────────────────
 
-export function registerVideoStudioHandlers() {
-  // ── Generate ─────────────────────────────────────────────────────────────
-  ipcMain.handle("video-studio:generate", async (_, params: GenerateVideoParams) => {
-    if (!params.prompt?.trim()) throw new Error("Prompt is required");
-    if (!params.provider) throw new Error("Provider is required");
+/**
+ * Run a full video generation: dispatch to the provider, build the provenance
+ * manifest, persist the row, and emit the tokenomics event. Shared by the
+ * blocking `video-studio:generate` handler and the async job runner.
+ */
+async function performVideoGeneration(params: GenerateVideoParams) {
+  if (!params.prompt?.trim()) throw new Error("Prompt is required");
+  if (!params.provider) throw new Error("Provider is required");
 
-    const sourceType = params.sourceType ?? "text-to-video";
+  const sourceType = params.sourceType ?? "text-to-video";
 
-    const generationStartedAt = Date.now();
-    const { filePath, thumbnailPath } = await dispatchGenerate(params);
+  const generationStartedAt = Date.now();
+  const { filePath, thumbnailPath } = await dispatchGenerate(params);
 
-    // DEAI Phase 0D — provenance manifest at generation time.
-    const provenance = createProvenanceManifest({
-      model: params.model || "unknown",
-      provider: params.provider,
+  // DEAI Phase 0D — provenance manifest at generation time.
+  const provenance = createProvenanceManifest({
+    model: params.model || "unknown",
+    provider: params.provider,
+    prompt: params.prompt.trim(),
+    negativePrompt: params.negativePrompt?.trim() || undefined,
+    params: {
+      width: params.width,
+      height: params.height,
+      duration: params.duration ?? 5,
+      fps: params.fps ?? 24,
+      seed: params.seed || null,
+      style: params.style || null,
+      sourceType,
+      strength: params.strength,
+      motionAmount: params.motionAmount,
+    },
+  });
+
+  const [row] = await db
+    .insert(videoStudioVideos)
+    .values({
       prompt: params.prompt.trim(),
-      negativePrompt: params.negativePrompt?.trim() || undefined,
-      params: {
-        width: params.width,
-        height: params.height,
-        duration: params.duration ?? 5,
-        fps: params.fps ?? 24,
-        seed: params.seed || null,
-        style: params.style || null,
-        sourceType,
+      negativePrompt: params.negativePrompt?.trim() || null,
+      provider: params.provider,
+      model: params.model || "",
+      width: params.width,
+      height: params.height,
+      duration: params.duration ?? 5,
+      fps: params.fps ?? 24,
+      format: "mp4",
+      filePath,
+      thumbnailPath,
+      seed: params.seed || null,
+      style: params.style || null,
+      sourceType,
+      sourceId: params.referenceVideoId ?? null,
+      metadata: {
         strength: params.strength,
         motionAmount: params.motionAmount,
+        hasReferenceImage: !!params.referenceImageBase64,
+      },
+      provenanceJson: provenance,
+    })
+    .returning();
+
+  // DEAI Phase 0E — emit compute.job.completed for tokenomics/metering.
+  void getDomainEventBus().publish("compute.job.completed", {
+    jobId: `video-studio:${row?.id ?? "unknown"}`,
+    status: "succeeded",
+    durationMs: Date.now() - generationStartedAt,
+  }).catch(() => { /* swallow */ });
+
+  return row;
+}
+
+export function registerVideoStudioHandlers() {
+  // ── Generate (blocking) ────────────────────────────────────────────────────
+  ipcMain.handle("video-studio:generate", async (_, params: GenerateVideoParams) => {
+    return performVideoGeneration(params);
+  });
+
+  // ── Generate (async job) ───────────────────────────────────────────────────
+  // Returns a job id immediately; progress + result arrive via
+  // `studio:job-progress`. The job result payload is `{ videoId }`.
+  ipcMain.handle("video-studio:generate-async", async (_, params: GenerateVideoParams) => {
+    if (!params.prompt?.trim()) throw new Error("Prompt is required");
+    if (!params.provider) throw new Error("Provider is required");
+    const jobId = await enqueueJob({
+      kind: "generate-video",
+      provider: params.provider,
+      params: params as unknown as Record<string, unknown>,
+      run: async (ctx) => {
+        const row = await performVideoGeneration(params);
+        ctx.throwIfCanceled();
+        return { videoId: row?.id ?? null };
       },
     });
-
-    const [row] = await db
-      .insert(videoStudioVideos)
-      .values({
-        prompt: params.prompt.trim(),
-        negativePrompt: params.negativePrompt?.trim() || null,
-        provider: params.provider,
-        model: params.model || "",
-        width: params.width,
-        height: params.height,
-        duration: params.duration ?? 5,
-        fps: params.fps ?? 24,
-        format: "mp4",
-        filePath,
-        thumbnailPath,
-        seed: params.seed || null,
-        style: params.style || null,
-        sourceType,
-        sourceId: params.referenceVideoId ?? null,
-        metadata: {
-          strength: params.strength,
-          motionAmount: params.motionAmount,
-          hasReferenceImage: !!params.referenceImageBase64,
-        },
-        provenanceJson: provenance,
-      })
-      .returning();
-
-    // DEAI Phase 0E — emit compute.job.completed for tokenomics/metering.
-    void getDomainEventBus().publish("compute.job.completed", {
-      jobId: `video-studio:${row?.id ?? "unknown"}`,
-      status: "succeeded",
-      durationMs: Date.now() - generationStartedAt,
-    }).catch(() => { /* swallow */ });
-
-    return row;
+    return { jobId };
   });
 
   // ── List ──────────────────────────────────────────────────────────────────

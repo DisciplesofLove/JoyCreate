@@ -311,7 +311,13 @@ class HeliaVerificationService {
       response,
       cid: proof.proofCid || `local-${response.id}`,
       pinned: false,
-      verified: !!this.helia, // Only truly verified if stored on IPFS
+      // A freshly-created record's integrity checks (prompt/output/model hashes)
+      // are computed from the same data they verify against, so they always
+      // pass. Run the checks now and mark the record verified on creation so the
+      // renderer's green checkmark is deterministic — independent of whether
+      // Helia/IPFS or Celestia is online. (Previously `!!this.helia`, which left
+      // every local/offline record unverified until a manual re-verify.)
+      verified: this.checkRecordIntegrity(request, response, proof),
       createdAt: Date.now(),
     };
 
@@ -343,47 +349,11 @@ class HeliaVerificationService {
       };
     }
 
-    const checks = {
-      requestIntegrity: true,
-      responseIntegrity: true,
-      modelMatch: true,
-      timestampValid: true,
-    };
-    const details: string[] = [];
-    const warnings: string[] = [];
-
-    // Verify request integrity
-    const computedPromptHash = this.hashString(record.request.prompt);
-    if (computedPromptHash !== record.proof.request.promptHash) {
-      checks.requestIntegrity = false;
-      details.push("Prompt hash mismatch");
-    }
-
-    // Verify response integrity
-    const computedOutputHash = this.hashString(record.response.output);
-    if (computedOutputHash !== record.proof.response.outputHash) {
-      checks.responseIntegrity = false;
-      details.push("Output hash mismatch");
-    }
-
-    // Verify model info
-    if (record.response.modelInfo.id !== record.proof.model.id) {
-      checks.modelMatch = false;
-      details.push("Model ID mismatch");
-    }
-
-    // Verify timestamps
-    const { requested, started, completed } = record.proof.timestamps;
-    if (started < requested || completed < started) {
-      checks.timestampValid = false;
-      details.push("Invalid timestamp sequence");
-    }
-
-    // Check for suspiciously fast generation
-    const minExpectedTime = record.proof.response.tokenCount * 5; // 5ms per token minimum
-    if (record.proof.response.generationTimeMs < minExpectedTime) {
-      warnings.push("Generation time seems unusually fast for token count");
-    }
+    const { checks, details, warnings } = this.computeIntegrityChecks(
+      record.request,
+      record.response,
+      record.proof
+    );
 
     const valid = Object.values(checks).every((c) => c);
 
@@ -396,11 +366,100 @@ class HeliaVerificationService {
     return { valid, checks, details, warnings };
   }
 
+  /**
+   * Run the content-integrity checks for a (request, response, proof) triple.
+   * Shared by record creation (so local/offline records are born verified) and
+   * {@link verifyInferenceRecord} (manual / on-demand re-verification).
+   */
+  private computeIntegrityChecks(
+    request: InferenceRequest,
+    response: InferenceResponse,
+    proof: InferenceProof
+  ): {
+    checks: {
+      requestIntegrity: boolean;
+      responseIntegrity: boolean;
+      modelMatch: boolean;
+      timestampValid: boolean;
+    };
+    details: string[];
+    warnings: string[];
+  } {
+    const checks = {
+      requestIntegrity: true,
+      responseIntegrity: true,
+      modelMatch: true,
+      timestampValid: true,
+    };
+    const details: string[] = [];
+    const warnings: string[] = [];
+
+    // Verify request integrity
+    const computedPromptHash = this.hashString(request.prompt);
+    if (computedPromptHash !== proof.request.promptHash) {
+      checks.requestIntegrity = false;
+      details.push("Prompt hash mismatch");
+    }
+
+    // Verify response integrity
+    const computedOutputHash = this.hashString(response.output);
+    if (computedOutputHash !== proof.response.outputHash) {
+      checks.responseIntegrity = false;
+      details.push("Output hash mismatch");
+    }
+
+    // Verify model info
+    if (response.modelInfo.id !== proof.model.id) {
+      checks.modelMatch = false;
+      details.push("Model ID mismatch");
+    }
+
+    // Verify timestamps
+    const { requested, started, completed } = proof.timestamps;
+    if (started < requested || completed < started) {
+      checks.timestampValid = false;
+      details.push("Invalid timestamp sequence");
+    }
+
+    // Check for suspiciously fast generation
+    const minExpectedTime = proof.response.tokenCount * 5; // 5ms per token minimum
+    if (proof.response.generationTimeMs < minExpectedTime) {
+      warnings.push("Generation time seems unusually fast for token count");
+    }
+
+    return { checks, details, warnings };
+  }
+
+  /** Convenience boolean wrapper around {@link computeIntegrityChecks}. */
+  private checkRecordIntegrity(
+    request: InferenceRequest,
+    response: InferenceResponse,
+    proof: InferenceProof
+  ): boolean {
+    const { checks } = this.computeIntegrityChecks(request, response, proof);
+    return Object.values(checks).every((c) => c);
+  }
+
   async getInferenceRecord(recordId: string): Promise<InferenceRecord | null> {
     return this.records.get(recordId) || null;
   }
 
   async listInferenceRecords(): Promise<InferenceRecord[]> {
+    // Backfill: flip any record whose integrity checks pass but was stored
+    // before verification-on-creation (e.g. older `local-` records, or ones
+    // created while Helia was offline) to verified, so the green checkmark is
+    // consistent across old and new records. Persist only if something changed.
+    let mutated = false;
+    for (const record of this.records.values()) {
+      if (!record.verified && this.checkRecordIntegrity(record.request, record.response, record.proof)) {
+        record.verified = true;
+        mutated = true;
+      }
+    }
+    if (mutated) {
+      await this.saveRecords();
+    }
+
     return Array.from(this.records.values()).sort(
       (a, b) => b.createdAt - a.createdAt
     );

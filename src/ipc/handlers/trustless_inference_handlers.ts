@@ -154,10 +154,14 @@ export function registerTrustlessInferenceHandlers(): void {
           numCtx?: number;
           stop?: string[];
         };
+        streamId?: string;
       }
     ): Promise<{ streamId: string }> => {
       const { provider, modelId, messages, systemPrompt, config } = params;
-      const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      // Prefer the renderer-provided id (its listeners are already bound to it);
+      // fall back to a generated one for older callers.
+      const streamId =
+        params.streamId ?? `stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
       // Run streaming in background, send tokens via events
       (async () => {
@@ -218,10 +222,12 @@ export function registerTrustlessInferenceHandlers(): void {
           numCtx?: number;
           stop?: string[];
         };
+        streamId?: string;
       }
     ): Promise<{ streamId: string }> => {
       const { conversationId, message, config } = params;
-      const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const streamId =
+        params.streamId ?? `stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
       (async () => {
         try {

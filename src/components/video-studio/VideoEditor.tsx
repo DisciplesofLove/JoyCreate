@@ -48,6 +48,12 @@ import {
 } from "@/components/ui/popover";
 import { VoiceAssistantClient } from "@/ipc/voice_assistant_client";
 import {
+  TrackLane,
+  TimelineRuler,
+  TimelinePlayhead,
+  TimelineClipBlock,
+} from "@/components/video-studio/editor/TrackLane";
+import {
   X,
   Play,
   Pause,
@@ -1058,70 +1064,44 @@ export function VideoEditor({
         <ScrollArea className="flex-1">
           <div style={{ width: timelineWidthPx }} className="relative select-none">
             {/* Ruler / click to seek */}
-            <div
-              className="h-5 border-b relative cursor-pointer"
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const t = (e.clientX - rect.left) / pps;
-                setPlayhead(Math.max(0, Math.min(totalDuration, t)));
-              }}
-            >
-              {Array.from({ length: Math.ceil(totalDuration) + 1 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="absolute top-0 h-full border-l border-border/50 text-[8px] text-muted-foreground pl-0.5"
-                  style={{ left: i * pps }}
-                >
-                  {i}s
-                </div>
-              ))}
-            </div>
+            <TimelineRuler duration={totalDuration} pps={pps} onSeek={setPlayhead} />
 
             {/* Playhead */}
-            <div
-              className="absolute top-0 bottom-0 w-px bg-violet-500 z-20 pointer-events-none"
-              style={{ left: playhead * pps }}
-            >
-              <div className="w-2 h-2 -ml-1 rounded-full bg-violet-500" />
-            </div>
+            <TimelinePlayhead time={playhead} pps={pps} />
 
             {/* Video track */}
-            <TrackRow icon={<Film className="w-3 h-3" />} label="Video">
+            <TrackLane icon={<Film className="w-3 h-3" />} label="Video">
               {clips.map((clip, i) => (
-                <div
+                <TimelineClipBlock
                   key={clip.id}
-                  className={`absolute top-1 bottom-1 rounded border-2 overflow-hidden cursor-pointer flex items-center px-1 text-[10px] ${
-                    selectedClipId === clip.id
-                      ? "border-violet-500 bg-violet-500/20"
-                      : "border-border bg-muted hover:border-violet-400"
-                  }`}
-                  style={{ left: clipStarts[i] * pps + 1, width: clipPlayedDuration(clip) * pps - 2 }}
-                  onClick={() => {
+                  start={clipStarts[i]}
+                  duration={clipPlayedDuration(clip)}
+                  pps={pps}
+                  selected={selectedClipId === clip.id}
+                  toneClass="border-border bg-muted hover:border-violet-400"
+                  transitionBadge={!!clip.transition && i < clips.length - 1}
+                  onSelect={() => {
                     setSelectedClipId(clip.id);
                     setSelectedOverlayId(null);
                     setSelectedAudioId(null);
                   }}
                 >
                   <span className="truncate">{clip.name}</span>
-                  {clip.transition && i < clips.length - 1 && (
-                    <span className="absolute right-0 top-0 bottom-0 w-2 bg-gradient-to-l from-violet-500/60" />
-                  )}
-                </div>
+                </TimelineClipBlock>
               ))}
-            </TrackRow>
+            </TrackLane>
 
             {/* Overlay track */}
-            <TrackRow icon={<Layers className="w-3 h-3" />} label="Overlays">
+            <TrackLane icon={<Layers className="w-3 h-3" />} label="Overlays">
               {overlays.map((ov) => (
-                <div
+                <TimelineClipBlock
                   key={ov.id}
-                  className={`absolute top-1 bottom-1 rounded border-2 overflow-hidden cursor-pointer flex items-center px-1 text-[10px] ${
-                    selectedOverlayId === ov.id
-                      ? "border-violet-500 bg-violet-500/20"
-                      : "border-border bg-sky-500/10 hover:border-sky-400"
-                  }`}
-                  style={{ left: ov.start * pps + 1, width: Math.max(20, (ov.end - ov.start) * pps - 2) }}
-                  onClick={() => {
+                  start={ov.start}
+                  duration={ov.end - ov.start}
+                  pps={pps}
+                  selected={selectedOverlayId === ov.id}
+                  toneClass="border-border bg-sky-500/10 hover:border-sky-400"
+                  onSelect={() => {
                     setSelectedOverlayId(ov.id);
                     setSelectedClipId(null);
                     setSelectedAudioId(null);
@@ -1133,39 +1113,35 @@ export function VideoEditor({
                     <ImagePlus className="w-2.5 h-2.5 mr-1 shrink-0" />
                   )}
                   <span className="truncate">{ov.kind === "text" ? ov.text : "Image"}</span>
-                </div>
+                </TimelineClipBlock>
               ))}
-            </TrackRow>
+            </TrackLane>
 
             {/* Audio track */}
-            <TrackRow icon={<Music className="w-3 h-3" />} label="Audio">
-              {audioTracks.map((a) => {
-                const dur = Math.max(0.1, a.trimEnd - a.trimStart);
-                return (
-                  <div
-                    key={a.id}
-                    className={`absolute top-1 bottom-1 rounded border-2 overflow-hidden cursor-pointer flex items-center px-1 text-[10px] ${
-                      selectedAudioId === a.id
-                        ? "border-violet-500 bg-violet-500/20"
-                        : "border-border bg-emerald-500/10 hover:border-emerald-400"
-                    }`}
-                    style={{ left: a.start * pps + 1, width: Math.max(20, dur * pps - 2) }}
-                    onClick={() => {
-                      setSelectedAudioId(a.id);
-                      setSelectedClipId(null);
-                      setSelectedOverlayId(null);
-                    }}
-                  >
-                    {a.kind === "voiceover" ? (
-                      <Mic className="w-2.5 h-2.5 mr-1 shrink-0" />
-                    ) : (
-                      <Music className="w-2.5 h-2.5 mr-1 shrink-0" />
-                    )}
-                    <span className="truncate">{a.label}</span>
-                  </div>
-                );
-              })}
-            </TrackRow>
+            <TrackLane icon={<Music className="w-3 h-3" />} label="Audio">
+              {audioTracks.map((a) => (
+                <TimelineClipBlock
+                  key={a.id}
+                  start={a.start}
+                  duration={Math.max(0.1, a.trimEnd - a.trimStart)}
+                  pps={pps}
+                  selected={selectedAudioId === a.id}
+                  toneClass="border-border bg-emerald-500/10 hover:border-emerald-400"
+                  onSelect={() => {
+                    setSelectedAudioId(a.id);
+                    setSelectedClipId(null);
+                    setSelectedOverlayId(null);
+                  }}
+                >
+                  {a.kind === "voiceover" ? (
+                    <Mic className="w-2.5 h-2.5 mr-1 shrink-0" />
+                  ) : (
+                    <Music className="w-2.5 h-2.5 mr-1 shrink-0" />
+                  )}
+                  <span className="truncate">{a.label}</span>
+                </TimelineClipBlock>
+              ))}
+            </TrackLane>
           </div>
         </ScrollArea>
       </div>
@@ -1291,26 +1267,8 @@ function OverlayImageNode({
 }
 
 // ── Track row wrapper ────────────────────────────────────────────────────────
-
-function TrackRow({
-  icon,
-  label,
-  children,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="relative h-12 border-b">
-      <div className="absolute left-0 top-0 bottom-0 z-10 w-16 bg-background/90 border-r flex items-center gap-1 px-2 text-[10px] text-muted-foreground">
-        {icon}
-        {label}
-      </div>
-      <div className="absolute left-16 right-0 top-0 bottom-0">{children}</div>
-    </div>
-  );
-}
+// (Extracted to ./editor/TrackLane — TrackLane, TimelineRuler, TimelinePlayhead,
+// TimelineClipBlock.)
 
 // ── Add menus ─────────────────────────────────────────────────────────────────
 

@@ -177,6 +177,7 @@ import { registerAgentProvenanceHandlers } from "./handlers/agent_provenance_han
 import { registerLibraryHandlers } from "./handlers/library_handlers";
 import { registerImageStudioHandlers } from "./handlers/image_studio_handlers";
 import { registerVideoStudioHandlers } from "./handlers/video_studio_handlers";
+import { registerStudioJobsHandlers } from "./handlers/studio_jobs_handlers";
 import { registerMarketplaceBrowseHandlers } from "./handlers/marketplace_browse_handlers";
 import { registerCreatorDashboardHandlers } from "./handlers/creator_dashboard_handlers";
 import { registerAgentMarketplaceHandlers } from "./handlers/agent_marketplace_handlers";
@@ -578,6 +579,9 @@ export function registerIpcHandlers() {
 
   // Video Studio — AI video generation across multiple providers
   registerVideoStudioHandlers();
+
+  // Studio Jobs — async queue for long-running video/audio work
+  registerStudioJobsHandlers();
 
   // Marketplace Browse — Public discovery, search, and install from JoyMarketplace
   registerMarketplaceBrowseHandlers();

@@ -6,6 +6,7 @@ import { UnifiedModelPicker } from "@/components/studio/UnifiedModelPicker";
 import { ProviderCarousel } from "@/components/studio/ProviderCarousel";
 import { PublishContextMenu } from "@/components/studio/PublishContextMenu";
 import { VideoEditor } from "@/components/video-studio/VideoEditor";
+import { useStudioJobs } from "@/hooks/useStudioJobs";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -424,10 +425,12 @@ function VideoPlayer({
 function GeneratePanel({
   providers,
   isGenerating,
+  generationProgress = 0,
   onGenerate,
 }: {
   providers: VideoStudioProvider[];
   isGenerating: boolean;
+  generationProgress?: number;
   onGenerate: (params: Record<string, unknown>) => void;
 }) {
   const [provider, setProvider] = useState(
@@ -909,7 +912,9 @@ function GeneratePanel({
         {isGenerating ? (
           <>
             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            Generating video…
+            {generationProgress > 0
+              ? `Generating… ${Math.round(generationProgress * 100)}%`
+              : "Generating video…"}
           </>
         ) : (
           <>
@@ -1239,22 +1244,48 @@ export function VideoStudioTab() {
     ? videos.find((v) => v.id === selectedVideoId)
     : undefined;
 
-  // ── Mutations ────────────────────────────────────────────────────────────
+  // ── Async generation via the studio job queue ──────────────────────────────
+  const { events: jobEvents, generateVideo } = useStudioJobs();
+  const [pendingJobId, setPendingJobId] = useState<string | null>(null);
+  const pendingJob = pendingJobId ? jobEvents.get(pendingJobId) : undefined;
+  const isGenerating =
+    pendingJob?.status === "queued" || pendingJob?.status === "running";
+  const generationProgress = pendingJob?.progress ?? 0;
 
-  const generateMutation = useMutation({
-    mutationFn: (params: Record<string, unknown>) =>
-      IpcClient.getInstance().generateVideo(
-        params as Parameters<typeof IpcClient.prototype.generateVideo>[0],
-      ),
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["video-studio", "list"] });
-      setSelectedVideoId(result.id);
+  const handleGenerate = useCallback(
+    async (params: Record<string, unknown>) => {
+      try {
+        const jobId = await generateVideo(
+          params as Parameters<IpcClient["generateVideoAsync"]>[0],
+        );
+        setPendingJobId(jobId);
+      } catch (err) {
+        toast.error(
+          `Generation failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+        );
+      }
+    },
+    [generateVideo],
+  );
+
+  // React to completion of the tracked generation job.
+  useEffect(() => {
+    if (!pendingJob) return;
+    if (pendingJob.status === "succeeded") {
+      const newId = pendingJob.result?.videoId;
+      if (typeof newId === "number") setSelectedVideoId(newId);
       toast.success("Video generated successfully");
-    },
-    onError: (err: Error) => {
-      toast.error(`Generation failed: ${err.message}`);
-    },
-  });
+      setPendingJobId(null);
+    } else if (pendingJob.status === "failed") {
+      toast.error(`Generation failed: ${pendingJob.error ?? "Unknown error"}`);
+      setPendingJobId(null);
+    } else if (pendingJob.status === "canceled") {
+      toast.info("Generation canceled");
+      setPendingJobId(null);
+    }
+  }, [pendingJob]);
+
+  // ── Mutations ────────────────────────────────────────────────────────────
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => IpcClient.getInstance().deleteVideo(id),
@@ -1318,8 +1349,9 @@ export function VideoStudioTab() {
       {/* Generate Panel */}
       <GeneratePanel
         providers={providers}
-        isGenerating={generateMutation.isPending}
-        onGenerate={(params) => generateMutation.mutate(params)}
+        isGenerating={isGenerating}
+        generationProgress={generationProgress}
+        onGenerate={handleGenerate}
       />
 
       {/* Gallery */}

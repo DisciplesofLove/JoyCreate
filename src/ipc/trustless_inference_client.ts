@@ -132,25 +132,27 @@ export class TrustlessInferenceClient {
       onError?: (error: string) => void;
     }
   ): Promise<{ streamId: string; cancel: () => void }> {
-    const { streamId } = (await this.ipcRenderer.invoke(
-      "trustless:start-stream",
-      params
-    )) as { streamId: string };
+    // Generate the streamId in the renderer so listeners can be attached BEFORE
+    // the main process starts emitting — otherwise early token/done events fired
+    // before `invoke` resolves would be lost, leaving the UI stuck "thinking".
+    const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-    const onToken = (_evt: unknown, payload: unknown) => {
+    // NOTE: the preload `on` wrapper invokes listeners as `listener(...args)`
+    // WITHOUT the IpcRendererEvent, so the payload is the FIRST argument here.
+    const onToken = (payload: unknown) => {
       const p = payload as { streamId?: string; content?: string };
       if (p?.streamId === streamId && typeof p.content === "string") {
         callbacks.onToken(p.content);
       }
     };
-    const onDone = (_evt: unknown, payload: unknown) => {
+    const onDone = (payload: unknown) => {
       const p = payload as { streamId?: string; recordId?: string; cid?: string };
       if (p?.streamId === streamId) {
         cleanup();
         callbacks.onDone?.({ recordId: p.recordId, cid: p.cid });
       }
     };
-    const onError = (_evt: unknown, payload: unknown) => {
+    const onError = (payload: unknown) => {
       const p = payload as { streamId?: string; error?: string };
       if (p?.streamId === streamId) {
         cleanup();
@@ -158,15 +160,92 @@ export class TrustlessInferenceClient {
       }
     };
 
+    const cleanup = () => {
+      this.ipcRenderer.removeListener("trustless:stream-token", onToken);
+      this.ipcRenderer.removeListener("trustless:stream-done", onDone);
+      this.ipcRenderer.removeListener("trustless:stream-error", onError);
+    };
+
     this.ipcRenderer.on("trustless:stream-token", onToken);
     this.ipcRenderer.on("trustless:stream-done", onDone);
     this.ipcRenderer.on("trustless:stream-error", onError);
+
+    try {
+      await this.ipcRenderer.invoke("trustless:start-stream", { ...params, streamId });
+    } catch (err) {
+      cleanup();
+      callbacks.onError?.(err instanceof Error ? err.message : String(err));
+    }
+
+    return { streamId, cancel: cleanup };
+  }
+
+  /**
+   * Stream a conversation turn (ChatGPT-style). Persists the user + assistant
+   * messages server-side while emitting tokens live. Mirrors {@link sendMessage}
+   * but streams instead of blocking until the full response is ready.
+   */
+  async streamMessage(
+    params: {
+      conversationId: string;
+      message: string;
+      config?: {
+        temperature?: number;
+        maxTokens?: number;
+        topP?: number;
+        topK?: number;
+        seed?: number;
+        repeatPenalty?: number;
+        numCtx?: number;
+      };
+    },
+    callbacks: {
+      onToken: (content: string) => void;
+      onDone?: (data: { recordId?: string; cid?: string }) => void;
+      onError?: (error: string) => void;
+    }
+  ): Promise<{ streamId: string; cancel: () => void }> {
+    // Renderer-generated id so listeners attach BEFORE the main process emits.
+    const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    // Payload is the FIRST argument (preload strips the IpcRendererEvent).
+    const onToken = (payload: unknown) => {
+      const p = payload as { streamId?: string; content?: string };
+      if (p?.streamId === streamId && typeof p.content === "string") {
+        callbacks.onToken(p.content);
+      }
+    };
+    const onDone = (payload: unknown) => {
+      const p = payload as { streamId?: string; recordId?: string; cid?: string };
+      if (p?.streamId === streamId) {
+        cleanup();
+        callbacks.onDone?.({ recordId: p.recordId, cid: p.cid });
+      }
+    };
+    const onError = (payload: unknown) => {
+      const p = payload as { streamId?: string; error?: string };
+      if (p?.streamId === streamId) {
+        cleanup();
+        callbacks.onError?.(p.error ?? "Stream failed");
+      }
+    };
 
     const cleanup = () => {
       this.ipcRenderer.removeListener("trustless:stream-token", onToken);
       this.ipcRenderer.removeListener("trustless:stream-done", onDone);
       this.ipcRenderer.removeListener("trustless:stream-error", onError);
     };
+
+    this.ipcRenderer.on("trustless:stream-token", onToken);
+    this.ipcRenderer.on("trustless:stream-done", onDone);
+    this.ipcRenderer.on("trustless:stream-error", onError);
+
+    try {
+      await this.ipcRenderer.invoke("trustless:stream-message", { ...params, streamId });
+    } catch (err) {
+      cleanup();
+      callbacks.onError?.(err instanceof Error ? err.message : String(err));
+    }
 
     return { streamId, cancel: cleanup };
   }

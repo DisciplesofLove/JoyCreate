@@ -516,6 +516,14 @@ export class SmartRouter extends EventEmitter {
       type: "cloud",
       models: [
         {
+          id: "claude-opus-4-8",
+          name: "Claude Opus 4.8",
+          contextLength: 200000,
+          capabilities: { reasoning: 99, coding: 99, creativity: 98, math: 97, multilingual: 97, factuality: 99, instruction_following: 99 },
+          performance: { avgLatencyMs: 2500, tokensPerSecond: 60, reliability: 99, uptime: 99 },
+          pricing: { inputPer1kTokens: 1.5, outputPer1kTokens: 7.5 },
+        },
+        {
           id: "claude-opus-4-7",
           name: "Claude Opus 4.7",
           contextLength: 200000,

@@ -1,0 +1,45 @@
+[
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "DropCreated",
+    "inputs": [
+      { "indexed": true, "name": "dropId", "type": "uint256" },
+      { "indexed": true, "name": "creator", "type": "address" },
+      { "indexed": true, "name": "storeId", "type": "uint256" },
+      { "indexed": false, "name": "assetLeaf", "type": "bytes32" },
+      { "indexed": false, "name": "price", "type": "uint256" },
+      { "indexed": false, "name": "maxSupply", "type": "uint256" },
+      { "indexed": false, "name": "requiresProof", "type": "bool" }
+    ]
+  },
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "DropActivated",
+    "inputs": [
+      { "indexed": true, "name": "dropId", "type": "uint256" },
+      { "indexed": false, "name": "active", "type": "bool" }
+    ]
+  },
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "ProofGranted",
+    "inputs": [
+      { "indexed": true, "name": "dropId", "type": "uint256" },
+      { "indexed": true, "name": "account", "type": "address" }
+    ]
+  },
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "Minted",
+    "inputs": [
+      { "indexed": true, "name": "dropId", "type": "uint256" },
+      { "indexed": true, "name": "tokenId", "type": "uint256" },
+      { "indexed": true, "name": "to", "type": "address" },
+      { "indexed": false, "name": "price", "type": "uint256" }
+    ]
+  }
+]

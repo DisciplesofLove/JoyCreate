@@ -22,7 +22,7 @@ export function DocumentAiSettings() {
   const { data: cloudModelsByProvider = {} } = useLanguageModelsByProviders();
 
   const currentValue = useMemo(() => {
-    const dm = (settings as Record<string, unknown>).documentAiModel as
+    const dm = (settings as Record<string, unknown> | null)?.documentAiModel as
       | { provider: string; name: string }
       | undefined;
     return dm ? `${dm.provider}::${dm.name}` : "__default__";

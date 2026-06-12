@@ -1569,7 +1569,8 @@ function SpawnAgentDialog({
                 <SelectItem value="gpt-5.1">GPT 5.1</SelectItem>
                 <SelectItem value="gpt-5-mini">GPT 5 Mini</SelectItem>
                 <SelectItem value="gpt-5.1-codex">GPT 5.1 Codex</SelectItem>
-                <SelectItem value="claude-opus-4-7">Claude Opus 4.7 (Latest)</SelectItem>
+                <SelectItem value="claude-opus-4-8">Claude Opus 4.8 (Latest)</SelectItem>
+                <SelectItem value="claude-opus-4-7">Claude Opus 4.7</SelectItem>
                 <SelectItem value="claude-sonnet-4-6">Claude Sonnet 4.6 (Latest)</SelectItem>
                 <SelectItem value="claude-opus-4-6">Claude Opus 4.6</SelectItem>
                 <SelectItem value="claude-sonnet-4-5">Claude Sonnet 4</SelectItem>

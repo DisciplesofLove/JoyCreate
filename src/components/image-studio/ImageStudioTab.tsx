@@ -52,6 +52,7 @@ import {
   Sparkles,
   Copy,
   ZoomIn,
+  Maximize2,
   ArrowUpCircle,
   Shuffle,
   Search,
@@ -602,6 +603,7 @@ function Gallery({
   selectedId,
   onSelect,
   onOpenEditor,
+  onExpand,
   onDelete,
   onSaveToDisk,
   onOpenInFolder,
@@ -619,6 +621,7 @@ function Gallery({
   selectedId: number | null;
   onSelect: (id: number) => void;
   onOpenEditor: (id: number) => void;
+  onExpand: (id: number) => void;
   onDelete: (id: number) => void;
   onSaveToDisk: (id: number) => void;
   onOpenInFolder: (id: number) => void;
@@ -701,6 +704,16 @@ function Gallery({
               >
                 <ImageThumbnail imageId={img.id} />
 
+                {/* Hover expand button — view the image full size */}
+                <button
+                  type="button"
+                  title="Expand to full size"
+                  className="absolute top-1.5 right-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-md bg-background/80 text-foreground opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100 hover:bg-background"
+                  onClick={(e) => { e.stopPropagation(); onExpand(img.id); }}
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                </button>
+
                 <div className="p-2 bg-background/95 border-t">
                   <p className="text-xs line-clamp-2 text-foreground leading-tight">
                     {img.prompt}
@@ -736,6 +749,10 @@ function Gallery({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="text-xs">
+                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onExpand(img.id); }}>
+                          <Maximize2 className="w-3 h-3 mr-2" />
+                          Expand / View Full Size
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onOpenEditor(img.id); }}>
                           <Paintbrush className="w-3 h-3 mr-2" />
                           Open in Editor
@@ -832,6 +849,116 @@ function ImageThumbnail({ imageId }: { imageId: number }) {
       className="aspect-square w-full object-cover"
       draggable={false}
     />
+  );
+}
+
+function ImageLightbox({
+  imageId,
+  onClose,
+  onEdit,
+}: {
+  imageId: number;
+  onClose: () => void;
+  onEdit: () => void;
+}) {
+  const [zoom, setZoom] = useState(1);
+
+  const { data: src, isLoading } = useQuery({
+    queryKey: ["image-studio", "thumb", imageId],
+    queryFn: () => IpcClient.getInstance().readImageAsBase64(imageId),
+    staleTime: Infinity,
+  });
+
+  // Close on Escape, zoom with +/-
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "+" || e.key === "=") setZoom((z) => Math.min(z + 0.25, 5));
+      else if (e.key === "-") setZoom((z) => Math.max(z - 0.25, 0.25));
+      else if (e.key === "0") setZoom(1);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex flex-col bg-black/90"
+      onClick={onClose}
+    >
+      {/* Toolbar */}
+      <div
+        className="flex items-center justify-end gap-1 px-3 py-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 text-white hover:bg-white/10"
+          onClick={() => setZoom((z) => Math.max(z - 0.25, 0.25))}
+          title="Zoom out (-)"
+        >
+          <ZoomIn className="w-4 h-4 rotate-180" />
+        </Button>
+        <span className="text-xs text-white/80 w-12 text-center tabular-nums">
+          {Math.round(zoom * 100)}%
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 text-white hover:bg-white/10"
+          onClick={() => setZoom((z) => Math.min(z + 0.25, 5))}
+          title="Zoom in (+)"
+        >
+          <ZoomIn className="w-4 h-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 text-white hover:bg-white/10"
+          onClick={() => setZoom(1)}
+          title="Reset zoom (0)"
+        >
+          Reset
+        </Button>
+        <div className="w-px h-5 bg-white/20 mx-1" />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 text-white hover:bg-white/10"
+          onClick={onEdit}
+          title="Open in editor to add text, shapes and more"
+        >
+          <Paintbrush className="w-4 h-4 mr-1.5" />
+          Edit
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0 text-white hover:bg-white/10"
+          onClick={onClose}
+          title="Close (Esc)"
+        >
+          <X className="w-4 h-4" />
+        </Button>
+      </div>
+
+      {/* Image */}
+      <div className="flex-1 overflow-auto flex items-center justify-center p-4">
+        {isLoading ? (
+          <Loader2 className="w-8 h-8 animate-spin text-white/60" />
+        ) : (
+          <img
+            src={src}
+            alt=""
+            draggable={false}
+            style={{ transform: `scale(${zoom})` }}
+            className="max-w-full max-h-full object-contain transition-transform origin-center select-none"
+            onClick={(e) => e.stopPropagation()}
+          />
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -935,6 +1062,7 @@ export function ImageStudioTab() {
   const queryClient = useQueryClient();
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
   const [editorImageId, setEditorImageId] = useState<number | null>(null);
+  const [previewImageId, setPreviewImageId] = useState<number | null>(null);
   const [reusePrompt, setReusePrompt] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
   const [providerFilter, setProviderFilter] = useState("all");
@@ -1065,6 +1193,7 @@ export function ImageStudioTab() {
           selectedId={selectedImageId}
           onSelect={setSelectedImageId}
           onOpenEditor={setEditorImageId}
+          onExpand={setPreviewImageId}
           onDelete={(id) => deleteMutation.mutate(id)}
           onSaveToDisk={handleSaveToDisk}
           onOpenInFolder={handleOpenInFolder}
@@ -1097,6 +1226,19 @@ export function ImageStudioTab() {
         <ImageEditor
           imageId={editorImageId}
           onClose={() => setEditorImageId(null)}
+        />
+      )}
+
+      {/* Fullscreen preview — expand a generated image to view it at full size */}
+      {previewImageId !== null && (
+        <ImageLightbox
+          imageId={previewImageId}
+          onClose={() => setPreviewImageId(null)}
+          onEdit={() => {
+            const id = previewImageId;
+            setPreviewImageId(null);
+            setEditorImageId(id);
+          }}
         />
       )}
     </div>

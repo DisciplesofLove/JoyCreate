@@ -29,7 +29,10 @@ import { jcnKeyManager } from "@/lib/jcn_key_manager";
 import { GLUE_RPC, isGlueReady, type GlueChainId } from "@/config/glue";
 import { usdcToAtomic } from "@/config/x402";
 import { createDrop, registerStore, resolveStoreBySlug } from "@/lib/onchain/glue_client";
+import { ensureStoreIdentity } from "@/lib/onchain/agent_card";
 import { buildDropBlueprint, type InterfaceBlueprint } from "@/lib/onchain/interface_broker";
+import { normalizeLicense } from "@/lib/onchain/license";
+import { settleRegistrationFee, type RegistrationFeeResult } from "@/lib/x402/registration_fee";
 import { DEFAULT_MARKETPLACE_CHAIN } from "@/lib/onchain/chain_registry";
 import { readSettings } from "@/main/settings";
 import { publishAndForget, type PublishInput, type PublishOutcome } from "./publish_orchestrator";
@@ -66,6 +69,13 @@ export interface PublishAndMonetizeInput {
   assetLeafSource?: string | null;
   /** ERC-8004 agent id recorded when auto-registering a store. Default "0". */
   agentId?: string;
+  /**
+   * When true, charge the x402 store-registration fee (LR6 / G4) before
+   * auto-registering a new store. On a fee-ready chain a failed payment aborts
+   * the registration (no free store); on a chain without the fee configured the
+   * registration proceeds and `registrationFee.charged` is false.
+   */
+  chargeRegistrationFee?: boolean;
   /** When true, pin/estimate only — no on-chain writes. */
   dryRun?: boolean;
 }
@@ -81,6 +91,12 @@ export interface PublishAndMonetizeOutcome {
   storeId?: string;
   /** True when the store was auto-registered during this publish. */
   storeRegistered?: boolean;
+  /** Store-registration fee outcome (LR6), present only when a store was registered. */
+  registrationFee?: RegistrationFeeResult;
+  /** ERC-8004 agent id bound to the store ("0" when no identity was minted). */
+  agentId?: string;
+  /** Agent-card IPFS CID minted with the identity (the runtime manifest). */
+  agentCardCid?: string;
   /** EditionController drop id (the x402-purchasable edition). */
   dropId?: string;
   dropTxHash?: string;
@@ -174,6 +190,9 @@ export async function publishAndMonetize(
 
   let storeId: string | undefined;
   let storeRegistered = false;
+  let registrationFee: RegistrationFeeResult | undefined;
+  let agentId: string | undefined;
+  let agentCardCid: string | undefined;
   let dropId: string | undefined;
   let dropTxHash: string | undefined;
   let blueprint: InterfaceBlueprint | undefined;
@@ -195,10 +214,40 @@ export async function publishAndMonetize(
         // Resolve — or auto-register — the creator's storefront.
         storeId = await resolveStoreBySlug(chain, storeSlug);
         if (!storeId || storeId === "0") {
+          // Bind an ERC-8004 identity (+ pinned agent-card runtime manifest)
+          // to the store. An explicit agentId wins; otherwise mint/reuse one.
+          agentId = input.agentId && input.agentId !== "0" ? input.agentId : undefined;
+          if (!agentId) {
+            try {
+              const identity = await ensureStoreIdentity(wallet, {
+                chain,
+                slug: storeSlug,
+                type: "store",
+              });
+              agentId = identity.agentId;
+              agentCardCid = identity.agentCardCid;
+              logger.info(
+                `store identity ${identity.agentId} (${identity.minted ? "minted" : "reused"})`,
+              );
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              logger.warn(`identity mint failed, registering store without identity: ${message}`);
+              errors.push(`identity: ${message}`);
+            }
+          }
+          // LR6 / G4: charge the store-registration fee before registering.
+          // A failed payment on a fee-ready chain aborts the registration so
+          // the store is never created for free.
+          if (input.chargeRegistrationFee) {
+            registrationFee = await settleRegistrationFee(wallet, {
+              chain,
+              slug: storeSlug,
+            });
+          }
           const reg = await registerStore(wallet, {
             chain,
             slug: storeSlug,
-            agentId: input.agentId ?? "0",
+            agentId: agentId ?? "0",
           });
           storeId = reg.storeId;
           storeRegistered = true;
@@ -223,7 +272,10 @@ export async function publishAndMonetize(
 
         // The ERC-1144 blueprint bridges discovery to the x402 payment rail.
         try {
-          blueprint = await buildDropBlueprint(chain, dropId);
+          const license = normalizeLicense(
+            input.publish.licenseTerms ?? input.publish.license,
+          );
+          blueprint = await buildDropBlueprint(chain, dropId, { license });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logger.warn("blueprint build failed:", message);
@@ -245,6 +297,9 @@ export async function publishAndMonetize(
     chain: chain ?? null,
     storeId,
     storeRegistered,
+    registrationFee,
+    agentId,
+    agentCardCid,
     dropId,
     dropTxHash,
     blueprint,

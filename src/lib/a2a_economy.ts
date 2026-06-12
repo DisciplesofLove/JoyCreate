@@ -233,6 +233,23 @@ export async function setPrincipalBudget(
   return getPrincipal(principal.id);
 }
 
+/**
+ * Reconcile a principal's payout wallet (e.g. to mirror an ERC-8004 agent's
+ * on-chain controller address into its A2A identity). No-op when unchanged.
+ */
+export async function updatePrincipalPayoutWallet(
+  principalId: string,
+  payoutWallet: string,
+): Promise<AgentPrincipalRow> {
+  const principal = await getPrincipal(principalId);
+  if (principal.payoutWallet === payoutWallet) return principal;
+  await db
+    .update(agentPrincipals)
+    .set({ payoutWallet, updatedAt: now() })
+    .where(eq(agentPrincipals.id, principalId));
+  return getPrincipal(principal.id);
+}
+
 /** Internal: roll over daily-spent counter if the day has changed. */
 async function rolloverDailySpentIfNeeded(principal: AgentPrincipalRow): Promise<AgentPrincipalRow> {
   if (isSameUtcDay(principal.spentTodayResetAt, new Date())) return principal;

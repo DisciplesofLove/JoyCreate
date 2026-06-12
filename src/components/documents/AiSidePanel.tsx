@@ -130,9 +130,10 @@ export function AiSidePanel({
     const provider = parts[0];
     const model = parts.slice(1).join("::");
 
-    // Resolve provider/model from settings if using default
-    const settingsModel = (settings as Record<string, unknown>).documentAiModel ??
-      (settings as Record<string, unknown>).selectedModel as { provider?: string; name?: string } | undefined;
+    // Resolve provider/model from settings if using default. `settings` can be
+    // null while the user-settings atom is still loading, so guard the reads.
+    const settingsModel = ((settings as Record<string, unknown> | null)?.documentAiModel ??
+      (settings as Record<string, unknown> | null)?.selectedModel) as { provider?: string; name?: string } | undefined;
 
     const cleanup = libreOfficeClient.aiAssist(
       requestId,

@@ -27,7 +27,8 @@ import {
 import { createPaymentRequirements } from "@/lib/x402/server";
 import type { PaymentRequirements } from "@/lib/x402/types";
 import { isGlueReady } from "@/config/glue";
-import { getDrop, getStore, type DropRecord, type StoreRecord } from "@/lib/onchain/glue_client";
+import type { DropRecord, StoreRecord } from "@/lib/onchain/glue_client";
+import { getDropCached, getStoreCached } from "@/lib/onchain/subgraph_discovery";
 import {
   getAgent,
   getReputationScore,
@@ -35,6 +36,8 @@ import {
   type AgentRecord,
   type ReputationScore,
 } from "@/lib/onchain/erc8004_client";
+import { agentDomainToCardCid } from "@/lib/onchain/agent_card";
+import { hashLicenseTerms, type LicenseTerms } from "@/lib/onchain/license";
 import { storeName, assetName, resolveAddress } from "@/lib/onchain/ens_hierarchical";
 
 const logger = log.scope("interface_broker");
@@ -58,6 +61,34 @@ export interface BlueprintReputation {
   count: string;
   sum: string;
   average: number;
+}
+
+/**
+ * Runtime manifest pointer derived from the identity's `agentDomain`. Present
+ * only when the domain is an IPFS agent-card CID (not a legacy plain domain).
+ * A consumer fetches the card to obtain modelConfig / systemPrompt / toolsSchema
+ * / skillCID for local execution.
+ */
+export interface BlueprintRuntime {
+  agentCardCid: string;
+  agentCardUri: string;
+}
+
+/**
+ * License node (LR2). Mirrors the structured `LicenseTerms` pinned in the drop
+ * metadata so a consumer can check usage rights before purchase / runtime.
+ */
+export interface BlueprintLicense {
+  id: string;
+  spdx: string | null;
+  commercial: boolean;
+  derivative: boolean;
+  runtimeExecution: boolean;
+  expiry: string | null;
+  seats: number | null;
+  termsUri: string | null;
+  /** keccak256 of the canonical terms, matching `metadata.licenseHash`. */
+  hash: string;
 }
 
 export interface BlueprintCapability {
@@ -90,6 +121,10 @@ export interface InterfaceBlueprint {
   resourceId: string;
   identity?: BlueprintIdentity;
   reputation?: BlueprintReputation;
+  /** Agent-card runtime manifest pointer, when the identity exposes one. */
+  runtime?: BlueprintRuntime;
+  /** Structured license terms (LR2), when the caller supplies them. */
+  license?: BlueprintLicense;
   store?: StoreRecord & { ensName?: string };
   capabilities: BlueprintCapability[];
   /** Contract addresses referenced by this blueprint. */
@@ -147,6 +182,29 @@ async function resolveReputation(
   }
 }
 
+/** Derive the runtime manifest pointer from a resolved identity, if any. */
+function resolveRuntime(identity?: BlueprintIdentity): BlueprintRuntime | undefined {
+  const cid = agentDomainToCardCid(identity?.agentDomain);
+  if (!cid) return undefined;
+  return { agentCardCid: cid, agentCardUri: `ipfs://${cid}` };
+}
+
+/** Project structured license terms onto a blueprint license node. */
+function resolveLicense(terms?: LicenseTerms): BlueprintLicense | undefined {
+  if (!terms) return undefined;
+  return {
+    id: terms.id,
+    spdx: terms.spdx,
+    commercial: terms.commercial,
+    derivative: terms.derivative,
+    runtimeExecution: terms.runtimeExecution,
+    expiry: terms.expiry,
+    seats: terms.seats,
+    termsUri: terms.termsUri,
+    hash: hashLicenseTerms(terms),
+  };
+}
+
 function buildMintCapability(
   chain: X402ChainId,
   drop: DropRecord,
@@ -179,15 +237,16 @@ function buildMintCapability(
 export async function buildDropBlueprint(
   chain: X402ChainId,
   dropId: string,
+  opts?: { license?: LicenseTerms },
 ): Promise<InterfaceBlueprint> {
-  const drop = await getDrop(chain, dropId);
+  const drop = await getDropCached(chain, dropId);
   let store: (StoreRecord & { ensName?: string }) | undefined;
   let identity: BlueprintIdentity | undefined;
   let reputation: BlueprintReputation | undefined;
 
   if (drop.storeId !== "0") {
     try {
-      const rec = await getStore(chain, drop.storeId);
+      const rec = await getStoreCached(chain, drop.storeId);
       const ensName = rec.slug ? storeName(rec.slug) : undefined;
       store = { ...rec, ensName };
       identity = await resolveIdentity(chain, rec.agentId, ensName);
@@ -204,6 +263,8 @@ export async function buildDropBlueprint(
     resourceId: dropId,
     identity,
     reputation,
+    runtime: resolveRuntime(identity),
+    license: resolveLicense(opts?.license),
     store,
     capabilities: [buildMintCapability(chain, drop)],
     contracts: {
@@ -223,7 +284,7 @@ export async function buildStoreBlueprint(
   chain: X402ChainId,
   storeId: string,
 ): Promise<InterfaceBlueprint> {
-  const rec = await getStore(chain, storeId);
+  const rec = await getStoreCached(chain, storeId);
   const ensName = rec.slug ? storeName(rec.slug) : undefined;
   const identity = await resolveIdentity(chain, rec.agentId, ensName);
   const reputation = await resolveReputation(chain, rec.agentId);
@@ -235,6 +296,7 @@ export async function buildStoreBlueprint(
     resourceId: storeId,
     identity,
     reputation,
+    runtime: resolveRuntime(identity),
     store: { ...rec, ensName },
     capabilities: [],
     contracts: {
@@ -263,6 +325,7 @@ export async function buildAgentBlueprint(
     resourceId: agentId,
     identity,
     reputation,
+    runtime: resolveRuntime(identity),
     capabilities: [],
     contracts: {
       revenueSplitter: getRevenueSplitterAddress(chain),

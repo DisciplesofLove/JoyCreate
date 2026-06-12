@@ -154,10 +154,14 @@ export function registerTrustlessInferenceHandlers(): void {
           numCtx?: number;
           stop?: string[];
         };
+        streamId?: string;
       }
     ): Promise<{ streamId: string }> => {
       const { provider, modelId, messages, systemPrompt, config } = params;
-      const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      // Prefer the renderer-provided id (its listeners are already bound to it);
+      // fall back to a generated one for older callers.
+      const streamId =
+        params.streamId ?? `stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
       // Run streaming in background, send tokens via events
       (async () => {
@@ -188,6 +192,67 @@ export function registerTrustlessInferenceHandlers(): void {
           }
         } catch (error) {
           logger.error("Stream error:", error);
+          event.sender.send("trustless:stream-error", {
+            streamId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
+
+      return { streamId };
+    }
+  );
+
+  // Streaming conversation message: streams assistant tokens AND persists the
+  // turn (mirrors `trustless:send-message`). Reuses the stable stream events.
+  ipcMain.handle(
+    "trustless:stream-message",
+    async (
+      event,
+      params: {
+        conversationId: string;
+        message: string;
+        config?: {
+          temperature?: number;
+          maxTokens?: number;
+          topP?: number;
+          topK?: number;
+          seed?: number;
+          repeatPenalty?: number;
+          numCtx?: number;
+          stop?: string[];
+        };
+        streamId?: string;
+      }
+    ): Promise<{ streamId: string }> => {
+      const { conversationId, message, config } = params;
+      const streamId =
+        params.streamId ?? `stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+      (async () => {
+        try {
+          const stream = trustlessInferenceService.streamMessage(
+            conversationId,
+            message,
+            config
+          );
+
+          for await (const chunk of stream) {
+            if (chunk.type === "token") {
+              event.sender.send("trustless:stream-token", {
+                streamId,
+                content: chunk.content,
+              });
+            } else if (chunk.type === "done") {
+              event.sender.send("trustless:stream-done", {
+                streamId,
+                recordId: chunk.recordId,
+                cid: chunk.cid,
+              });
+            }
+          }
+        } catch (error) {
+          logger.error("Stream message error:", error);
           event.sender.send("trustless:stream-error", {
             streamId,
             error: error instanceof Error ? error.message : String(error),

@@ -1,0 +1,17 @@
+{
+  "name": "joy-marketplace-subgraph",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Goldsky subgraph for JOY Marketplace ERC-8004 + Stylus glue contracts (LR6).",
+  "scripts": {
+    "codegen": "graph codegen",
+    "build": "graph build",
+    "deploy": "goldsky subgraph deploy joy-marketplace/0.1.0 --path .",
+    "create-local": "graph create --node http://localhost:8020/ joy-marketplace",
+    "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 joy-marketplace"
+  },
+  "dependencies": {
+    "@graphprotocol/graph-cli": "^0.97.0",
+    "@graphprotocol/graph-ts": "^0.38.0"
+  }
+}

@@ -16,6 +16,19 @@ import { eq } from "drizzle-orm";
 import { getUserDataPath } from "@/paths/paths";
 import { getOllamaApiUrl } from "@/ipc/handlers/local_model_ollama_handler";
 import { readSettings } from "@/main/settings";
+import { getTailscaleConfig } from "@/lib/tailscale_service";
+
+// SECURITY: when launching n8n in-process, default the listen address to
+// loopback. n8n's default bind is `::` (all interfaces); only fall back to
+// 0.0.0.0 when the user explicitly opted into exposing services over Tailscale.
+function n8nLocalBindHost(): string {
+  try {
+    const ts = getTailscaleConfig();
+    return ts.enabled && ts.exposeServices ? "0.0.0.0" : "127.0.0.1";
+  } catch {
+        return "127.0.0.1";
+  }
+}
 
 import type {
   N8nWorkflow,
@@ -280,6 +293,11 @@ export async function startN8n(): Promise<{ success: boolean; error?: string }> 
         N8N_PORT: "5678",
         N8N_PROTOCOL: "http",
         N8N_HOST: "localhost",
+        // SECURITY: n8n's default bind is `::` (all interfaces) regardless of
+        // N8N_HOST. N8N_LISTEN_ADDRESS is the env var that actually controls
+        // the listen socket. Default to loopback unless services are intentionally
+        // exposed.
+        N8N_LISTEN_ADDRESS: n8nLocalBindHost(),
         GENERIC_TIMEZONE: "UTC",
         N8N_SECURE_COOKIE: "false",
         // User data directory for n8n

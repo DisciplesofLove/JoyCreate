@@ -32,7 +32,7 @@ import {
   settlePayment,
   verifyPayment,
 } from "@/lib/x402/server";
-import { purchaseEdition } from "@/lib/x402/purchase_orchestrator";
+import { purchaseEdition, purchaseEditionWithMandate } from "@/lib/x402/purchase_orchestrator";
 import type { PaymentPayload, PaymentRequirements } from "@/lib/x402/types";
 
 const logger = log.scope("x402_handlers");
@@ -180,6 +180,26 @@ export function registerX402Handlers(): void {
       if (!params?.dropId) throw new Error("dropId is required");
       const wallet = await loadWallet(chain);
       return purchaseEdition(wallet, { chain, dropId: params.dropId });
+    },
+  );
+
+  // --- purchase as an agent under an on-chain AgentMandate (LR4) ---------
+  ipcMain.handle(
+    "x402:purchase-edition-with-mandate",
+    async (
+      _e,
+      params: { chain?: string; dropId: string; mandateId: string; feedbackScore?: number },
+    ) => {
+      const chain = resolveChain(params?.chain);
+      if (!params?.dropId) throw new Error("dropId is required");
+      if (params?.mandateId == null) throw new Error("mandateId is required");
+      const wallet = await loadWallet(chain);
+      return purchaseEditionWithMandate(wallet, {
+        chain,
+        dropId: params.dropId,
+        mandateId: params.mandateId,
+        feedbackScore: params.feedbackScore,
+      });
     },
   );
 }

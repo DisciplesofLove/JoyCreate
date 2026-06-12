@@ -7,17 +7,19 @@
  * and return descriptive errors instead.
  */
 
+import { envAddress } from "@/config/env_address";
+
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 export const DATA_PROVENANCE_CONTRACTS = {
   arbitrumSepolia: "0xe6c66de70de8cfba8129db78ff81d36d7de0ccb8",
-  arbitrumOne: ZERO_ADDRESS,
-} as const;
+  arbitrumOne: envAddress("VITE_DATA_PROVENANCE_ARB_ONE", ZERO_ADDRESS),
+};
 
 export const DATA_LEASE_CONTRACTS = {
   arbitrumSepolia: "0xa3aab9773b8f354aadc2489281aa232b03cacd71",
-  arbitrumOne: ZERO_ADDRESS,
-} as const;
+  arbitrumOne: envAddress("VITE_DATA_LEASE_ARB_ONE", ZERO_ADDRESS),
+};
 
 export type DataMarketChainId = keyof typeof DATA_PROVENANCE_CONTRACTS;
 

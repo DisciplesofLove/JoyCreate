@@ -19,6 +19,8 @@ import * as http from "http";
 import log from "electron-log";
 import { v4 as uuidv4 } from "uuid";
 import { EventEmitter } from "events";
+import { sanitizeBindHost } from "@/main_security";
+import { getTailscaleConfig } from "@/lib/tailscale_service";
 
 const logger = log.scope("n8n_integration");
 
@@ -724,8 +726,24 @@ async function startWebhookServer(): Promise<void> {
   });
   
   return new Promise((resolve, reject) => {
-    webhookServer!.listen(config.webhookPort, config.webhookHost, () => {
-      logger.info(`Webhook server started on ${config.webhookHost}:${config.webhookPort}`);
+    // Defense-in-depth: clamp the persisted webhookHost to loopback unless
+    // the user has explicitly opted into Tailscale LAN exposure. Without
+    // this guard, a corrupted settings file or compromised renderer could
+    // rebind the webhook server to 0.0.0.0 and expose every endpoint
+    // (including the `custom` handler that runs `new Function(...)` on the
+    // request body) to anyone on the network.
+    const tsConfig = getTailscaleConfig();
+    const allowExternal = tsConfig.enabled && tsConfig.exposeServices;
+    const safeHost = sanitizeBindHost(config.webhookHost, {
+      allowExternalExposure: allowExternal,
+    });
+    if (safeHost !== config.webhookHost) {
+      logger.warn(
+        `Clamped webhook bind host '${config.webhookHost}' → '${safeHost}' (Tailscale exposure ${allowExternal ? "enabled" : "disabled"})`,
+      );
+    }
+    webhookServer!.listen(config.webhookPort, safeHost, () => {
+      logger.info(`Webhook server started on ${safeHost}:${config.webhookPort}`);
       resolve();
     });
     

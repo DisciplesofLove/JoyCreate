@@ -224,6 +224,27 @@ export const ExperimentsSchema = z.object({
 });
 export type Experiments = z.infer<typeof ExperimentsSchema>;
 
+/**
+ * User customization for which sidebar navigation items are shown.
+ *
+ * Visibility rules (see `isSidebarItemVisible` in `sidebar-menu.ts`):
+ * - Stable items (no `stage`): visible unless their id is in `hiddenItems`.
+ * - Beta/dev items: hidden by default. Revealed either by the matching master
+ *   switch (`showBeta` / `showDev`) or by adding their id to `enabledItems`.
+ *   An explicit entry in `hiddenItems` always wins.
+ */
+export const SidebarPreferencesSchema = z.object({
+  /** Ids of items the user has explicitly hidden (applies to any stage). */
+  hiddenItems: z.array(z.string()).optional(),
+  /** Ids of individual beta/dev items the user has explicitly turned on. */
+  enabledItems: z.array(z.string()).optional(),
+  /** Master switch: reveal all `beta` items at once. */
+  showBeta: z.boolean().optional(),
+  /** Master switch: reveal all `dev` (in-development) items at once. */
+  showDev: z.boolean().optional(),
+});
+export type SidebarPreferences = z.infer<typeof SidebarPreferencesSchema>;
+
 export const JoyBudgetSchema = z.object({
   budgetResetAt: z.string(),
   maxBudget: z.number(),
@@ -297,6 +318,8 @@ export const UserSettingsSchema = z.object({
   /** @deprecated All features are now free. Kept for backward compat with existing settings files. */
   enableJoyPro: z.boolean().optional(),
   experiments: ExperimentsSchema.optional(),
+  /** Per-user customization of which sidebar navigation items are shown. */
+  sidebar: SidebarPreferencesSchema.optional(),
   lastShownReleaseNotesVersion: z.string().optional(),
   maxChatTurnsInContext: z.number().optional(),
   thinkingBudget: z.enum(["low", "medium", "high"]).optional(),

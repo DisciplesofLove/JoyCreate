@@ -326,6 +326,13 @@ async function waitForN8n(maxAttempts = 30): Promise<void> {
       if (response.ok) {
         logger.info("n8n is ready");
         await refreshN8nApiKey();
+        // Drain any workflows stranded in the local fallback while n8n was
+        // down so they become visible in the editor + executable by agents.
+        syncLocalWorkflowsToServer()
+          .then((r) => {
+            if (r.pushed > 0) logger.info(`Auto-synced ${r.pushed} local workflow(s) to n8n on startup`);
+          })
+          .catch((err) => logger.warn("Startup auto-sync of local workflows failed:", err));
         return;
       }
     } catch {
@@ -463,9 +470,31 @@ async function checkN8nAvailable(): Promise<boolean> {
 
 export async function createWorkflow(workflow: N8nWorkflow): Promise<N8nWorkflow | null> {
   // Try n8n API first
-  if (await checkN8nApiReady()) {
+  let apiReady = await checkN8nApiReady();
+
+  // If n8n isn't ready yet, try to start it once so the new workflow lands in
+  // n8n (visible in the editor + executable) instead of the invisible local
+  // fallback store. This is the root cause of "NLP says it made a workflow but
+  // nothing shows up in n8n" — the workflow was silently stranded locally.
+  if (!apiReady && !n8nProcess) {
+    logger.info("n8n not ready for workflow create — attempting to start it");
     try {
-      const payload = { settings: {}, ...workflow };
+      await startN8n();
+      apiReady = await checkN8nApiReady();
+    } catch (err) {
+      logger.warn("Auto-start of n8n during workflow create failed:", err);
+    }
+  }
+
+  if (apiReady) {
+    try {
+      // First drain anything that was stranded locally while n8n was down so
+      // those older NLP-generated workflows also become visible + executable.
+      await syncLocalWorkflowsToServer().catch(() => undefined);
+      // Strip read-only fields — n8n's public API rejects `active` (and assigns
+      // its own `id`) on create with "request/body/active is read-only".
+      const { id: _newId, active: _newActive, ...clean } = workflow as N8nWorkflow & { active?: boolean };
+      const payload = { settings: {}, ...clean };
       return await n8nApiRequest<N8nWorkflow>("POST", "/workflows", payload);
     } catch (err) {
       logger.warn("n8n API create failed, saving locally:", err);
@@ -482,8 +511,59 @@ export async function createWorkflow(workflow: N8nWorkflow): Promise<N8nWorkflow
     active: false,
   });
   await saveLocalWorkflows();
-  logger.info(`Workflow saved locally: ${id} — ${workflow.name}`);
+  logger.info(`Workflow saved locally (n8n unavailable): ${id} — ${workflow.name}`);
   return saved;
+}
+
+/**
+ * Push every local-only workflow to the live n8n instance, then drop it from
+ * the local fallback store. No-op when n8n is unreachable/unauthenticated or
+ * the store is empty. Used by the `n8n:sync-local-to-server` IPC handler and
+ * automatically when n8n becomes ready, so NLP-generated workflows saved
+ * locally while n8n was down show up + become executable without manual steps.
+ */
+export async function syncLocalWorkflowsToServer(): Promise<{ pushed: number; failed: number; errors: string[] }> {
+  if (!(await checkN8nApiReady())) {
+    return { pushed: 0, failed: 0, errors: [] };
+  }
+  const entries = Array.from(localWorkflows.entries());
+  if (entries.length === 0) {
+    return { pushed: 0, failed: 0, errors: [] };
+  }
+  let pushed = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  for (const [localId, entry] of entries) {
+    try {
+      // Strip local id + active flag — n8n assigns its own.
+      const { id: _id, active: _active, ...payload } = entry.workflow as N8nWorkflow & { active?: boolean };
+      const created = await n8nApiRequest<N8nWorkflow>("POST", "/workflows", { settings: {}, ...payload });
+      if (created?.id) {
+        localWorkflows.delete(localId);
+        pushed++;
+        if (entry.active) {
+          try {
+            await n8nApiRequest("POST", `/workflows/${created.id}/activate`);
+          } catch (actErr) {
+            logger.warn(`Failed to reactivate pushed workflow ${created.id}:`, actErr);
+          }
+        }
+      } else {
+        failed++;
+        errors.push(`${entry.workflow.name}: no id returned`);
+      }
+    } catch (err) {
+      failed++;
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${entry.workflow.name}: ${msg}`);
+      logger.warn(`Failed to push local workflow ${localId} to n8n:`, err);
+    }
+  }
+  if (pushed > 0) {
+    await saveLocalWorkflows();
+    logger.info(`Synced ${pushed} local workflow(s) to n8n (${failed} failed)`);
+  }
+  return { pushed, failed, errors };
 }
 
 export async function updateWorkflow(id: string, workflow: N8nWorkflow): Promise<N8nWorkflow | null> {
@@ -579,46 +659,136 @@ export async function deactivateWorkflow(id: string): Promise<N8nWorkflow | null
   return n8nApiRequest<N8nWorkflow>("POST", `/workflows/${id}/deactivate`);
 }
 
+function stubExecutionResult(): N8nExecutionResult {
+  return {
+    finished: true,
+    mode: "manual",
+    startedAt: new Date().toISOString(),
+    stoppedAt: new Date().toISOString(),
+    data: { resultData: { runData: {} } },
+    status: "success",
+  } as unknown as N8nExecutionResult;
+}
+
+/**
+ * Trigger a workflow by POSTing to its webhook. n8n's public REST API has NO
+ * manual-execute endpoint (POST /api/v1/workflows/{id}/execute returns 405),
+ * so the only API-key-free way to run a workflow programmatically is via a
+ * webhook trigger node. Returns null when the workflow has no webhook node.
+ */
+async function triggerWorkflowViaWebhook(
+  workflow: N8nWorkflow,
+  data?: Record<string, unknown>,
+): Promise<N8nExecutionResult | null> {
+  const webhookNode = workflow.nodes?.find((n) => n.type === "n8n-nodes-base.webhook");
+  if (!webhookNode) return null;
+
+  const pathParam = String(webhookNode.parameters?.path ?? "webhook");
+  const method = String(webhookNode.parameters?.httpMethod ?? "GET").toUpperCase();
+  const useGet = method === "GET";
+  // Active workflows expose /webhook/<path>; inactive ones only respond on the
+  // /webhook-test/<path> route (and only while the editor is listening). Try
+  // production first, then the test route as a fallback.
+  const urls = [
+    `${n8nConfig.baseUrl}/webhook/${pathParam}`,
+    `${n8nConfig.baseUrl}/webhook-test/${pathParam}`,
+  ];
+
+  let lastErr = "";
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        method: useGet ? "GET" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: useGet ? undefined : JSON.stringify(data ?? {}),
+      });
+      if (res.ok) {
+        const text = await res.text().catch(() => "");
+        return {
+          finished: true,
+          mode: "webhook",
+          startedAt: new Date().toISOString(),
+          stoppedAt: new Date().toISOString(),
+          status: "success",
+          data: { resultData: { runData: {} }, response: text },
+        } as unknown as N8nExecutionResult;
+      }
+      lastErr = `${res.status} ${await res.text().catch(() => "")}`;
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : String(err);
+    }
+  }
+  throw new Error(`Webhook trigger failed: ${lastErr}`);
+}
+
 export async function executeWorkflow(id: string, data?: Record<string, unknown>): Promise<N8nExecutionResult | null> {
+  let workflowId = id;
+
+  // Promote a local-only workflow into n8n so it can actually run instead of
+  // returning a fake success.
   if (id.startsWith("local-")) {
     const entry = localWorkflows.get(id);
     if (!entry) return null;
-
-    // If n8n is now reachable, promote the local workflow into n8n so it
-    // can actually run (instead of returning a fake success).
-    if (await checkN8nApiReady()) {
-      try {
-        const { id: _ignored, ...rest } = entry.workflow;
-        const created = await n8nApiRequest<N8nWorkflow>("POST", "/workflows", { settings: {}, ...rest });
-        if (created?.id) {
-          // Replace local entry with a pointer to the new n8n workflow
-          localWorkflows.delete(id);
-          await saveLocalWorkflows();
-          if (entry.active) {
-            try { await n8nApiRequest<N8nWorkflow>("POST", `/workflows/${created.id}/activate`); } catch { /* ignore */ }
-          }
-          return n8nApiRequest<N8nExecutionResult>("POST", `/workflows/${created.id}/execute`, { data });
-        }
-      } catch (err) {
-        logger.warn("Failed to promote local workflow to n8n, returning stub result:", err);
-      }
+    if (!(await checkN8nApiReady())) {
+      return stubExecutionResult();
     }
-
-    // n8n not available — return a descriptive stub so the UI doesn't break
-    return {
-      finished: true,
-      mode: "manual",
-      startedAt: new Date().toISOString(),
-      stoppedAt: new Date().toISOString(),
-      data: { resultData: { runData: {} } },
-      status: "success",
-    } as unknown as N8nExecutionResult;
+    try {
+      const { id: _ignored, active: _active, ...rest } = entry.workflow as N8nWorkflow & { active?: boolean };
+      const created = await n8nApiRequest<N8nWorkflow>("POST", "/workflows", { settings: {}, ...rest });
+      if (created?.id) {
+        localWorkflows.delete(id);
+        await saveLocalWorkflows();
+        workflowId = created.id;
+      } else {
+        return stubExecutionResult();
+      }
+    } catch (err) {
+      logger.warn("Failed to promote local workflow to n8n, returning stub result:", err);
+      return stubExecutionResult();
+    }
   }
-  if (!await checkN8nApiReady()) {
+
+  if (!(await checkN8nApiReady())) {
     logger.warn("n8n not available, cannot execute workflow");
     return null;
   }
-  return n8nApiRequest<N8nExecutionResult>("POST", `/workflows/${id}/execute`, { data });
+
+  // Load the workflow so we can inspect its trigger and pick a run strategy.
+  let wf: N8nWorkflow;
+  try {
+    wf = await n8nApiRequest<N8nWorkflow>("GET", `/workflows/${workflowId}`);
+  } catch (err) {
+    logger.warn(`Failed to load workflow ${workflowId} for execution:`, err);
+    return null;
+  }
+
+  const hasWebhook = wf.nodes?.some((n) => n.type === "n8n-nodes-base.webhook");
+  if (hasWebhook) {
+    // Ensure the workflow is active so its production webhook is registered.
+    if (!wf.active) {
+      try {
+        await n8nApiRequest("POST", `/workflows/${workflowId}/activate`);
+      } catch (err) {
+        logger.warn(`Could not activate webhook workflow ${workflowId}:`, err);
+      }
+    }
+    const result = await triggerWorkflowViaWebhook(wf, data);
+    if (result) return result;
+  }
+
+  // No webhook trigger — n8n's public REST API cannot manually run
+  // manual/schedule-triggered workflows. Attempt the legacy execute endpoint
+  // for compatibility with older n8n, then surface a clear message.
+  try {
+    return await n8nApiRequest<N8nExecutionResult>("POST", `/workflows/${workflowId}/execute`, { data });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`Manual execute not supported for workflow ${workflowId}: ${msg}`);
+    throw new Error(
+      `Workflow "${wf.name}" cannot be run on demand via the API. n8n only triggers workflows that have a Webhook node. ` +
+      `Add a Webhook trigger to run it from agents/skills, or let its schedule trigger fire.`,
+    );
+  }
 }
 
 // ============================================================================
@@ -793,7 +963,7 @@ export async function generateWorkflow(
     // Fallback to basic keyword-based generation
     if (!generatedWorkflow) {
       logger.info("Using basic keyword-based workflow generation");
-      const workflowSpec = parseWorkflowPrompt(request.prompt);
+      const workflowSpec = parseWorkflowPrompt(request.prompt, request.constraints?.requiredTrigger);
       const workflow = buildWorkflowFromSpec(workflowSpec, request.constraints);
       const validation = validateWorkflow(workflow);
       
@@ -842,12 +1012,33 @@ interface WorkflowSpec {
   errorHandling: boolean;
 }
 
-function parseWorkflowPrompt(prompt: string): WorkflowSpec {
+function triggerSpecForType(kind: string): WorkflowSpec["trigger"] | null {
+  switch (kind.toLowerCase()) {
+    case "webhook":
+      return { type: "n8n-nodes-base.webhook", config: { httpMethod: "POST", path: "webhook" } };
+    case "schedule":
+    case "cron":
+      return { type: "n8n-nodes-base.scheduleTrigger", config: { rule: { interval: [{ field: "hours", value: 1 }] } } };
+    case "email":
+      return { type: "n8n-nodes-base.emailReadImap", config: {} };
+    case "manual":
+      return { type: "n8n-nodes-base.manualTrigger", config: {} };
+    default:
+      return null;
+  }
+}
+
+function parseWorkflowPrompt(prompt: string, requiredTrigger?: string): WorkflowSpec {
   const promptLower = prompt.toLowerCase();
   
-  // Detect trigger type
-  let trigger = { type: "n8n-nodes-base.manualTrigger", config: {} };
-  if (promptLower.includes("webhook") || promptLower.includes("api")) {
+  // Detect trigger type. An explicit requiredTrigger (from agent/skill
+  // constraints) always wins over keyword detection so callers can force a
+  // webhook trigger — the only trigger the API can run on demand.
+  let trigger = { type: "n8n-nodes-base.manualTrigger", config: {} as Record<string, unknown> };
+  const forced = requiredTrigger ? triggerSpecForType(requiredTrigger) : null;
+  if (forced) {
+    trigger = forced;
+  } else if (promptLower.includes("webhook") || promptLower.includes("api")) {
     trigger = { type: "n8n-nodes-base.webhook", config: { httpMethod: "POST", path: "webhook" } };
   } else if (promptLower.includes("schedule") || promptLower.includes("cron") || promptLower.includes("every")) {
     trigger = { type: "n8n-nodes-base.scheduleTrigger", config: { rule: { interval: [{ field: "hours", value: 1 }] } } };
@@ -1431,7 +1622,21 @@ export async function ensureOllamaCredentialInN8n(): Promise<{
 
 export function registerN8nHandlers(): void {
   // Load locally-stored workflows on startup
-  loadLocalWorkflows().catch(err => logger.warn("Failed to load local workflows on startup:", err));
+  loadLocalWorkflows()
+    .then(() => {
+      // If n8n is already running (e.g. started externally), drain any
+      // workflows that were stranded in the local fallback so they become
+      // visible in the editor and executable by agents/skills. Runs slightly
+      // deferred so it doesn't block handler registration.
+      setTimeout(() => {
+        syncLocalWorkflowsToServer()
+          .then((r) => {
+            if (r.pushed > 0) logger.info(`Drained ${r.pushed} local workflow(s) into external n8n on startup`);
+          })
+          .catch((err) => logger.warn("Startup local→n8n drain failed:", err));
+      }, 4000);
+    })
+    .catch((err) => logger.warn("Failed to load local workflows on startup:", err));
 
   // n8n Process Management
   ipcMain.handle("n8n:start", async () => startN8n());
@@ -1524,48 +1729,10 @@ export function registerN8nHandlers(): void {
   });
   ipcMain.handle("n8n:sync-local-to-server", async () => {
     // Push every local-only workflow to the live n8n instance, then drop it locally.
-    const ready = await checkN8nAvailable();
-    if (!ready) {
-      throw new Error("n8n is not running");
+    if (!(await checkN8nApiReady())) {
+      throw new Error("n8n is not running or not authenticated");
     }
-    const entries = Array.from(localWorkflows.entries());
-    if (entries.length === 0) {
-      return { pushed: 0, failed: 0, errors: [] as string[] };
-    }
-    let pushed = 0;
-    let failed = 0;
-    const errors: string[] = [];
-    for (const [localId, entry] of entries) {
-      try {
-        // Strip local id + active flag — n8n assigns its own
-        const { id: _id, active: _active, ...payload } = entry.workflow as N8nWorkflow & { active?: boolean };
-        const created = await n8nApiRequest<N8nWorkflow>("POST", "/workflows", { settings: {}, ...payload });
-        if (created?.id) {
-          localWorkflows.delete(localId);
-          pushed++;
-          // Optionally re-activate
-          if (entry.active) {
-            try {
-              await n8nApiRequest("POST", `/workflows/${created.id}/activate`);
-            } catch (actErr) {
-              logger.warn(`Failed to reactivate pushed workflow ${created.id}:`, actErr);
-            }
-          }
-        } else {
-          failed++;
-          errors.push(`${entry.workflow.name}: no id returned`);
-        }
-      } catch (err) {
-        failed++;
-        const msg = err instanceof Error ? err.message : String(err);
-        errors.push(`${entry.workflow.name}: ${msg}`);
-        logger.warn(`Failed to push local workflow ${localId} to n8n:`, err);
-      }
-    }
-    if (pushed > 0) {
-      await saveLocalWorkflows();
-    }
-    return { pushed, failed, errors };
+    return syncLocalWorkflowsToServer();
   });
 
   // Database Configuration

@@ -28,6 +28,7 @@ import { RuntimeModeSelector } from "@/components/RuntimeModeSelector";
 import { NodePathSelector } from "@/components/NodePathSelector";
 import { AgentToolsSettings } from "@/components/settings/AgentToolsSettings";
 import { JoyIdentitySettings } from "@/components/settings/JoyIdentitySettings";
+import { SidebarCustomizationPanel } from "@/components/settings/SidebarCustomizationPanel";
 import { JoyMarketplaceSettings } from "@/components/settings/JoyMarketplaceSettings";
 import { CNSSettings } from "@/components/settings/CNSSettings";
 import { ExternalServicesSettings } from "@/components/settings/ExternalServicesSettings";
@@ -221,6 +222,14 @@ export default function SettingsPage() {
             >
               Open MCP Hub
             </Button>
+          </div>
+
+          {/* Sidebar Customization Section */}
+          <div
+            id="sidebar-settings"
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6"
+          >
+            <SidebarCustomizationPanel />
           </div>
 
           {/* Experiments Section */}

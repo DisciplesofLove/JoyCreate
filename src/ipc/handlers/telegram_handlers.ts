@@ -29,7 +29,7 @@ import {
 import { homedir } from "node:os";
 import { readFileSync, existsSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { readSettings } from "@/main/settings";
+import { readSettings, writeSettings } from "@/main/settings";
 
 const logger = log.scope("telegram-ipc");
 
@@ -805,6 +805,9 @@ You don't just talk about doing things — you actually do them. When someone as
     ) => {
       // Persist the token into the openclaw config file
       if (config.token) {
+        // Store as JoyCreate's OWN independent agent token (durable — survives
+        // the daemon's config rewrites). tryAutoStartTelegramBot prefers this.
+        writeSettings({ telegramBotToken: config.token });
         const gw = getOpenClawGateway();
         const currentConfig = gw.getConfig() as unknown as Record<string, unknown>;
         const existingChannels = (currentConfig.channels || {}) as Record<string, unknown>;
@@ -921,46 +924,111 @@ You don't just talk about doing things — you actually do them. When someone as
  * Returns `true` if the file was changed, `false` if it was already disabled
  * or the regex didn't match.
  */
-function disableDaemonTelegramChannel(): boolean {
-  const daemonConfigPath = join(homedir(), ".openclaw", "openclaw.json");
+
+/**
+ * Resolve every config file the OpenClaw daemon might actually load, most
+ * authoritative first. Critically, the daemon is launched by `gateway.cmd`
+ * which sets `OPENCLAW_CONFIG_PATH` (e.g. to `openclaw-ollama.json`) — a
+ * DIFFERENT file than the default `openclaw.json`. If we only edit
+ * `openclaw.json`, the daemon keeps running its (non-agentic) Telegram bot
+ * from the real config and steals the token. So we disable Telegram in all
+ * candidates.
+ */
+function resolveDaemonConfigPaths(): string[] {
+  const paths: string[] = [];
+  const add = (p: string | undefined) => {
+    if (p && !paths.includes(p)) paths.push(p);
+  };
+
+  // 1. Explicit env override (this process).
+  add(process.env.OPENCLAW_CONFIG_PATH);
+
+  // 2. The config path baked into the daemon's launcher (gateway.cmd). The
+  //    daemon runs with THIS env, not JoyCreate's, so this is the real one.
   try {
-    if (!existsSync(daemonConfigPath)) return false;
-    const raw = readFileSync(daemonConfigPath, "utf8");
-    // Match the `"telegram": { ... "enabled": true ... }` block. The
-    // `[^{}]*?` keeps us inside the immediate object body.
-    const next = raw.replace(
-      /("telegram"\s*:\s*\{[^{}]*?"enabled"\s*:\s*)true/,
-      "$1false",
-    );
-    if (next === raw) return false;
-    // The daemon marks the config read-only after each write — clear the flag
-    // first so our text-level edit can persist (see openclaw-config.md).
-    try {
-      chmodSync(daemonConfigPath, 0o666);
-    } catch {
-      // Best-effort — writeFileSync below will surface the real error.
+    const gatewayCmdPath = join(homedir(), ".openclaw", "gateway.cmd");
+    if (existsSync(gatewayCmdPath)) {
+      const cmd = readFileSync(gatewayCmdPath, "utf8");
+      const m = cmd.match(/set\s+"?OPENCLAW_CONFIG_PATH=([^"\r\n]+)"?/i);
+      if (m?.[1]) add(m[1].trim());
     }
-    writeFileSync(daemonConfigPath, next, "utf8");
-    logger.info(
-      "Disabled daemon Telegram channel in openclaw.json (text-level edit). " +
-        "Restart the daemon to release the bot token.",
-    );
-    return true;
-  } catch (err) {
-    // EBUSY/EPERM means the running daemon holds an exclusive lock. We can't
-    // persist the change, but the runtime WS-RPC eviction below still frees
-    // the token for this session — so this is non-fatal.
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
-      logger.warn(
-        `Could not persist daemon Telegram disable (${code}) — daemon holds the config lock. ` +
-          "Falling back to runtime WS-RPC eviction for this session.",
-      );
-    } else {
-      logger.warn("Failed to disable daemon Telegram channel:", err);
-    }
-    return false;
+  } catch {
+    // Best-effort — fall through to default.
   }
+
+  // 3. Default config file.
+  add(join(homedir(), ".openclaw", "openclaw.json"));
+
+  return paths;
+}
+
+function disableDaemonTelegramChannel(): boolean {
+  let anyChanged = false;
+  for (const daemonConfigPath of resolveDaemonConfigPaths()) {
+    try {
+      if (!existsSync(daemonConfigPath)) continue;
+      const raw = readFileSync(daemonConfigPath, "utf8");
+      // Match the `"telegram": { ... "enabled": true ... }` block. The
+      // `[^{}]*?` keeps us inside the immediate object body.
+      const next = raw.replace(
+        /("telegram"\s*:\s*\{[^{}]*?"enabled"\s*:\s*)true/,
+        "$1false",
+      );
+      if (next === raw) continue;
+      // The daemon marks the config read-only after each write — clear the flag
+      // first so our text-level edit can persist (see openclaw-config.md).
+      try {
+        chmodSync(daemonConfigPath, 0o666);
+      } catch {
+        // Best-effort — writeFileSync below will surface the real error.
+      }
+      writeFileSync(daemonConfigPath, next, "utf8");
+      logger.info(
+        `Disabled daemon Telegram channel in ${daemonConfigPath} (text-level edit). ` +
+          "Restart the daemon to release the bot token.",
+      );
+      anyChanged = true;
+    } catch (err) {
+      // EBUSY/EPERM means the running daemon holds an exclusive lock. We can't
+      // persist the change, but the runtime WS-RPC eviction below still frees
+      // the token for this session — so this is non-fatal.
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
+        logger.warn(
+          `Could not persist daemon Telegram disable in ${daemonConfigPath} (${code}) — ` +
+            "daemon holds the config lock. Falling back to runtime WS-RPC eviction for this session.",
+        );
+      } else {
+        logger.warn(`Failed to disable daemon Telegram channel in ${daemonConfigPath}:`, err);
+      }
+    }
+  }
+  return anyChanged;
+}
+
+/**
+ * Returns whether ANY config the daemon could load currently has its Telegram
+ * channel enabled with a bot token. The bot watchdog uses this to detect when
+ * the daemon has (re-)claimed Telegram so it can re-evict and keep ownership
+ * local. Checks the daemon's real config (e.g. openclaw-ollama.json via
+ * gateway.cmd), not just the default openclaw.json.
+ */
+export function daemonTelegramChannelEnabled(): boolean {
+  for (const daemonConfigPath of resolveDaemonConfigPaths()) {
+    try {
+      if (!existsSync(daemonConfigPath)) continue;
+      const daemonConfig = JSON.parse(readFileSync(daemonConfigPath, "utf8"));
+      if (
+        daemonConfig?.channels?.telegram?.enabled &&
+        daemonConfig?.channels?.telegram?.botToken
+      ) {
+        return true;
+      }
+    } catch {
+      // Unreadable / invalid JSON — try the next candidate.
+    }
+  }
+  return false;
 }
 
 export async function tryAutoStartTelegramBot(): Promise<void> {
@@ -968,12 +1036,23 @@ export async function tryAutoStartTelegramBot(): Promise<void> {
     // Resolve the token FIRST — we need it both for daemon-skip and local-start paths
     let token: string | undefined;
 
+    // 0. Prefer JoyCreate's OWN independent Telegram token (from settings).
+    //    This runs the local agentic "agent" on a dedicated bot token,
+    //    decoupled from the OpenClaw daemon's channel token — so you can talk
+    //    to the agent on one bot and (optionally) the plain daemon bot on
+    //    another. It's also durable: user-settings.json is never rewritten by
+    //    the daemon (unlike openclaw.json).
+    const ownToken = readSettings().telegramBotToken;
+    if (ownToken) {
+      token = ownToken;
+    }
+
     // 1. Check the gateway's in-memory config (app userData path)
     const gw = getOpenClawGateway();
     const config = gw.getConfig() as unknown as Record<string, unknown>;
     const channels = config.channels as Record<string, unknown> | undefined;
     const tgChannel = channels?.telegram as Record<string, unknown> | undefined;
-    if (tgChannel?.botToken) {
+    if (!token && tgChannel?.botToken) {
       token = tgChannel.botToken as string;
     }
     if (!token) {
@@ -983,17 +1062,21 @@ export async function tryAutoStartTelegramBot(): Promise<void> {
       }
     }
 
-    // 2. Fallback: read directly from ~/.openclaw/openclaw.json (daemon config)
+    // 2. Fallback: read directly from the daemon's actual config file(s).
+    //    The daemon may load openclaw-ollama.json (via OPENCLAW_CONFIG_PATH in
+    //    gateway.cmd) rather than the default openclaw.json — check both.
     if (!token) {
-      try {
-        const daemonConfigPath = join(homedir(), ".openclaw", "openclaw.json");
-        const raw = readFileSync(daemonConfigPath, "utf8");
-        const daemonConfig = JSON.parse(raw);
-        token = daemonConfig?.channels?.telegram?.botToken
-          || daemonConfig?.telegram?.token
-          || daemonConfig?.config?.telegram?.token;
-      } catch {
-        // File doesn't exist or isn't valid JSON — that's fine
+      for (const daemonConfigPath of resolveDaemonConfigPaths()) {
+        try {
+          const raw = readFileSync(daemonConfigPath, "utf8");
+          const daemonConfig = JSON.parse(raw);
+          token = daemonConfig?.channels?.telegram?.botToken
+            || daemonConfig?.telegram?.token
+            || daemonConfig?.config?.telegram?.token;
+          if (token) break;
+        } catch {
+          // File doesn't exist or isn't valid JSON — try the next candidate.
+        }
       }
     }
 

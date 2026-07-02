@@ -340,9 +340,12 @@ const approveProposalHandler = async (
   { chatId, messageId }: { chatId: number; messageId: number },
 ): Promise<ApproveProposalResult> => {
   const settings = readSettings();
-  if (settings.selectedChatMode === "ask") {
+  if (
+    settings.selectedChatMode === "ask" ||
+    settings.selectedChatMode === "plan"
+  ) {
     throw new Error(
-      "Ask mode is not supported for proposal approval. Please switch to build mode.",
+      "Ask/Plan mode is not supported for proposal approval. Please switch to build mode.",
     );
   }
   // 1. Fetch the specific assistant message

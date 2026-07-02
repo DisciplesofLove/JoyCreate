@@ -456,6 +456,35 @@ export type RevertVersionResponse =
   | { successMessage: string }
   | { warningMessage: string };
 
+export interface GetVersionDiffParams {
+  appId: number;
+  /** The commit OID to inspect (the "to" side of the diff). */
+  versionId: string;
+  /**
+   * Optional base commit OID. When omitted, the diff is computed against the
+   * commit's first parent (i.e. what this version changed).
+   */
+  previousVersionId?: string;
+}
+
+export interface GitDiffFile {
+  path: string;
+  /** Rename source path, if the file was renamed. */
+  oldPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  insertions: number;
+  deletions: number;
+  binary: boolean;
+}
+
+export interface GitDiffResult {
+  /** Full unified diff patch text. */
+  patch: string;
+  files: GitDiffFile[];
+  insertions: number;
+  deletions: number;
+}
+
 // --- Help Bot Types ---
 export interface StartHelpChatParams {
   sessionId: string;

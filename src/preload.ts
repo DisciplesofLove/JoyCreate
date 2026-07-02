@@ -46,6 +46,7 @@ const validInvokeChannels = [
   "revert-version",
   "checkout-version",
   "get-current-branch",
+  "get-version-diff",
   "delete-app",
   "rename-app",
   "get-user-settings",
@@ -1181,6 +1182,7 @@ const validInvokeChannels = [
   "project:get",
   "project:update",
   "project:delete",
+  "project:assign-app",
   // Hybrid Bridge (Local/Cloud Integration)
   "hybrid-bridge:start",
   "hybrid-bridge:stop",

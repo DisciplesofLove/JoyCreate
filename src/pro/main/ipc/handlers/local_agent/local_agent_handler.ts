@@ -162,9 +162,12 @@ export async function handleLocalAgentStream(
     const ctx: AgentContext = {
       event,
       appPath,
+      appId: chat.app.id,
       chatId: chat.id,
       supabaseProjectId: chat.app.supabaseProjectId,
       supabaseOrganizationSlug: chat.app.supabaseOrganizationSlug,
+      neonProjectId: chat.app.neonProjectId,
+      neonDevelopmentBranchId: chat.app.neonDevelopmentBranchId,
       messageId: placeholderMessageId,
       isSharedModulesChanged: false,
       onXmlStream: (accumulatedXml: string) => {

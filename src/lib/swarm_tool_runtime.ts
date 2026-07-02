@@ -106,9 +106,12 @@ function buildSwarmAgentContext(_agent: AgentNode): AgentContext {
   return {
     event: null as unknown as AgentContext["event"],
     appPath: "",
+    appId: 0,
     chatId: 0,
     supabaseProjectId: null,
     supabaseOrganizationSlug: null,
+    neonProjectId: null,
+    neonDevelopmentBranchId: null,
     messageId: 0,
     isSharedModulesChanged: false,
     onXmlStream: () => {

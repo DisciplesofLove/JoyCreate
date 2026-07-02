@@ -9,8 +9,10 @@ import { readSettings, writeSettings } from "@/main/settings";
 import { writeFileTool } from "./tools/write_file";
 import { deleteFileTool } from "./tools/delete_file";
 import { renameFileTool } from "./tools/rename_file";
+import { copyFileTool } from "./tools/copy_file";
 import { addDependencyTool } from "./tools/add_dependency";
 import { executeSqlTool } from "./tools/execute_sql";
+import { getNeonProjectInfoTool } from "./tools/get_neon_project_info";
 import { searchReplaceTool } from "./tools/search_replace";
 import { readFileTool } from "./tools/read_file";
 import { listFilesTool } from "./tools/list_files";
@@ -20,8 +22,16 @@ import { addIntegrationTool } from "./tools/add_integration";
 import { createDocumentTool } from "./tools/create_document";
 import { runCommandTool } from "./tools/run_command";
 import { thinkAndPlanTool } from "./tools/think_and_plan";
+import { updateTodosTool } from "./tools/update_todos";
 import { getAppLogsTool } from "./tools/get_app_logs";
+import { readLogsTool } from "./tools/read_logs";
+import { exploreCodeTool } from "./tools/explore_code";
+import { readGuideTool } from "./tools/read_guide";
+import { searchMcpToolsTool, getMcpToolSchemaTool } from "./tools/mcp_discovery";
+import { writeAppBlueprintTool } from "./tools/write_app_blueprint";
+import { executeSandboxScriptTool } from "./tools/execute_sandbox_script";
 import { webScraperTool } from "./tools/web_scraper";
+import { webSearchTool } from "./tools/web_search";
 import { packageDatasetTool } from "./tools/package_dataset";
 import { runTestsTool } from "./tools/run_tests";
 import { verifyAppTool } from "./tools/verify_app";
@@ -47,10 +57,13 @@ import { getSupabaseClientCode } from "@/supabase_admin/supabase_context";
 // Combined tool definitions array
 export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   writeFileTool,
+  writeAppBlueprintTool,
   deleteFileTool,
   renameFileTool,
+  copyFileTool,
   addDependencyTool,
   executeSqlTool,
+  getNeonProjectInfoTool,
   searchReplaceTool,
   readFileTool,
   listFilesTool,
@@ -59,9 +72,17 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   addIntegrationTool,
   createDocumentTool,
   runCommandTool,
+  executeSandboxScriptTool,
   thinkAndPlanTool,
+  updateTodosTool,
   getAppLogsTool,
+  readLogsTool,
+  exploreCodeTool,
+  readGuideTool,
+  searchMcpToolsTool,
+  getMcpToolSchemaTool,
   webScraperTool,
+  webSearchTool,
   packageDatasetTool,
   runTestsTool,
   verifyAppTool,

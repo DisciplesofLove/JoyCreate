@@ -23,6 +23,7 @@ import type {
   GitPushParams,
   GitCommit,
 } from "../git_types";
+import type { GitDiffFile, GitDiffResult } from "../ipc_types";
 
 /**
  * Helper function that wraps exec and throws an error if the exit code is non-zero
@@ -680,4 +681,128 @@ export async function gitLogNative(
   }
 
   return entries;
+}
+
+export type { GitDiffFile, GitDiffResult } from "../ipc_types";
+
+function mapDiffStatus(code: string): GitDiffFile["status"] {
+  if (code.startsWith("A")) return "added";
+  if (code.startsWith("D")) return "deleted";
+  if (code.startsWith("R")) return "renamed";
+  return "modified";
+}
+
+/**
+ * Return the diff introduced by a single commit (vs its first parent), or the
+ * diff between two arbitrary commits when `fromOid` is provided.
+ *
+ * Uses native git via dugite. The root commit (no parent) is diffed against the
+ * empty tree so its full contents show as additions.
+ */
+export async function gitDiffNative({
+  path,
+  toOid,
+  fromOid,
+}: {
+  path: string;
+  toOid: string;
+  fromOid?: string;
+}): Promise<GitDiffResult> {
+  // Resolve the base revision. When not supplied, diff against the commit's
+  // first parent; fall back to the empty-tree hash for the root commit.
+  let base = fromOid;
+  if (!base) {
+    const parentResult = await exec(
+      ["rev-parse", "--verify", "--quiet", `${toOid}^`],
+      path,
+    );
+    base =
+      parentResult.exitCode === 0
+        ? parentResult.stdout.toString().trim()
+        : // Git's well-known empty tree object hash.
+          "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+  }
+
+  const range = [base, toOid];
+
+  // Numstat for per-file insertion/deletion counts + rename detection.
+  const numstatResult = await exec(
+    ["diff", "--numstat", "--find-renames", ...range],
+    path,
+  );
+  if (numstatResult.exitCode !== 0) {
+    throw new Error(
+      `git diff --numstat failed: ${numstatResult.stderr.toString()}`,
+    );
+  }
+
+  // Name-status for add/modify/delete/rename classification.
+  const nameStatusResult = await exec(
+    ["diff", "--name-status", "--find-renames", ...range],
+    path,
+  );
+  if (nameStatusResult.exitCode !== 0) {
+    throw new Error(
+      `git diff --name-status failed: ${nameStatusResult.stderr.toString()}`,
+    );
+  }
+
+  // Full unified patch text.
+  const patchResult = await exec(["diff", "--find-renames", ...range], path);
+  if (patchResult.exitCode !== 0) {
+    throw new Error(`git diff failed: ${patchResult.stderr.toString()}`);
+  }
+
+  // Parse name-status into a path -> status map.
+  const statusByPath = new Map<string, GitDiffFile["status"]>();
+  const renameOldPath = new Map<string, string>();
+  for (const line of nameStatusResult.stdout
+    .toString()
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)) {
+    const cols = line.split("\t");
+    const code = cols[0];
+    if (code.startsWith("R") && cols.length >= 3) {
+      statusByPath.set(cols[2], "renamed");
+      renameOldPath.set(cols[2], cols[1]);
+    } else if (cols.length >= 2) {
+      statusByPath.set(cols[1], mapDiffStatus(code));
+    }
+  }
+
+  const files: GitDiffFile[] = [];
+  let totalInsertions = 0;
+  let totalDeletions = 0;
+  for (const line of numstatResult.stdout
+    .toString()
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)) {
+    const cols = line.split("\t");
+    if (cols.length < 3) continue;
+    const [insStr, delStr] = cols;
+    // For renames, numstat path column can be "old => new"; prefer the last col.
+    const filePath = cols[cols.length - 1];
+    const binary = insStr === "-" || delStr === "-";
+    const insertions = binary ? 0 : Number(insStr) || 0;
+    const deletions = binary ? 0 : Number(delStr) || 0;
+    totalInsertions += insertions;
+    totalDeletions += deletions;
+    files.push({
+      path: filePath,
+      oldPath: renameOldPath.get(filePath),
+      status: statusByPath.get(filePath) ?? "modified",
+      insertions,
+      deletions,
+      binary,
+    });
+  }
+
+  return {
+    patch: patchResult.stdout.toString(),
+    files,
+    insertions: totalInsertions,
+    deletions: totalDeletions,
+  };
 }

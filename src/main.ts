@@ -468,13 +468,12 @@ export async function onReady() {
           const daemonAlive = await probeGatewayHealth(daemonPort);
 
           if (daemonAlive) {
-            // Trust the daemon config to decide whether it owns Telegram
+            // Trust the daemon config to decide whether it owns Telegram.
+            // Checks the daemon's REAL config (e.g. openclaw-ollama.json via
+            // gateway.cmd's OPENCLAW_CONFIG_PATH), not just openclaw.json.
             try {
-              const { readFileSync } = await import("node:fs");
-              const { join } = await import("node:path");
-              const { homedir } = await import("node:os");
-              const daemonCfg = JSON.parse(readFileSync(join(homedir(), ".openclaw", "openclaw.json"), "utf8"));
-              if (daemonCfg?.channels?.telegram?.enabled && daemonCfg?.channels?.telegram?.botToken) {
+              const { daemonTelegramChannelEnabled } = await import("./ipc/handlers/telegram_handlers");
+              if (daemonTelegramChannelEnabled()) {
                 daemonHandlesTelegram = true;
               }
             } catch {
@@ -499,11 +498,8 @@ export async function onReady() {
         // answer messages without JoyCreate's IPC tools (causing 409 flapping).
         if (bridged && telegramOwner === "local" && tgBot.getStatus().running) {
           try {
-            const { readFileSync } = await import("node:fs");
-            const { join } = await import("node:path");
-            const { homedir } = await import("node:os");
-            const daemonCfg = JSON.parse(readFileSync(join(homedir(), ".openclaw", "openclaw.json"), "utf8"));
-            if (daemonCfg?.channels?.telegram?.enabled && daemonCfg?.channels?.telegram?.botToken) {
+            const { daemonTelegramChannelEnabled } = await import("./ipc/handlers/telegram_handlers");
+            if (daemonTelegramChannelEnabled()) {
               svcLogger.info("Bot watchdog: daemon re-enabled its Telegram channel — re-claiming ownership (owner=local)");
               await tryAutoStartTelegramBot();
             }

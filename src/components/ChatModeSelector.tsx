@@ -32,6 +32,8 @@ export function ChatModeSelector() {
         return "Build (Classic)";
       case "ask":
         return "Ask";
+      case "plan":
+        return "Plan";
       case "agent":
         return "Build (MCP)";
       case "autonomous":
@@ -94,6 +96,14 @@ export function ChatModeSelector() {
             <span className="font-medium">Ask</span>
             <span className="text-xs text-muted-foreground">
               Ask questions about the app
+            </span>
+          </div>
+        </SelectItem>
+        <SelectItem value="plan">
+          <div className="flex flex-col items-start">
+            <span className="font-medium">Plan</span>
+            <span className="text-xs text-muted-foreground">
+              Draft an implementation plan first — no code changes
             </span>
           </div>
         </SelectItem>

@@ -88,9 +88,16 @@ type ActivityLogEventType =
 // GATEWAY SERVICE
 // =============================================================================
 
+/**
+ * Process-global singleton key. See telegram_bot_service.ts: electron-forge's
+ * Vite build can load this module under two chunk identities (static `import`
+ * vs dynamic `await import()`) without deduping, which would duplicate a
+ * `private static instance` field and fork the gateway state (two bridges, two
+ * heartbeats, two daemon-respawn loops). Pinning on `globalThis` guarantees one.
+ */
+const OPENCLAW_GATEWAY_SINGLETON = Symbol.for("joycreate.openclawGatewayService");
+
 export class OpenClawGatewayService extends EventEmitter {
-  private static instance: OpenClawGatewayService;
-  
   private config: OpenClawConfig;
   private claudeCodeConfig: ClaudeCodeConfig;
   private state: OpenClawGatewayState;
@@ -140,10 +147,11 @@ export class OpenClawGatewayService extends EventEmitter {
   }
   
   static getInstance(): OpenClawGatewayService {
-    if (!OpenClawGatewayService.instance) {
-      OpenClawGatewayService.instance = new OpenClawGatewayService();
+    const g = globalThis as Record<symbol, OpenClawGatewayService | undefined>;
+    if (!g[OPENCLAW_GATEWAY_SINGLETON]) {
+      g[OPENCLAW_GATEWAY_SINGLETON] = new OpenClawGatewayService();
     }
-    return OpenClawGatewayService.instance;
+    return g[OPENCLAW_GATEWAY_SINGLETON]!;
   }
   
   // ===========================================================================

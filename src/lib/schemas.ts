@@ -156,6 +156,7 @@ export const ChatModeSchema = z.enum([
   "autonomous",
   "mcp",
   "local-agent",
+  "plan",
 ]);
 export type ChatMode = z.infer<typeof ChatModeSchema>;
 
@@ -391,6 +392,15 @@ export const UserSettingsSchema = z.object({
    * - `"daemon"`: the OpenClaw daemon owns Telegram (legacy behavior).
    */
   telegramOwner: z.enum(["local", "daemon"]).optional(),
+  /**
+   * JoyCreate's OWN independent Telegram bot token for the in-process agentic
+   * bot ("the agent"). When set, the local bot polls this token directly,
+   * decoupled from the OpenClaw daemon's `channels.telegram.botToken` ("the
+   * bot"). This lets the agent run on a dedicated bot while the daemon can
+   * optionally run a separate plain bot on its own token. Stored here (not in
+   * openclaw.json) so it survives the daemon's periodic config rewrites.
+   */
+  telegramBotToken: z.string().optional(),
 
   ////////////////////////////////
   // E2E TESTING ONLY.

@@ -731,6 +731,14 @@ ${componentSnippet}
           enableTurboEditsV2: isTurboEditsV2Enabled(settings),
         });
 
+        // Anchor the builder to a self-maintained PROJECT.md spec so it doesn't
+        // drift from the original spec across turns. Skipped in "ask" mode (no
+        // file writes); summarize/security-review intents replace systemPrompt
+        // entirely below, so this addition is harmlessly dropped for those.
+        if (settings.selectedChatMode !== "ask") {
+          systemPrompt += PROJECT_SPEC_PROTOCOL;
+        }
+
         // For local models (Ollama, LM Studio), add an extra reinforcement
         // because smaller models sometimes ignore <joy-write> instructions.
         // Skip for local-agent mode: it uses XML tool emulation with its own
@@ -999,6 +1007,24 @@ This conversation includes one or more image attachments. When the user uploads 
           logger.warn("Vault context injection failed (non-fatal)", { error: vaultErr });
         }
 
+        // Inject the current PROJECT.md as an authoritative anchor ahead of the
+        // codebase context. Read fresh each turn so the model always sees the
+        // latest spec it wrote. Skipped in ask/summarize/security-review flows.
+        let projectSpecPrefix: {
+          role: "user" | "assistant";
+          content: string;
+        }[] = [];
+        if (
+          settings.selectedChatMode !== "ask" &&
+          !isSummarizeIntent &&
+          !isSecurityReviewIntent
+        ) {
+          const projectSpec = await readProjectSpec(appPath);
+          if (projectSpec) {
+            projectSpecPrefix = buildProjectSpecPrefix(projectSpec);
+          }
+        }
+
         const codebasePrefix = isEngineEnabled
           ? // No codebase prefix if engine is set, we will take of it there.
             []
@@ -1065,7 +1091,7 @@ This conversation includes one or more image attachments. When the user uploads 
         }));
 
         let chatMessages: ModelMessage[] = buildCompressedChatMessages(
-          [...codebasePrefix, ...otherCodebasePrefix],
+          [...projectSpecPrefix, ...codebasePrefix, ...otherCodebasePrefix],
           limitedHistoryChatMessages,
           // Keep recent dialog verbatim so the agent can actually follow the
           // conversation. Earlier versions capped at 3k tokens / 2 messages,
@@ -2547,6 +2573,87 @@ function escapeJoyTags(text: string): string {
 const CODEBASE_PROMPT_PREFIX = "This is my codebase.";
 function createCodebasePrompt(codebaseInfo: string): string {
   return `${CODEBASE_PROMPT_PREFIX} ${codebaseInfo}`;
+}
+
+// ── PROJECT.md spec anchor ────────────────────────────────────────────────────
+// A self-maintained source-of-truth file that keeps the builder locked to the
+// original spec across turns. We read it at the start of every turn and inject
+// it as an authoritative anchor; the model rewrites it at the end of every turn
+// via a <joy-write path="PROJECT.md"> tag, so the existing write-tag pipeline
+// persists it automatically — no custom parsing required.
+const PROJECT_SPEC_FILENAME = "PROJECT.md";
+
+const PROJECT_SPEC_PROTOCOL = `
+
+# PROJECT.md — Project Spec (Source of Truth)
+This app maintains a \`PROJECT.md\` file in its root that is the single source of truth for what is being built. Follow this protocol on EVERY turn:
+
+1. If a PROJECT.md is provided in the context below, treat its **Core Spec** and **Known constraints / things NOT to change** sections as binding. Do NOT deviate from them unless the user EXPLICITLY asks to change the spec.
+2. If the user's new request seems unrelated to the Core Spec, treat it as an ADDITION or MODIFICATION to the existing project — NOT a new project — unless the user explicitly says "start over" or "new project".
+3. At the END of your response you MUST output an updated PROJECT.md using a \`<joy-write path="PROJECT.md">\` tag, reflecting any new files, decisions, or state changes from this turn. Never omit this. Keep it concise.
+4. If no PROJECT.md exists yet (none provided below), CREATE it this turn with a \`<joy-write path="PROJECT.md">\` tag, locking in the Core Spec derived from the user's request.
+
+Use this exact PROJECT.md structure:
+\`\`\`
+# Project: {name}
+Last updated: turn {n}
+
+## Core Spec (do not deviate without explicit user instruction)
+{1-3 sentence description of what is being built, locked in on turn 1}
+
+## Tech stack
+{frameworks, libraries, file structure conventions}
+
+## Current file tree
+{list of files + one-line purpose of each}
+
+## Design decisions locked in
+- {decision}: {why}
+
+## Known constraints / things NOT to change
+- {e.g. "color scheme is fixed", "do not restructure routing"}
+
+## Next intended step
+{what the user asked for most recently, in your own words}
+\`\`\`
+`;
+
+/**
+ * Read the app's PROJECT.md spec anchor. Returns null when it does not exist or
+ * is empty. Capped so the anchor stays cheap in tokens (the file is meant to be
+ * concise, model-maintained state — not a full codebase dump).
+ */
+async function readProjectSpec(appPath: string): Promise<string | null> {
+  try {
+    const spec = await fs.promises.readFile(
+      path.join(appPath, PROJECT_SPEC_FILENAME),
+      "utf8",
+    );
+    const trimmed = spec.trim();
+    if (!trimmed) return null;
+    const MAX_SPEC_CHARS = 4_000;
+    return trimmed.length > MAX_SPEC_CHARS
+      ? trimmed.slice(0, MAX_SPEC_CHARS) + "\n[PROJECT.md truncated]"
+      : trimmed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the prefix messages that inject the current PROJECT.md into context as
+ * an authoritative anchor, placed ahead of the codebase context.
+ */
+function buildProjectSpecPrefix(
+  projectSpec: string,
+): { role: "user" | "assistant"; content: string }[] {
+  return [
+    {
+      role: "user" as const,
+      content: `This is the current PROJECT.md — the source of truth for this project. Honor its Core Spec and constraints, and remember to output an updated PROJECT.md at the end of your response.\n\n--- PROJECT.md ---\n${projectSpec}\n--- END PROJECT.md ---`,
+    },
+    { role: "assistant" as const, content: "OK." },
+  ];
 }
 
 function createOtherAppsCodebasePrompt(otherAppsCodebaseInfo: string): string {

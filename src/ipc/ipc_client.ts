@@ -60,6 +60,8 @@ import type {
   GetNeonProjectResponse,
   RevertVersionResponse,
   RevertVersionParams,
+  GetVersionDiffParams,
+  GitDiffResult,
   RespondToAppInputParams,
   PromptDto,
   CreatePromptParamsDto,
@@ -1186,6 +1188,14 @@ export class IpcClient {
     return this.ipcRenderer.invoke("get-current-branch", {
       appId,
     });
+  }
+
+  // Get the diff for a specific version (what the commit changed, or a diff
+  // between two commits when previousVersionId is provided).
+  public async getVersionDiff(
+    params: GetVersionDiffParams,
+  ): Promise<GitDiffResult> {
+    return this.ipcRenderer.invoke("get-version-diff", params);
   }
 
   // Get user settings
@@ -3808,6 +3818,12 @@ export class IpcClient {
     params: import("../types/project_types").DeleteProjectParams
   ): Promise<import("../types/project_types").DeleteProjectResult> {
     return this.ipcRenderer.invoke("project:delete", params);
+  }
+
+  public async assignAppToProject(
+    params: import("../types/project_types").AssignAppToProjectParams
+  ): Promise<void> {
+    return this.ipcRenderer.invoke("project:assign-app", params);
   }
 
   // ==========================================================================

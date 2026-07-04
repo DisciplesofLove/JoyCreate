@@ -323,6 +323,10 @@ export const UserSettingsSchema = z.object({
   lastShownReleaseNotesVersion: z.string().optional(),
   maxChatTurnsInContext: z.number().optional(),
   thinkingBudget: z.enum(["low", "medium", "high"]).optional(),
+  /** Copilot-style reasoning effort preset. Overrides `thinkingBudget` when set. */
+  reasoningEffort: z.enum(["low", "medium", "high", "ultra"]).optional(),
+  /** Advanced: explicit sampling temperature (0-2). null/undefined = use the model default. */
+  temperatureOverride: z.number().min(0).max(2).nullable().optional(),
   enableProLazyEditsMode: z.boolean().optional(),
   proLazyEditsMode: z.enum(["off", "v1", "v2"]).optional(),
   enableProSmartFilesContextMode: z.boolean().optional(),

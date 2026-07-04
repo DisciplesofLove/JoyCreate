@@ -1309,7 +1309,7 @@ This conversation includes one or more image attachments. When the user uploads 
               builtinProviderId: modelClient.builtinProviderId,
             }),
             maxOutputTokens: await getMaxTokens(settings.selectedModel),
-            temperature: await getTemperature(settings.selectedModel),
+            temperature: await getTemperature(settings.selectedModel, settings),
             maxRetries: 0, // Disabled — we handle rate-limit retries ourselves with proper backoff
             model: modelClient.model,
             stopWhen: [

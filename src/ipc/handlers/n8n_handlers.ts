@@ -265,14 +265,13 @@ export async function startN8n(): Promise<{ success: boolean; error?: string }> 
       }
     }
     
-    // Use npx to run n8n. On Windows, use npx.cmd directly with windowsHide
-    // so a stray cmd.exe console window does not stay open on screen.
-    const isWin = process.platform === "win32";
-    const npxCmd = isWin ? "npx.cmd" : "npx";
-    n8nProcess = spawn(npxCmd, ["n8n", "start"], {
-      // Avoid `shell: true` on Windows — it spawns an extra cmd.exe that
-      // shows a console window. windowsHide hides any helper console.
-      shell: !isWin,
+    // Run the globally-installed n8n (npm i -g n8n). On Windows the shim is a
+    // `.cmd`, which Node 22 refuses to spawn directly (throws EINVAL) — so we
+    // spawn through a shell. n8n 2.0 also removed the `start` subcommand, so we
+    // invoke `n8n` with no args (defaults to start). PATH (inherited via the
+    // enriched process env) resolves the global shim on the correct Node.
+    n8nProcess = spawn("n8n", [], {
+      shell: true,
       windowsHide: true,
       env: {
         ...process.env,

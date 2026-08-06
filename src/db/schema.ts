@@ -173,6 +173,26 @@ export const messages = sqliteTable("messages", {
     .default(sql`(unixepoch())`),
 });
 
+// Rolling per-chat summary of older conversation turns. Maintained in the
+// background after each build turn and injected into context in place of the
+// lossy one-line compression. One row per chat (cumulative).
+export const chatSummaries = sqliteTable("chat_summaries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  chatId: integer("chat_id")
+    .notNull()
+    .unique()
+    .references(() => chats.id, { onDelete: "cascade" }),
+  // The highest message id covered by this summary.
+  upToMessageId: integer("up_to_message_id").notNull(),
+  summary: text("summary").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
 export const chatPlans = sqliteTable("chat_plans", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   chatId: integer("chat_id")

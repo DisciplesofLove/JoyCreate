@@ -181,7 +181,7 @@ async function apiFetch(
   return fetch(`${OAUTH_BASE}${path}`, {
     ...init,
     headers: {
-      ...(init?.headers ?? {}),
+      ...init?.headers,
       Authorization: `Bearer ${token}`,
       "User-Agent": USER_AGENT,
     },

@@ -1,29 +1,29 @@
 /**
- * Lit Protocol Relayer (stub).
+ * Lit Protocol Relayer.
  *
  * The DataLease Stylus contract emits `LeaseGranted(leaseId, listingId,
  * lessee, tokenId, paidWei, expiresAt, accConditionsHash)` on every
  * `purchaseLease()` call. The IPC handler mirrors that grant into
  * `data_lease_grants` with `relayer_status = "pending"`.
  *
- * This service polls for pending rows and, for each one, would:
- *   1. Resolve the Lit Protocol Access Control Conditions (ACC) blob
+ * This service polls for pending rows and, for each one:
+ *   1. Resolves the Lit Protocol Access Control Conditions (ACC) blob
  *      whose `keccak256(JSON.stringify(conditions))` matches the
- *      `accConditionsHash` on-chain.
- *   2. Call the Lit relayer / Lit Action that provisions a time-bound
- *      decryption key bound to `lessee` and valid until `expiresAt`.
- *   3. Mark the row `provisioned` (or `failed` with `relayerError`).
+ *      `accConditionsHash` on-chain (inside the configured Lit Action).
+ *   2. Executes the Lit Action that provisions a time-bound decryption key
+ *      bound to `lessee` and valid until `expiresAt`.
+ *   3. Marks the row `provisioned` (or `failed` with `relayerError`).
  *
- * The actual Lit SDK wiring is intentionally left for the M2 milestone —
- * for now we ship the polling loop + status transitions so the rest of
- * the system (UI badges, retry semantics, observability) is testable
- * end-to-end with a deterministic fake provisioner.
+ * Configuration: JOY_LIT_NETWORK, JOY_LIT_PKP_PUBKEY, JOY_LIT_ACTION_CID
+ * (see src/config/tee.ts). When unconfigured, grants fail with a clear
+ * error rather than fake-succeeding.
  */
 
 import log from "electron-log";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { dataLeaseGrants } from "@/db/schema";
+import { resolveLitConfig } from "@/config/tee";
 
 const logger = log.scope("lit_relayer");
 
@@ -43,13 +43,93 @@ export type LitProvisioner = (args: {
 }) => Promise<{ ok: true; receipt?: string } | { ok: false; error: string }>;
 
 /**
- * Default provisioner is a no-op success stub. Tests and production should
- * inject a real implementation via `setLitProvisioner` before
- * `startLitRelayer` is called.
+ * Default provisioner: real Lit Protocol integration when configured, honest
+ * failure otherwise.
+ *
+ * When `JOY_LIT_NETWORK`, `JOY_LIT_PKP_PUBKEY` and `JOY_LIT_ACTION_CID` are
+ * set (see src/config/tee.ts), the provisioner lazily loads the Lit SDK and
+ * executes the configured Lit Action, which resolves the ACC blob for
+ * `accConditionsHash` and provisions a time-bound decryption key for the
+ * lessee. Without configuration, grants are marked `failed` with a clear
+ * error instead of fake-success — recipients must never believe a key was
+ * provisioned when it wasn't. Tests can inject a fake via `setLitProvisioner`.
  */
 let provisioner: LitProvisioner = async (args) => {
-  logger.info("(stub) provisioning Lit key for lease", args.leaseId);
-  return { ok: true, receipt: `stub:${args.leaseId}` };
+  const cfg = resolveLitConfig();
+  if (!cfg) {
+    logger.warn(
+      "Lit relayer not configured — lease grant cannot be provisioned",
+      args.leaseId,
+    );
+    return {
+      ok: false,
+      error:
+        "Lit relayer not configured. Set JOY_LIT_NETWORK, JOY_LIT_PKP_PUBKEY and " +
+        "JOY_LIT_ACTION_CID to enable decryption-key provisioning for data leases.",
+    };
+  }
+  if (!cfg.actionCid) {
+    return {
+      ok: false,
+      error:
+        "JOY_LIT_ACTION_CID is not set. Lease provisioning requires the Lit Action " +
+        "that resolves ACC conditions and provisions the time-bound key.",
+    };
+  }
+
+  let LitNodeClientClass: unknown;
+  try {
+    const mod: unknown = await import(
+      /* @vite-ignore */ "@lit-protocol/lit-node-client"
+    );
+    LitNodeClientClass = (mod as { LitNodeClient?: unknown }).LitNodeClient;
+  } catch {
+    return {
+      ok: false,
+      error:
+        "@lit-protocol/lit-node-client is not installed. Run " +
+        "`npm i @lit-protocol/lit-node-client` to enable lease provisioning.",
+    };
+  }
+  if (typeof LitNodeClientClass !== "function") {
+    return {
+      ok: false,
+      error: "@lit-protocol/lit-node-client did not export LitNodeClient",
+    };
+  }
+
+  const Ctor = LitNodeClientClass as new (opts: { litNetwork: string }) => {
+    connect(): Promise<void>;
+    executeJs(callArgs: {
+      ipfsId: string;
+      jsParams: Record<string, unknown>;
+    }): Promise<{ response?: unknown }>;
+    disconnect?(): Promise<void>;
+  };
+
+  const client = new Ctor({ litNetwork: cfg.network });
+  await client.connect();
+  try {
+    const res = await client.executeJs({
+      ipfsId: cfg.actionCid,
+      jsParams: {
+        leaseId: args.leaseId,
+        listingId: args.listingId,
+        lessee: args.lessee,
+        tokenId: args.tokenId,
+        accConditionsHash: args.accConditionsHash,
+        expiresAtUnix: args.expiresAtUnix,
+        publicKey: cfg.pkpPublicKey,
+      },
+    });
+    const receipt =
+      typeof res.response === "string"
+        ? res.response
+        : JSON.stringify(res.response ?? "");
+    return { ok: true, receipt: receipt || `lit:${args.leaseId}` };
+  } finally {
+    await client.disconnect?.().catch(() => undefined);
+  }
 };
 
 export function setLitProvisioner(impl: LitProvisioner): void {

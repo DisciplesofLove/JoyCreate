@@ -58,6 +58,29 @@ Simply run this once in your repo:
 npm run init-precommit
 ```
 
+## Adding a new IPC channel (checklist)
+
+Every renderer ↔ main IPC channel must have all four pieces, or it will fail at runtime:
+
+1. **Handler** — create/extend a file in `src/ipc/handlers/`. Handlers must `throw new Error("...")` on failure — never return `{ success: false }` payloads or fake-success.
+2. **Registration** — register the handler in `src/ipc/ipc_host.ts`.
+3. **Preload allowlist** — add the channel string to `validInvokeChannels` in `src/preload.ts`.
+4. **Client method** — add a dedicated method on `IpcClient` in `src/ipc/ipc_client.ts`.
+
+Then in the renderer: wrap reads in `useQuery` and writes in `useMutation` (invalidate related queries on success).
+
+The unit test `src/__tests__/ipc_channel_parity.test.ts` fails if a preload channel has no registered handler — run `npm test` to verify.
+
+## Database migrations
+
+Schemas live in `src/db/schema.ts` (+ domain files in `src/db/`). After changing a schema:
+
+```sh
+npm run db:generate
+```
+
+**Never write migration SQL by hand** — drizzle-kit generates the files in `drizzle/`. Commit the generated `.sql` file and the updated `drizzle/meta/` snapshots together with your schema change.
+
 ## Testing
 
 ### Unit tests

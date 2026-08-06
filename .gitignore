@@ -68,6 +68,26 @@ typings/
 .env
 .env.test
 
+# Local runtime data (never commit)
+userData/
+celestia-blobs/
+n8n-config/.n8n/
+n8n-config/config
+n8n-config/database.sqlite*
+n8n-config/binaryData/
+n8n-config/git/
+n8n-config/ssh/
+n8n-config/n8nEventLog*.log
+
+# Local build/diagnostic output dumps
+build-output.txt
+lint-out.txt
+test-out.txt
+tsc*.txt
+asar-list.txt
+audit.json
+out-final/
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 

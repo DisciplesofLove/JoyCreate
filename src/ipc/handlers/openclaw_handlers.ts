@@ -290,6 +290,21 @@ export function registerOpenClawHandlers(): void {
     return gateway.getGatewayState();
   });
 
+  ipcMain.handle("openclaw:gateway:health", async () => {
+    return gateway.getGatewayState();
+  });
+
+  ipcMain.handle("openclaw:connection:status", async () => {
+    const state = gateway.getGatewayState();
+    const status =
+      state.status === "connected" ||
+      state.status === "connecting" ||
+      state.status === "error"
+        ? state.status
+        : "disconnected";
+    return { connected: state.status === "connected", status };
+  });
+
   // ===========================================================================
   // CONFIGURATION
   // ===========================================================================

@@ -322,6 +322,8 @@ export const UserSettingsSchema = z.object({
   sidebar: SidebarPreferencesSchema.optional(),
   lastShownReleaseNotesVersion: z.string().optional(),
   maxChatTurnsInContext: z.number().optional(),
+  /** Advanced: token budget for the chat-history portion of AI requests. Default: DEFAULT_CONTEXT_TOKEN_BUDGET. */
+  contextTokenBudget: z.number().min(2_000).optional(),
   thinkingBudget: z.enum(["low", "medium", "high"]).optional(),
   /** Copilot-style reasoning effort preset. Overrides `thinkingBudget` when set. */
   reasoningEffort: z.enum(["low", "medium", "high", "ultra"]).optional(),

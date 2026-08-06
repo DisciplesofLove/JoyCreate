@@ -668,8 +668,11 @@ export default function TokenomicsPage() {
             <Coins className="h-6 w-6 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold">Token Economics</h1>
-            <p className="text-sm text-muted-foreground">Staking, rewards, reputation, and the economic engine of Sovereign AI</p>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-bold">Token Economics</h1>
+              <Badge variant="secondary" className="text-xs uppercase">Experimental</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground">Staking, rewards, reputation, and the economic engine of Sovereign AI. Record-keeping only — no on-chain enforcement yet.</p>
           </div>
         </div>
       </div>

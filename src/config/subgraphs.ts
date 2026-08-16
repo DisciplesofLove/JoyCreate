@@ -19,29 +19,34 @@ export const GOLDSKY_SUBGRAPHS = {
     stores:
       env?.VITE_STORES_SUBGRAPH_AMOY ??
       "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-amoy/0.0.3/gn",
+    storeDrops: "",
   },
   arbitrumSepolia: {
     drop:
       env?.VITE_DROP_SUBGRAPH_ARB_SEPOLIA ??
-      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-arbitrum-sepolia/0.0.3/gn",
+      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-arbitrum-sepolia/0.0.5/gn",
     stores:
       env?.VITE_STORES_SUBGRAPH_ARB_SEPOLIA ??
-      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.2/gn",
+      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.4/gn",
+    storeDrops:
+      env?.VITE_STORE_DROPS_SUBGRAPH_ARB_SEPOLIA ??
+      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-store-drops-arbitrum-sepolia/0.0.2/gn",
   },
   arbitrumOne: {
     drop: env?.VITE_DROP_SUBGRAPH_ARB_ONE ?? "",
     stores: env?.VITE_STORES_SUBGRAPH_ARB_ONE ?? "",
+    storeDrops: "",
   },
 } as const;
 
 export type SubgraphChainId = keyof typeof GOLDSKY_SUBGRAPHS;
-export type SubgraphKind = "drop" | "stores";
+export type SubgraphKind = "drop" | "stores" | "storeDrops";
 
 /**
  * Query a Goldsky subgraph with a GraphQL query.
  *
- * Backwards-compatible: legacy callers may pass `"drop" | "stores"` as the
- * first argument; these default to the Polygon Amoy endpoints. New code
+ * Backwards-compatible: legacy callers may pass a `SubgraphKind` as the
+ * first argument; these default to the Arbitrum Sepolia endpoints. New code
  * SHOULD pass the active `MarketplaceChainId` first:
  *   `querySubgraph("arbitrumSepolia", "drop", query, vars)`
  */
@@ -55,9 +60,13 @@ export async function querySubgraph(
   let query: string;
   let variables: Record<string, unknown> | undefined;
 
-  if (chainOrKind === "drop" || chainOrKind === "stores") {
+  if (
+    chainOrKind === "drop" ||
+    chainOrKind === "stores" ||
+    chainOrKind === "storeDrops"
+  ) {
     // Legacy 2-arg form: (kind, query, variables?)
-    url = GOLDSKY_SUBGRAPHS.polygonAmoy[chainOrKind];
+    url = GOLDSKY_SUBGRAPHS.arbitrumSepolia[chainOrKind];
     query = kindOrQuery as string;
     variables = queryOrVars as Record<string, unknown> | undefined;
   } else {

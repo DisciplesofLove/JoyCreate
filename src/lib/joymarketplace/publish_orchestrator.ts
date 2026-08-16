@@ -67,6 +67,8 @@ export interface PublishInput {
   description?: string;
   /** Optional raw blob; pinned to IPFS and referenced from metadata.image. */
   contentBuffer?: Buffer;
+  /** Existing IPFS CID when the renderer has already pinned the content. */
+  contentCid?: string;
   contentMimeType?: string;
   /** Extra props merged into metadata.properties. */
   metadata?: Record<string, unknown>;
@@ -84,6 +86,8 @@ export interface PublishInput {
   royaltyBps?: number;
   /** Optional store slug; defaults to whatever is in joybridge-config.json. */
   storeSlug?: string;
+  /** Authoritative bytes32 store node from the stores subgraph. */
+  storeNode?: string;
   /** When true, pin + estimate gas, no on-chain writes. */
   dryRun?: boolean;
   /** License string; default "CC-BY-4.0". */
@@ -187,8 +191,7 @@ export class PublishOrchestrator {
 
     // 3. Pin content + metadata
     const pinner = new IpfsPinner({ keys: await loadPinnerKeysFromSettings() });
-    let contentCid: string | undefined;
-    let metadataCid: string | undefined;
+    let contentCid = input.contentCid;
     let metadataUri: string | undefined;
     try {
       if (input.contentBuffer) {
@@ -206,7 +209,6 @@ export class PublishOrchestrator {
       }
       const meta = this.buildMetadata(input, contentCid);
       const mr = await pinner.pinJson(meta, `${input.name}-metadata`);
-      metadataCid = mr.cid;
       metadataUri = `ipfs://${mr.cid}`;
       outcome.metadataCid = mr.cid;
       outcome.metadataUri = metadataUri;
@@ -265,7 +267,7 @@ export class PublishOrchestrator {
       return outcome;
     }
 
-    if (marketplaceChain.enforceJoyCreatorGate) {
+    if (marketplaceChain.enforceJoyCreatorGate && marketplaceChain.id !== "arbitrumSepolia") {
       try {
         const gate = await publisher.verifyCreatorGate(wallet.address);
         if (!gate.canMint) {
@@ -286,7 +288,21 @@ export class PublishOrchestrator {
     const quantity = Math.max(1, input.quantity ?? 1);
     let mint: { tokenId: string; txHash?: string; gasEstimate?: bigint };
     try {
-      if (marketplaceChain.enforceJoyCreatorGate) {
+      if (marketplaceChain.id === "arbitrumSepolia") {
+        if (!input.storeSlug) {
+          throw new Error("storeSlug is required for Arbitrum Sepolia publishing");
+        }
+        mint = await publisher.createCanonicalEdition(
+          {
+            storeNode: input.storeNode,
+            storeSlug: input.storeSlug,
+            metadataUri: metadataUri!,
+            priceUsdc: BigInt(input.priceUsdc ?? 0),
+            maxSupply: BigInt(quantity),
+          },
+          { dryRun },
+        );
+      } else if (marketplaceChain.enforceJoyCreatorGate) {
         // Gate-first path (Amoy + Arbitrum Sepolia). The gate forwards
         // mint(creator, tokenId, qty, data) into the platformDrop proxy and
         // the drop subgraph indexes it as Token.creator = tx.from.
@@ -545,6 +561,7 @@ export class PublishOrchestrator {
   }
 
   private buildMetadata(input: PublishInput, contentCid?: string): Record<string, unknown> {
+    const license = input.license ?? "CC-BY-4.0";
     return {
       name: input.name,
       description: input.description ?? "",
@@ -556,8 +573,9 @@ export class PublishOrchestrator {
         priceUsdc: input.priceUsdc ?? 0,
         royaltyBps: input.royaltyBps ?? 250,
         storeSlug: input.storeSlug,
+        license,
       },
-      license: input.license ?? "CC-BY-4.0",
+      license,
       contentMimeType: input.contentMimeType,
       version: "1.0.0",
     };

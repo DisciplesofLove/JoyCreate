@@ -105,8 +105,6 @@ import type {
 import { showError } from "@/lib/toast";
 import { DeepLinkData } from "./deep_link_data";
 import type {
-  CollectionId,
-  ModelId,
   VectorCollection,
   VectorDocument,
   VectorSearchRequest,
@@ -136,6 +134,8 @@ import type {
   MyClaimsParams,
   OwnershipParams,
   CreatorRevenueSummary,
+  ClaimMarketplaceAssetRequest,
+  ClaimMarketplaceAssetResult,
 } from "@/types/publish_types";
 
 export interface ChatStreamCallbacks {
@@ -5896,6 +5896,12 @@ export class IpcClient {
 
   public async marketplaceCategories(): Promise<{ category: string; count: number }[]> {
     return this.ipcRenderer.invoke("marketplace:categories");
+  }
+
+  public async marketplaceClaimAsset(
+    request: ClaimMarketplaceAssetRequest,
+  ): Promise<ClaimMarketplaceAssetResult> {
+    return this.ipcRenderer.invoke("marketplace:claim-asset", request);
   }
 
   // ── Marketplace reads (wallet-scoped) ─────────────────────────────

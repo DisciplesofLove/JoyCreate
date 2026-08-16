@@ -775,8 +775,8 @@ export class OpenClawGatewayService extends EventEmitter {
               platform: "electron",
             },
             ...(token ? { auth: { token } } : {}),
-            minProtocol: 3,
-            maxProtocol: 3,
+            minProtocol: 4,
+            maxProtocol: 4,
             role: "operator",
             scopes: ["operator.admin"],
           },
@@ -917,11 +917,17 @@ export class OpenClawGatewayService extends EventEmitter {
         outFd = "ignore" as unknown as number;
         errFd = "ignore" as unknown as number;
       }
-      const child = spawn("cmd.exe", ["/c", gatewayCmdPath], {
+      // NOTE: gatewayCmdPath contains a space (e.g. "C:\Users\Wise AI\...").
+      // Passing it to `cmd.exe /c <path>` unquoted makes cmd split on the space
+      // and try to run "C:\Users\Wise" → "is not recognized" and the daemon
+      // never starts. Use `/s /c "<quoted path>"` with windowsVerbatimArguments
+      // so cmd treats the quoted string as a single path.
+      const child = spawn("cmd.exe", ["/d", "/s", "/c", `"${gatewayCmdPath}"`], {
         cwd: homedir,
         detached: true,
         stdio: ["ignore", outFd, errFd],
         windowsHide: true,
+        windowsVerbatimArguments: true,
       });
       child.unref();
       logger.info("Daemon process spawned (PID: " + child.pid + "), log: " + daemonLogPath);

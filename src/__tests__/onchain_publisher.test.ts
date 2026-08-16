@@ -21,6 +21,7 @@ import { OnchainPublisher } from "@/lib/joymarketplace/onchain_publisher";
 import {
   AMOY_ENS_CONTRACTS,
   ARB_SEPOLIA_ENS_CONTRACTS,
+  CANONICAL_EDITION_CONTROLLER_ABI,
   CONTRACT_ABIS,
   CONTRACT_ADDRESSES,
   POLYGON_AMOY,
@@ -161,5 +162,76 @@ describe("OnchainPublisher", () => {
     expect(r.to?.toLowerCase()).not.toBe(
       AMOY_ENS_CONTRACTS.JoyCreatorGate.toLowerCase(),
     );
+  });
+
+  it("createCanonicalEdition targets the deployed controller with claim conditions", async () => {
+    const send = vi.fn(async (method: string, params: unknown[]) => {
+      if (method === "eth_chainId") return `0x${POLYGON_AMOY.chainId.toString(16)}`;
+      if (method === "eth_call") {
+        const call = params[0] as { to?: string };
+        if (call?.to?.toLowerCase() === ARB_SEPOLIA_ENS_CONTRACTS.platformDrop.toLowerCase()) {
+          return "0x0000000000000000000000000000000000000000000000000000000000000009";
+        }
+      }
+      if (method === "eth_estimateGas") return "0x186a0";
+      throw new Error(`unexpected ${method}`);
+    });
+    const wallet = buildStubWallet(send);
+    const publisher = new OnchainPublisher(
+      wallet,
+      POLYGON_AMOY,
+      getMarketplaceChain("arbitrumSepolia"),
+    );
+    const indexedStoreNode = `0x${"ab".repeat(32)}`;
+    const result = await publisher.createCanonicalEdition(
+      {
+        storeSlug: "My-Store",
+        storeNode: indexedStoreNode,
+        metadataUri: "ipfs://bafyMeta",
+        priceUsdc: 1_500_000n,
+        maxSupply: 100n,
+      },
+      { dryRun: true },
+    );
+
+    expect(result.tokenId).toBe("9");
+    expect(result.to?.toLowerCase()).toBe(
+      ARB_SEPOLIA_ENS_CONTRACTS.EditionController.toLowerCase(),
+    );
+    const decoded = new ethers.Interface(
+      CANONICAL_EDITION_CONTROLLER_ABI,
+    ).parseTransaction({ data: result.data! });
+    expect(decoded?.name).toBe("createEdition");
+    expect(decoded?.args[0]).toBe(indexedStoreNode);
+    expect(decoded?.args[1]).toBe("ipfs://bafyMeta");
+    expect(decoded?.args[3].maxSupply).toBe(100n);
+    expect(decoded?.args[3].pricePerToken).toBe(1_500_000n);
+    expect(decoded?.args[3].quantityLimitPerWallet).toBe(1n);
+    expect(decoded?.args[3].currency.toLowerCase()).toBe(
+      "0x75faf114eafb1bdbe2f0316df893fd58ce46aa4d",
+    );
+  });
+
+  it("goldskyWatch detects the live Token entity", async () => {
+    const wallet = buildStubWallet(async () => {
+      throw new Error("RPC should not be called");
+    });
+    const publisher = new OnchainPublisher(wallet, POLYGON_AMOY);
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      expect(body.query).toContain("token(id: $id)");
+      return new Response(
+        JSON.stringify({ data: { token: { id: "9", tokenId: "9", baseURI: "ipfs://meta" } } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const result = await publisher.goldskyWatch(
+      "https://example.com/subgraph",
+      "9",
+      1_000,
+      fetchImpl as typeof fetch,
+    );
+    expect(result.indexed).toBe(true);
   });
 });

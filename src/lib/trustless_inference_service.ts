@@ -123,7 +123,19 @@ class TrustlessInferenceService {
   }
 
   async listModels(): Promise<LocalModelInfo[]> {
-    return localModelService.listAllModels();
+    const models = await localModelService.listAllModels();
+    const enriched = await Promise.all(
+      models.map(async (model) => {
+        if (model.provider !== "ollama") return model;
+        return (await localModelService.getModelInfo(model.provider, model.id)) ?? model;
+      }),
+    );
+
+    return enriched.filter(
+      (model) =>
+        !model.id.endsWith(":cloud") &&
+        (!model.capabilities?.length || model.capabilities.includes("completion")),
+    );
   }
 
   async getModelInfo(
@@ -155,6 +167,18 @@ class TrustlessInferenceService {
     const requestId = uuidv4();
     const timestamp = Date.now();
 
+    if (modelId.endsWith(":cloud")) {
+      throw new Error("Trustless Local Inference requires a model stored on this device.");
+    }
+
+    const modelInfo = await localModelService.getModelInfo(provider, modelId);
+    if (!modelInfo) {
+      throw new Error(`Model '${modelId}' is not available from ${provider}.`);
+    }
+    if (modelInfo.capabilities?.length && !modelInfo.capabilities.includes("completion")) {
+      throw new Error(`Model '${modelId}' does not support chat completion.`);
+    }
+
     // Build model config
     // The handler sends { options: { temperature, maxTokens, ... } }
     // but Ollama uses numPredict, so map maxTokens → numPredict
@@ -170,6 +194,7 @@ class TrustlessInferenceService {
         topK: opts?.topK as number | undefined,
         seed: opts?.seed as number | undefined,
         repeatPenalty: opts?.repeatPenalty as number | undefined,
+        numCtx: opts?.numCtx as number | undefined,
         stop: opts?.stop as string[] | undefined,
       },
     };
@@ -189,21 +214,11 @@ class TrustlessInferenceService {
       model: modelId,
     });
 
-    // Get model info for verification (best-effort — proof generation is
-    // skipped if the local registry doesn't know about the model, but the
-    // inference itself still runs as long as the provider can serve it).
-    const modelInfo = await this.getModelInfo(provider, modelId);
-    if (!modelInfo) {
-      logger.warn(
-        `Model not in local registry: ${provider}/${modelId} — running inference without verification proof`,
-      );
-    }
-
     // Run inference using the service
     const response = await localModelService.chat(request);
 
-    // Skip verification if requested, disabled, or model info is unavailable
-    if (options?.skipVerification || !this.config.enableVerification || !modelInfo) {
+    // Skip verification if requested or disabled.
+    if (options?.skipVerification || !this.config.enableVerification) {
       logger.info("Inference complete (unverified)", {
         id: requestId,
         tokens: response.totalTokens,
@@ -641,11 +656,8 @@ class TrustlessInferenceService {
       createdAt: new Date(),
     });
 
-    // Build full messages array including system prompt
+    // Build conversation history. Providers prepend systemPrompt exactly once.
     const allMessages: InferenceMessage[] = [];
-    if (convRow.systemPrompt) {
-      allMessages.push({ role: "system", content: convRow.systemPrompt });
-    }
     for (const m of existing) {
       allMessages.push({ role: m.role as InferenceMessage["role"], content: m.content });
     }

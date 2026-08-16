@@ -841,6 +841,7 @@ const validInvokeChannels = [
   "marketplace:install-asset",
   "marketplace:featured",
   "marketplace:categories",
+  "marketplace:claim-asset",
   // Marketplace Reads — wallet-scoped (DropERC1155 subgraph)
   "marketplace:my-drops",
   "marketplace:my-claims",
@@ -1729,6 +1730,7 @@ const validInvokeChannels = [
   "openclaw:gateway:health",
   "openclaw:gateway:restart",
   "openclaw:gateway:yield-to-daemon",
+  "openclaw:daemon:reachable",
   "openclaw:daemon:autostart-status",
   "openclaw:daemon:autostart-set",
   "openclaw:connection:status",

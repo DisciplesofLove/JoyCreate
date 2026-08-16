@@ -157,6 +157,19 @@ export interface MarketplaceBrowseResult {
   hasMore: boolean;
 }
 
+export interface ClaimMarketplaceAssetRequest {
+  tokenId: string;
+  quantity?: number;
+}
+
+export interface ClaimMarketplaceAssetResult {
+  tokenId: string;
+  quantity: string;
+  buyer: string;
+  txHash: string;
+  approvalTxHash?: string;
+}
+
 // Marketplace browse item (lighter than full MarketplaceAsset)
 export interface MarketplaceBrowseItem {
   id: string;

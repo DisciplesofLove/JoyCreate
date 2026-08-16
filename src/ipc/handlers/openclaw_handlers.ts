@@ -5,7 +5,7 @@
 
 import { ipcMain, IpcMainInvokeEvent, BrowserWindow } from "electron";
 import { v4 as uuidv4 } from "uuid";
-import { execFile, exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import log from "electron-log";
 
 import {
@@ -246,13 +246,16 @@ export function registerOpenClawHandlers(): void {
 
     logger.info("Spawning external OpenClaw daemon...");
 
-    // 1. Spawn the external daemon process (detached, survives JoyCreate restart)
-    const child = execFile(gatewayCmdPath, [], {
+    // 1. Spawn the external daemon process (detached, survives JoyCreate restart).
+    // gatewayCmdPath contains a space (e.g. "C:\Users\Wise AI\..."). It MUST be
+    // quoted and launched with `cmd.exe /d /s /c` + windowsVerbatimArguments,
+    // otherwise cmd splits on the space and fails with "is not recognized".
+    const child = spawn("cmd.exe", ["/d", "/s", "/c", `"${gatewayCmdPath}"`], {
       cwd: homedir,
       detached: true,
       stdio: "ignore",
       windowsHide: true,
-      shell: true,
+      windowsVerbatimArguments: true,
     });
     child.unref();
     logger.info("External daemon process spawned (PID: " + child.pid + ")");
@@ -292,6 +295,25 @@ export function registerOpenClawHandlers(): void {
 
   ipcMain.handle("openclaw:gateway:health", async () => {
     return gateway.getGatewayState();
+  });
+
+  // Direct HTTP liveness probe of the external daemon's portal (port 18790).
+  // The portal iframe ALWAYS targets the daemon, which may run independently of
+  // JoyCreate's bridge (e.g. as a Windows Scheduled Task). So "is the portal
+  // loadable?" must be answered by an actual HTTP probe, NOT by `bridged` — the
+  // daemon can be serving the portal while the bridge WS is not established.
+  // The renderer cannot probe 127.0.0.1:18790 itself (cross-origin/CORS), so we
+  // expose this main-process check for the Command page to gate the iframe on.
+  ipcMain.handle("openclaw:daemon:reachable", async () => {
+    const daemonPort = gateway.getConfig().gateway?.daemonPort ?? 18790;
+    try {
+      const resp = await fetch(`http://127.0.0.1:${daemonPort}/health`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      return { reachable: resp.ok, port: daemonPort };
+    } catch {
+      return { reachable: false, port: daemonPort };
+    }
   });
 
   ipcMain.handle("openclaw:connection:status", async () => {
@@ -1315,18 +1337,21 @@ Keep the enhanced prompt under 200 words. Respond with ONLY the enhanced prompt.
 
         // Create a VBScript wrapper that launches gateway.cmd hidden (no console window)
         const vbsPath = path.join(os.homedir(), ".openclaw", "start-gateway-hidden.vbs");
-        const escapedCmd = gatewayCmdPath.replace(/\\/g, "\\\\");
         const vbsContent = [
           `Set WshShell = CreateObject("WScript.Shell")`,
-          `WshShell.Run """${escapedCmd}""", 0, False`,
+          `WshShell.Run Chr(34) & "${gatewayCmdPath}" & Chr(34), 0, False`,
         ].join("\r\n");
         fs.writeFileSync(vbsPath, vbsContent, "utf8");
 
-        // Use PowerShell to create a .lnk shortcut pointing at the VBS wrapper
+        // Use PowerShell to create a .lnk shortcut that runs the VBS wrapper
+        // explicitly through wscript.exe. Pointing TargetPath directly at a
+        // .vbs file is shell-association dependent and can fail at logon.
+        const wscriptPath = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "wscript.exe");
         const psScript = [
           `$ws = New-Object -ComObject WScript.Shell;`,
           `$sc = $ws.CreateShortcut('${linkPath.replace(/'/g, "''")}');`,
-          `$sc.TargetPath = '${vbsPath.replace(/'/g, "''")}';`,
+          `$sc.TargetPath = '${wscriptPath.replace(/'/g, "''")}';`,
+          `$sc.Arguments = '"${vbsPath.replace(/'/g, "''")}"';`,
           `$sc.WorkingDirectory = '${path.dirname(gatewayCmdPath).replace(/'/g, "''")}';`,
           `$sc.Description = 'OpenClaw Gateway - auto-start';`,
           `$sc.Save()`,

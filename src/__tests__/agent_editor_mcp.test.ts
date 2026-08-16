@@ -25,6 +25,11 @@ vi.mock("electron-log", () => ({
 vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn() },
   BrowserWindow: { getFocusedWindow: () => null, getAllWindows: () => [] },
+  app: {
+    getPath: vi.fn(() => "/tmp/test-user-data"),
+    getAppPath: vi.fn(() => "/tmp/test-app"),
+    isPackaged: false,
+  },
 }));
 
 // ─── handleUpdateAgent persistence ────────────────────────────────────

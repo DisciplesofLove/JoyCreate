@@ -88,9 +88,16 @@ type ActivityLogEventType =
 // GATEWAY SERVICE
 // =============================================================================
 
+/**
+ * Process-global singleton key. See telegram_bot_service.ts: electron-forge's
+ * Vite build can load this module under two chunk identities (static `import`
+ * vs dynamic `await import()`) without deduping, which would duplicate a
+ * `private static instance` field and fork the gateway state (two bridges, two
+ * heartbeats, two daemon-respawn loops). Pinning on `globalThis` guarantees one.
+ */
+const OPENCLAW_GATEWAY_SINGLETON = Symbol.for("joycreate.openclawGatewayService");
+
 export class OpenClawGatewayService extends EventEmitter {
-  private static instance: OpenClawGatewayService;
-  
   private config: OpenClawConfig;
   private claudeCodeConfig: ClaudeCodeConfig;
   private state: OpenClawGatewayState;
@@ -140,10 +147,11 @@ export class OpenClawGatewayService extends EventEmitter {
   }
   
   static getInstance(): OpenClawGatewayService {
-    if (!OpenClawGatewayService.instance) {
-      OpenClawGatewayService.instance = new OpenClawGatewayService();
+    const g = globalThis as Record<symbol, OpenClawGatewayService | undefined>;
+    if (!g[OPENCLAW_GATEWAY_SINGLETON]) {
+      g[OPENCLAW_GATEWAY_SINGLETON] = new OpenClawGatewayService();
     }
-    return OpenClawGatewayService.instance;
+    return g[OPENCLAW_GATEWAY_SINGLETON]!;
   }
   
   // ===========================================================================
@@ -767,8 +775,8 @@ export class OpenClawGatewayService extends EventEmitter {
               platform: "electron",
             },
             ...(token ? { auth: { token } } : {}),
-            minProtocol: 3,
-            maxProtocol: 3,
+            minProtocol: 4,
+            maxProtocol: 4,
             role: "operator",
             scopes: ["operator.admin"],
           },
@@ -909,11 +917,17 @@ export class OpenClawGatewayService extends EventEmitter {
         outFd = "ignore" as unknown as number;
         errFd = "ignore" as unknown as number;
       }
-      const child = spawn("cmd.exe", ["/c", gatewayCmdPath], {
+      // NOTE: gatewayCmdPath contains a space (e.g. "C:\Users\Wise AI\...").
+      // Passing it to `cmd.exe /c <path>` unquoted makes cmd split on the space
+      // and try to run "C:\Users\Wise" → "is not recognized" and the daemon
+      // never starts. Use `/s /c "<quoted path>"` with windowsVerbatimArguments
+      // so cmd treats the quoted string as a single path.
+      const child = spawn("cmd.exe", ["/d", "/s", "/c", `"${gatewayCmdPath}"`], {
         cwd: homedir,
         detached: true,
         stdio: ["ignore", outFd, errFd],
         windowsHide: true,
+        windowsVerbatimArguments: true,
       });
       child.unref();
       logger.info("Daemon process spawned (PID: " + child.pid + "), log: " + daemonLogPath);

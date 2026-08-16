@@ -33,6 +33,8 @@ const ACTION_TO_TOOL: Record<string, AgentToolName> = {
 export interface BridgeConfig {
   /** App directory to operate in (replaces autonomous agent's codeDir) */
   appPath: string;
+  /** App numeric id, when known (used for runtime log lookup). */
+  appId?: number;
   /** Callback for streaming XML to the autonomous agent's event system */
   onOutput?: (xml: string) => void;
 }
@@ -52,9 +54,12 @@ function createSyntheticContext(config: BridgeConfig): AgentContext {
     // Tools that truly need sender (only consent-related code) are bypassed below.
     event: null as any,
     appPath: config.appPath,
+    appId: config.appId ?? -1,
     chatId: -1,
     supabaseProjectId: null,
     supabaseOrganizationSlug: null,
+    neonProjectId: null,
+    neonDevelopmentBranchId: null,
     messageId: -1,
     isSharedModulesChanged: false,
     onXmlStream: (xml: string) => config.onOutput?.(xml),

@@ -60,20 +60,44 @@ export function JoyWalletProviders({ children }: { children: ReactNode }) {
     initWalletRegistry();
   }, []);
 
+  // Privy's embedded wallet is only available over HTTPS (localhost is also
+  // accepted). Chromium treats file:// as a *secure context* (so
+  // `window.isSecureContext` is TRUE there — do NOT use it), but Privy checks
+  // the URL protocol and throws "Embedded wallet is only available over HTTPS"
+  // during render when it isn't https/localhost — which crashes the whole
+  // renderer before it can mount. The packaged desktop app serves the UI over
+  // file://, so gate Privy on the actual protocol instead.
+  const loc = typeof window !== "undefined" ? window.location : undefined;
+  const privyCanRun =
+    loc?.protocol === "https:" ||
+    (loc?.protocol === "http:" &&
+      (loc.hostname === "localhost" || loc.hostname === "127.0.0.1"));
+
   const inner = (
     <WagmiProvider config={wagmiConfig}>
       <ThirdwebProvider>
-        {PRIVY_APP_ID ? <JoyPrivyBridge /> : null}
+        {/* JoyPrivyBridge calls usePrivy(), which requires a mounted
+            PrivyProvider — only render it when Privy will actually mount
+            (app id set AND https/localhost). */}
+        {PRIVY_APP_ID && privyCanRun ? <JoyPrivyBridge /> : null}
         {children}
       </ThirdwebProvider>
     </WagmiProvider>
   );
 
-  if (!PRIVY_APP_ID) {
-    // No Privy app id configured — skip the provider so the app still
-    // boots. Privy-dependent UIs surface a clear "set VITE_PRIVY_APP_ID"
-    // message instead of bringing the whole window down with a white
-    // screen.
+  if (!PRIVY_APP_ID || !privyCanRun) {
+    // Skip the Privy provider entirely when either:
+    //   1. No Privy app id is configured, OR
+    //   2. The page isn't served over https/localhost (the packaged desktop
+    //      build serves the UI over file://). Privy eagerly initializes its
+    //      embedded wallet and throws "Embedded wallet is only available over
+    //      HTTPS" during render otherwise, crashing the whole renderer before
+    //      it can mount. Omitting the `embeddedWallets` config is NOT enough —
+    //      the provider must not mount at all.
+    // External wallets (MetaMask / WalletConnect via wagmi + thirdweb) still
+    // work; only Privy email/social/embedded-wallet login is unavailable in the
+    // packaged build. Re-enabling it requires serving the renderer from a
+    // custom secure (https) scheme instead of file://.
     return inner;
   }
 

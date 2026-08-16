@@ -21,8 +21,10 @@ import {
   listStoresByDomainOwner,
   summarizeDrop,
   getDropSubgraphUrl,
+  getStoreDropsSubgraphUrl,
   getStoresSubgraphUrl,
   DEFAULT_DROP_SUBGRAPH_URL,
+  DEFAULT_STORE_DROPS_SUBGRAPH_URL,
   DEFAULT_STORES_SUBGRAPH_URL,
   type DropToken,
 } from "@/lib/joymarketplace/drop_subgraph";
@@ -55,8 +57,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  delete process.env.JOYMARKETPLACE_DROP_SUBGRAPH_URL;
-  delete process.env.JOYMARKETPLACE_STORES_SUBGRAPH_URL;
+  delete process.env.JOYMARKETPLACE_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA;
+  delete process.env.JOYMARKETPLACE_STORE_DROPS_SUBGRAPH_URL_ARBITRUM_SEPOLIA;
+  delete process.env.JOYMARKETPLACE_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA;
 });
 
 const sampleToken: DropToken = {
@@ -81,13 +84,28 @@ const sampleToken: DropToken = {
 describe("endpoint resolution", () => {
   it("returns the default Goldsky URLs when env is unset", () => {
     expect(getDropSubgraphUrl()).toBe(DEFAULT_DROP_SUBGRAPH_URL);
+    expect(getStoreDropsSubgraphUrl()).toBe(DEFAULT_STORE_DROPS_SUBGRAPH_URL);
     expect(getStoresSubgraphUrl()).toBe(DEFAULT_STORES_SUBGRAPH_URL);
+    expect(DEFAULT_DROP_SUBGRAPH_URL).toContain(
+      "/joy-drop-arbitrum-sepolia/0.0.5/gn",
+    );
+    expect(DEFAULT_STORE_DROPS_SUBGRAPH_URL).toContain(
+      "/joy-store-drops-arbitrum-sepolia/0.0.2/gn",
+    );
+    expect(DEFAULT_STORES_SUBGRAPH_URL).toContain(
+      "/joy-stores-arbitrum-sepolia/0.0.4/gn",
+    );
   });
 
   it("respects env overrides", () => {
-    process.env.JOYMARKETPLACE_DROP_SUBGRAPH_URL = "https://example.com/drop";
-    process.env.JOYMARKETPLACE_STORES_SUBGRAPH_URL = "https://example.com/stores";
+    process.env.JOYMARKETPLACE_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA =
+      "https://example.com/drop";
+    process.env.JOYMARKETPLACE_STORE_DROPS_SUBGRAPH_URL_ARBITRUM_SEPOLIA =
+      "https://example.com/store-drops";
+    process.env.JOYMARKETPLACE_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA =
+      "https://example.com/stores";
     expect(getDropSubgraphUrl()).toBe("https://example.com/drop");
+    expect(getStoreDropsSubgraphUrl()).toBe("https://example.com/store-drops");
     expect(getStoresSubgraphUrl()).toBe("https://example.com/stores");
   });
 });
@@ -175,11 +193,17 @@ describe("listDropsByCreator", () => {
     await expect(listDropsByCreator({ creator: "" })).rejects.toThrow(/creator wallet is required/i);
   });
 
-  it("delegates to listDrops with same pagination semantics (subgraph lacks per-token creator)", async () => {
+  it("queries the store-scoped index by normalized creator wallet", async () => {
     mockOnce({ data: { tokens: [sampleToken] } });
-    const result = await listDropsByCreator({ creator: "0xabc", page: 2, pageSize: 10 });
+    const result = await listDropsByCreator({ creator: "0xABC", page: 2, pageSize: 10 });
     expect(result.items).toHaveLength(1);
-    expect(calls[0].body.variables).toMatchObject({ first: 10, skip: 10 });
+    expect(calls[0].url).toBe(DEFAULT_STORE_DROPS_SUBGRAPH_URL);
+    expect(calls[0].body.query).toContain("where: { creator: $creator }");
+    expect(calls[0].body.variables).toMatchObject({
+      creator: "0xabc",
+      first: 10,
+      skip: 10,
+    });
   });
 });
 

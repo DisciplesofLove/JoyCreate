@@ -105,14 +105,28 @@ Your AI runs on your hardware. Your data never leaves unless you choose. Your wo
 # Option 2: Build from source
 git clone https://github.com/DisciplesofLove/JoyCreate.git
 cd JoyCreate
-pnpm install
-pnpm run dev
+npm install
+npm start
 ```
 
 **Requirements:**
-- Node.js 18+ (or use the bundled binary)
+- Node.js 20+ (see `engines` in package.json)
 - 4GB RAM minimum (8GB recommended for local AI)
 - Windows 10+, macOS 12+, or Ubuntu 20.04+
+
+**Environment setup (optional):** copy `.env.example` to `.env` and fill in only the keys for features you use — everything core works with zero configuration. Never commit `.env`.
+
+**Useful commands:**
+```bash
+npm start           # Run in dev mode
+npm run test        # Unit tests (Vitest)
+npm run e2e         # E2E tests (Playwright)
+npm run lint        # Lint (oxlint)
+npm run ts          # Type-check
+npm run db:generate # Generate Drizzle migrations (never hand-write SQL)
+npm run package     # Package the app
+npm run make        # Build installers
+```
 
 **Optional (unlock local AI — 100% free):**
 ```bash
@@ -122,6 +136,25 @@ ollama pull llama3.2
 ```
 
 > 💡 **Tip:** JoyCreate auto-detects Ollama, LM Studio, and other local AI providers — no config needed.
+
+<br/>
+
+---
+
+## 📊 Feature Status
+
+JoyCreate ships fast — some subsystems are stable, others are clearly labeled experimental. Experimental features fail loudly rather than pretending to work.
+
+| Area | Status |
+|------|--------|
+| App builder (AI chat → code), agents, workflows, image/video studios, email client | ✅ Stable |
+| Local AI providers (Ollama, LM Studio, …), multi-model orchestration | ✅ Stable |
+| Marketplace publishing (on-chain pin → mint → list) | ✅ Stable |
+| Tokenomics / governance dashboard | 🧪 Experimental — record-keeping only, no on-chain enforcement |
+| Hybrid cloud bridge (sync/merge) | 🧪 Experimental — cloud sync not implemented yet |
+| Data leases (Lit Protocol key provisioning) | 🧪 Experimental — requires `JOY_LIT_*` config + Lit SDK |
+| GGUF model export, distributed GPU detection, JCN job recovery | 🧪 Experimental / not implemented |
+| Linux support | 🧪 Experimental |
 
 <br/>
 

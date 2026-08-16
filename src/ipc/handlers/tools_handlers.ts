@@ -35,9 +35,12 @@ function buildHeadlessContext(event?: IpcMainInvokeEvent): AgentContext {
   return {
     event: event as IpcMainInvokeEvent,
     appPath: "",
+    appId: -1,
     chatId: 0,
     supabaseProjectId: null,
     supabaseOrganizationSlug: null,
+    neonProjectId: null,
+    neonDevelopmentBranchId: null,
     messageId: 0,
     isSharedModulesChanged: false,
     onXmlStream: () => {},

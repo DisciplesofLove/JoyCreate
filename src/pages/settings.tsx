@@ -7,7 +7,7 @@ import { showSuccess, showError } from "@/lib/toast";
 import { AutoApproveSwitch } from "@/components/AutoApproveSwitch";
 import { TelemetrySwitch } from "@/components/TelemetrySwitch";
 import { MaxChatTurnsSelector } from "@/components/MaxChatTurnsSelector";
-import { ThinkingBudgetSelector } from "@/components/ThinkingBudgetSelector";
+import { ReasoningEffortSelector } from "@/components/ReasoningEffortSelector";
 import { useSettings } from "@/hooks/useSettings";
 import { useAppVersion } from "@/hooks/useAppVersion";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ import { RuntimeModeSelector } from "@/components/RuntimeModeSelector";
 import { NodePathSelector } from "@/components/NodePathSelector";
 import { AgentToolsSettings } from "@/components/settings/AgentToolsSettings";
 import { JoyIdentitySettings } from "@/components/settings/JoyIdentitySettings";
+import { SidebarCustomizationPanel } from "@/components/settings/SidebarCustomizationPanel";
 import { JoyMarketplaceSettings } from "@/components/settings/JoyMarketplaceSettings";
 import { CNSSettings } from "@/components/settings/CNSSettings";
 import { ExternalServicesSettings } from "@/components/settings/ExternalServicesSettings";
@@ -221,6 +222,14 @@ export default function SettingsPage() {
             >
               Open MCP Hub
             </Button>
+          </div>
+
+          {/* Sidebar Customization Section */}
+          <div
+            id="sidebar-settings"
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6"
+          >
+            <SidebarCustomizationPanel />
           </div>
 
           {/* Experiments Section */}
@@ -430,7 +439,7 @@ export function AISettings() {
       </h2>
 
       <div className="mt-4">
-        <ThinkingBudgetSelector />
+        <ReasoningEffortSelector variant="inline" />
       </div>
 
       <div className="mt-4">

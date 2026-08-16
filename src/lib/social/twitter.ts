@@ -191,7 +191,7 @@ async function apiFetch(
   return fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
-      ...(init?.headers ?? {}),
+      ...init?.headers,
       Authorization: `Bearer ${token}`,
     },
   });

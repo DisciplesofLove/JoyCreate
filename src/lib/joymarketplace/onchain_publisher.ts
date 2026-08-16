@@ -20,6 +20,8 @@ import { ethers } from "ethers";
 import log from "electron-log";
 import {
   AMOY_ENS_CONTRACTS,
+  ARB_SEPOLIA_ENS_CONTRACTS,
+  CANONICAL_EDITION_CONTROLLER_ABI,
   CONTRACT_ABIS,
   CONTRACT_ADDRESSES,
   POLYGON_AMOY,
@@ -64,6 +66,16 @@ export interface StylusMintInput {
   priceWei: bigint;
   /** Recipient — defaults to the publisher signer. */
   recipient?: string;
+}
+
+export interface CanonicalEditionInput {
+  storeSlug: string;
+  /** Authoritative node from the stores subgraph; preferred over slug derivation. */
+  storeNode?: string;
+  metadataUri: string;
+  priceUsdc: bigint;
+  maxSupply: bigint;
+  quantityLimitPerWallet?: bigint;
 }
 
 export interface ListingResult {
@@ -242,6 +254,75 @@ export class OnchainPublisher {
     };
   }
 
+  /** Create a claimable edition through the canonical Arbitrum controller. */
+  async createCanonicalEdition(
+    input: CanonicalEditionInput,
+    opts: { dryRun?: boolean } = {},
+  ): Promise<MintResult> {
+    const storeSlug = input.storeSlug.trim().toLowerCase();
+    if (!storeSlug) throw new Error("storeSlug is required");
+    if (!input.metadataUri) throw new Error("metadataUri is required");
+    if (input.maxSupply <= 0n) throw new Error("maxSupply must be positive");
+
+    const controller = new ethers.Contract(
+      ARB_SEPOLIA_ENS_CONTRACTS.EditionController,
+      CANONICAL_EDITION_CONTROLLER_ABI,
+      this.wallet,
+    );
+    const storeNode = input.storeNode ?? ethers.namehash(`${storeSlug}.joymarketplace.io`);
+    if (!ethers.isHexString(storeNode, 32)) {
+      throw new Error("storeNode must be a bytes32 hex value");
+    }
+    const claimParams = {
+      maxSupply: input.maxSupply,
+      pricePerToken: input.priceUsdc,
+      startTimestamp: 0n,
+      quantityLimitPerWallet: input.quantityLimitPerWallet ?? 1n,
+      currency: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+    };
+    const args = [
+      storeNode,
+      input.metadataUri,
+      input.metadataUri,
+      claimParams,
+    ] as const;
+    const calldata = controller.interface.encodeFunctionData("createEdition", args);
+    const nextTokenId = await new ethers.Contract(
+      ARB_SEPOLIA_ENS_CONTRACTS.platformDrop,
+      DROP_ERC1155_ABI,
+      this.provider,
+    ).nextTokenIdToMint() as bigint;
+
+    let gasEstimate = 0n;
+    try {
+      gasEstimate = await this.provider.estimateGas({
+        from: this.wallet.address,
+        to: ARB_SEPOLIA_ENS_CONTRACTS.EditionController,
+        data: calldata,
+      });
+    } catch (err) {
+      logger.warn(`createEdition gas estimate failed: ${(err as Error).message}`);
+    }
+
+    if (opts.dryRun) {
+      return {
+        tokenId: nextTokenId.toString(),
+        gasEstimate,
+        dryRun: true,
+        to: ARB_SEPOLIA_ENS_CONTRACTS.EditionController,
+        data: calldata,
+      };
+    }
+
+    const tx = await controller.createEdition(...args);
+    const receipt = await tx.wait();
+    return {
+      tokenId: nextTokenId.toString(),
+      txHash: receipt?.hash ?? tx.hash,
+      gasEstimate,
+    };
+  }
+
   // -- Stylus mint (Arbitrum) ----------------------------------------------
 
   /**
@@ -392,7 +473,7 @@ export class OnchainPublisher {
   // -- Goldsky --------------------------------------------------------------
 
   /**
-   * Poll a Goldsky subgraph until the given tokenId shows up as an Asset,
+  * Poll a Goldsky subgraph until the given tokenId shows up as a Token,
    * or until `timeoutMs` elapses. Best-effort — never throws.
    */
   async goldskyWatch(
@@ -403,7 +484,7 @@ export class OnchainPublisher {
   ): Promise<GoldskyWatchResult> {
     if (!subgraphUrl) return { indexed: false, error: "no subgraph url" };
     const start = Date.now();
-    const query = `query Asset($id: ID!) { asset(id: $id) { id tokenId tokenUri } }`;
+    const query = `query Token($id: ID!) { token(id: $id) { id tokenId baseURI } }`;
     while (Date.now() - start < timeoutMs) {
       try {
         const res = await fetchImpl(subgraphUrl, {
@@ -412,9 +493,9 @@ export class OnchainPublisher {
           body: JSON.stringify({ query, variables: { id: tokenId } }),
         });
         if (res.ok) {
-          const json = (await res.json()) as { data?: { asset?: unknown } };
-          if (json.data?.asset) {
-            return { indexed: true, asset: json.data.asset };
+          const json = (await res.json()) as { data?: { token?: unknown } };
+          if (json.data?.token) {
+            return { indexed: true, asset: json.data.token };
           }
         }
       } catch (err) {

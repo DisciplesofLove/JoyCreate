@@ -102,6 +102,14 @@ class OpenClawClientImpl {
     return this.ipcRenderer.invoke("openclaw:gateway:status");
   }
 
+  /**
+   * Direct HTTP liveness probe of the external daemon portal (port 18790).
+   * Independent of bridge state — reports whether the portal iframe can load.
+   */
+  async isDaemonReachable(): Promise<{ reachable: boolean; port: number }> {
+    return this.ipcRenderer.invoke("openclaw:daemon:reachable");
+  }
+
   // ===========================================================================
   // DAEMON AUTO-START
   // ===========================================================================

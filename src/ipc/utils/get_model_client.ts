@@ -91,7 +91,8 @@ export async function getModelClient(
         originalProviderId: model.provider,
         joyOptions: {
           enableLazyEdits:
-            settings.selectedChatMode === "ask"
+            settings.selectedChatMode === "ask" ||
+            settings.selectedChatMode === "plan"
               ? false
               : settings.enableProLazyEditsMode &&
                 settings.proLazyEditsMode !== "v2",

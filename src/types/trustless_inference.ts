@@ -20,6 +20,7 @@ export interface LocalModelInfo {
   family?: string;
   parameters?: string;
   contextLength?: number;
+  capabilities?: string[];
   modifiedAt?: string;
   digest?: string; // Ollama digest
 }

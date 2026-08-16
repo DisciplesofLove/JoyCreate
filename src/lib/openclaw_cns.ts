@@ -128,9 +128,14 @@ export interface AIResponse {
 // OPENCLAW CENTRAL NERVOUS SYSTEM
 // =============================================================================
 
+/**
+ * Process-global singleton key. See telegram_bot_service.ts: guards against the
+ * Vite static-vs-dynamic-import chunk-duplication bug that would otherwise fork
+ * the CNS "brain" into two instances with divergent stats and routing state.
+ */
+const OPENCLAW_CNS_SINGLETON = Symbol.for("joycreate.openclawCNS");
+
 export class OpenClawCNS extends EventEmitter {
-  private static instance: OpenClawCNS;
-  
   private config: CNSConfig = {
     enabled: true,
     ollama: {},
@@ -161,10 +166,11 @@ export class OpenClawCNS extends EventEmitter {
   }
   
   static getInstance(): OpenClawCNS {
-    if (!OpenClawCNS.instance) {
-      OpenClawCNS.instance = new OpenClawCNS();
+    const g = globalThis as Record<symbol, OpenClawCNS | undefined>;
+    if (!g[OPENCLAW_CNS_SINGLETON]) {
+      g[OPENCLAW_CNS_SINGLETON] = new OpenClawCNS();
     }
-    return OpenClawCNS.instance;
+    return g[OPENCLAW_CNS_SINGLETON]!;
   }
   
   // ===========================================================================

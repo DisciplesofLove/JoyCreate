@@ -156,6 +156,7 @@ export const ChatModeSchema = z.enum([
   "autonomous",
   "mcp",
   "local-agent",
+  "plan",
 ]);
 export type ChatMode = z.infer<typeof ChatModeSchema>;
 
@@ -222,6 +223,27 @@ export const ExperimentsSchema = z.object({
   enableFileEditing: z.boolean().describe("DEPRECATED").optional(),
 });
 export type Experiments = z.infer<typeof ExperimentsSchema>;
+
+/**
+ * User customization for which sidebar navigation items are shown.
+ *
+ * Visibility rules (see `isSidebarItemVisible` in `sidebar-menu.ts`):
+ * - Stable items (no `stage`): visible unless their id is in `hiddenItems`.
+ * - Beta/dev items: hidden by default. Revealed either by the matching master
+ *   switch (`showBeta` / `showDev`) or by adding their id to `enabledItems`.
+ *   An explicit entry in `hiddenItems` always wins.
+ */
+export const SidebarPreferencesSchema = z.object({
+  /** Ids of items the user has explicitly hidden (applies to any stage). */
+  hiddenItems: z.array(z.string()).optional(),
+  /** Ids of individual beta/dev items the user has explicitly turned on. */
+  enabledItems: z.array(z.string()).optional(),
+  /** Master switch: reveal all `beta` items at once. */
+  showBeta: z.boolean().optional(),
+  /** Master switch: reveal all `dev` (in-development) items at once. */
+  showDev: z.boolean().optional(),
+});
+export type SidebarPreferences = z.infer<typeof SidebarPreferencesSchema>;
 
 export const JoyBudgetSchema = z.object({
   budgetResetAt: z.string(),
@@ -296,9 +318,17 @@ export const UserSettingsSchema = z.object({
   /** @deprecated All features are now free. Kept for backward compat with existing settings files. */
   enableJoyPro: z.boolean().optional(),
   experiments: ExperimentsSchema.optional(),
+  /** Per-user customization of which sidebar navigation items are shown. */
+  sidebar: SidebarPreferencesSchema.optional(),
   lastShownReleaseNotesVersion: z.string().optional(),
   maxChatTurnsInContext: z.number().optional(),
+  /** Advanced: token budget for the chat-history portion of AI requests. Default: DEFAULT_CONTEXT_TOKEN_BUDGET. */
+  contextTokenBudget: z.number().min(2_000).optional(),
   thinkingBudget: z.enum(["low", "medium", "high"]).optional(),
+  /** Copilot-style reasoning effort preset. Overrides `thinkingBudget` when set. */
+  reasoningEffort: z.enum(["low", "medium", "high", "ultra"]).optional(),
+  /** Advanced: explicit sampling temperature (0-2). null/undefined = use the model default. */
+  temperatureOverride: z.number().min(0).max(2).nullable().optional(),
   enableProLazyEditsMode: z.boolean().optional(),
   proLazyEditsMode: z.enum(["off", "v1", "v2"]).optional(),
   enableProSmartFilesContextMode: z.boolean().optional(),
@@ -391,6 +421,15 @@ export const UserSettingsSchema = z.object({
    * - `"daemon"`: the OpenClaw daemon owns Telegram (legacy behavior).
    */
   telegramOwner: z.enum(["local", "daemon"]).optional(),
+  /**
+   * JoyCreate's OWN independent Telegram bot token for the in-process agentic
+   * bot ("the agent"). When set, the local bot polls this token directly,
+   * decoupled from the OpenClaw daemon's `channels.telegram.botToken` ("the
+   * bot"). This lets the agent run on a dedicated bot while the daemon can
+   * optionally run a separate plain bot on its own token. Stored here (not in
+   * openclaw.json) so it survives the daemon's periodic config rewrites.
+   */
+  telegramBotToken: z.string().optional(),
 
   ////////////////////////////////
   // E2E TESTING ONLY.

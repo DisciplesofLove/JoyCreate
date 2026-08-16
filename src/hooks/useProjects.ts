@@ -9,6 +9,7 @@ import type {
   CreateProjectParams,
   UpdateProjectParams,
   DeleteProjectParams,
+  AssignAppToProjectParams,
   Project,
   ProjectWithApps,
 } from "@/types/project_types";
@@ -147,6 +148,36 @@ export function useToggleProjectFavorite() {
     },
     onError: (error: Error) => {
       toast.error(`Failed to update favorite: ${error.message}`);
+    },
+  });
+}
+
+/**
+ * Hook to assign an app to a collection (project), or remove it from any
+ * collection by passing `projectId: null`.
+ */
+export function useAssignAppToProject() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (params: AssignAppToProjectParams) => {
+      await IpcClient.getInstance().assignAppToProject(params);
+      return params;
+    },
+    onSuccess: ({ projectId }: AssignAppToProjectParams) => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["apps"] });
+      if (projectId !== null) {
+        queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      }
+      toast.success(
+        projectId === null
+          ? "App removed from collection"
+          : "App added to collection",
+      );
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to move app: ${error.message}`);
     },
   });
 }

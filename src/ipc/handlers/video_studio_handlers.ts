@@ -473,7 +473,7 @@ async function generateWithGoogleVeo(params: GenerateVideoParams): Promise<{ fil
   //   - Veo 2.x  → "allow_adult" | "dont_allow"
   // For image-to-video, Veo locks person generation regardless, so omit it
   // to avoid "not supported" errors.
-  const isVeo3 = /^veo-3/.test(model);
+  const isVeo3 = model.startsWith('veo-3');
   const isImageToVideo = Boolean(instance.image);
   const personGeneration = isImageToVideo
     ? undefined

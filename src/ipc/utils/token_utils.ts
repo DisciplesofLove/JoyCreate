@@ -1,4 +1,4 @@
-import { LargeLanguageModel } from "@/lib/schemas";
+import { LargeLanguageModel, type UserSettings } from "@/lib/schemas";
 import { readSettings } from "../../main/settings";
 import { Message } from "../ipc_types";
 import type { ModelMessage } from "ai";
@@ -212,7 +212,17 @@ export async function getMaxTokens(
 
 export async function getTemperature(
   model: LargeLanguageModel,
+  settings?: UserSettings,
 ): Promise<number> {
+  // An explicit user override always wins — this is the escape hatch for
+  // models/providers that reject the model's default temperature.
+  if (
+    settings != null &&
+    typeof settings.temperatureOverride === "number" &&
+    Number.isFinite(settings.temperatureOverride)
+  ) {
+    return settings.temperatureOverride;
+  }
   const modelOption = await findLanguageModel(model);
   return modelOption?.temperature ?? 0;
 }

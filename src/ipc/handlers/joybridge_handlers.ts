@@ -406,8 +406,20 @@ export function registerJoyBridgeHandlers(): void {
           name: input.name,
           description: input.description,
           contentBuffer: buf,
+          contentCid: input.contentCid,
           contentMimeType: input.contentMimeType,
-          metadata: input.properties,
+          metadata: {
+            ...input.properties,
+            storeId: input.storeId,
+          },
+          storeSlug:
+            typeof input.properties?.storeSlug === "string"
+              ? input.properties.storeSlug
+              : input.storeId,
+          storeNode:
+            typeof input.properties?.storeNode === "string"
+              ? input.properties.storeNode
+              : undefined,
           priceUsdc: typeof input.priceUsdc === "number" ? input.priceUsdc : undefined,
           royaltyBps: input.royaltyBps,
           quantity: input.quantity ?? 1,

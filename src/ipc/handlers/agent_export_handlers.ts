@@ -824,6 +824,12 @@ const API_KEY    = process.env.API_KEY    || "";
 const BASE_URL   = process.env.BASE_URL   || "https://api.openai.com/v1";
 const MODEL_ID   = process.env.MODEL_ID   || ${JSON.stringify(agent.modelId || "gpt-5-mini")};
 const PORT       = parseInt(process.env.PORT || "3001", 10);
+// Default to loopback for safety: an exported agent should not expose its
+// chat / API surface to the local network unless the operator explicitly
+// flips HOST=0.0.0.0. The /api/chat endpoint forwards prompts to the
+// upstream model with API_KEY — anyone reaching it on the LAN can burn
+// the operator's billing quota.
+const HOST       = process.env.HOST || "127.0.0.1";
 const SYSTEM_PROMPT = ${JSON.stringify(agent.systemPrompt || "You are a helpful AI assistant.")};
 
 const MIME = { ".html": "text/html", ".js": "application/javascript", ".css": "text/css", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml" };
@@ -929,7 +935,7 @@ function generateWidgetLoader() {
 \`;
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   console.log("");
   console.log("  ðŸ¤– ${agent.name} Chat Widget");
   console.log("  â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€");

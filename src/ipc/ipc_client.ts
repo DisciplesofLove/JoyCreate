@@ -60,6 +60,8 @@ import type {
   GetNeonProjectResponse,
   RevertVersionResponse,
   RevertVersionParams,
+  GetVersionDiffParams,
+  GitDiffResult,
   RespondToAppInputParams,
   PromptDto,
   CreatePromptParamsDto,
@@ -103,8 +105,6 @@ import type {
 import { showError } from "@/lib/toast";
 import { DeepLinkData } from "./deep_link_data";
 import type {
-  CollectionId,
-  ModelId,
   VectorCollection,
   VectorDocument,
   VectorSearchRequest,
@@ -134,6 +134,8 @@ import type {
   MyClaimsParams,
   OwnershipParams,
   CreatorRevenueSummary,
+  ClaimMarketplaceAssetRequest,
+  ClaimMarketplaceAssetResult,
 } from "@/types/publish_types";
 
 export interface ChatStreamCallbacks {
@@ -1186,6 +1188,14 @@ export class IpcClient {
     return this.ipcRenderer.invoke("get-current-branch", {
       appId,
     });
+  }
+
+  // Get the diff for a specific version (what the commit changed, or a diff
+  // between two commits when previousVersionId is provided).
+  public async getVersionDiff(
+    params: GetVersionDiffParams,
+  ): Promise<GitDiffResult> {
+    return this.ipcRenderer.invoke("get-version-diff", params);
   }
 
   // Get user settings
@@ -3810,6 +3820,12 @@ export class IpcClient {
     return this.ipcRenderer.invoke("project:delete", params);
   }
 
+  public async assignAppToProject(
+    params: import("../types/project_types").AssignAppToProjectParams
+  ): Promise<void> {
+    return this.ipcRenderer.invoke("project:assign-app", params);
+  }
+
   // ==========================================================================
   // Model Factory Methods (LoRA/QLoRA Training)
   // ==========================================================================
@@ -5880,6 +5896,12 @@ export class IpcClient {
 
   public async marketplaceCategories(): Promise<{ category: string; count: number }[]> {
     return this.ipcRenderer.invoke("marketplace:categories");
+  }
+
+  public async marketplaceClaimAsset(
+    request: ClaimMarketplaceAssetRequest,
+  ): Promise<ClaimMarketplaceAssetResult> {
+    return this.ipcRenderer.invoke("marketplace:claim-asset", request);
   }
 
   // ── Marketplace reads (wallet-scoped) ─────────────────────────────

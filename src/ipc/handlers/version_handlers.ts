@@ -6,6 +6,7 @@ import type {
   BranchResult,
   RevertVersionParams,
   RevertVersionResponse,
+  GetVersionDiffParams,
 } from "../ipc_types";
 import type { GitCommit } from "../git_types";
 import fs from "node:fs";
@@ -25,6 +26,7 @@ import {
   gitLog,
   isGitStatusClean,
 } from "../utils/git_utils";
+import type { GitDiffResult } from "../utils/git_utils";
 
 import {
   getNeonClient,
@@ -150,6 +152,34 @@ export function registerVersionHandlers() {
         logger.error(`Error getting current branch for app ${appId}:`, error);
         throw new Error(`Failed to get current branch: ${error.message}`);
       }
+    },
+  );
+
+  handle(
+    "get-version-diff",
+    async (
+      _,
+      { appId, versionId, previousVersionId }: GetVersionDiffParams,
+    ): Promise<GitDiffResult> => {
+      const app = await db.query.apps.findFirst({
+        where: eq(apps.id, appId),
+      });
+
+      if (!app) {
+        throw new Error("App not found");
+      }
+
+      const appPath = getJoyAppPath(app.path);
+
+      if (!fs.existsSync(path.join(appPath, ".git"))) {
+        return { patch: "", files: [], insertions: 0, deletions: 0 };
+      }
+
+      return gitDiffNative({
+        path: appPath,
+        toOid: versionId,
+        fromOid: previousVersionId,
+      });
     },
   );
 

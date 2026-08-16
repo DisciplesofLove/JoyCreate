@@ -635,8 +635,15 @@ export const ARB_SEPOLIA_ENS_CONTRACTS = {
   JoyCreatorGate: "0x70e575b3546852808e742d21c16aabeeccd5d424" as const,
   /** DropERC1155 ERC1967 proxy — the address the subgraph indexes. */
   platformDrop: "0x61672aa9c97342183481455834e6e944ea64e552" as const,
+  /** Canonical controller that lazy-mints and installs claim conditions. */
+  EditionController: "0xF3c41b1E3aE3Db0e91985cB140781Ada636AD617" as const,
   Treasury: "0x5939229582A5b42A6C5f55Fe55eC47523Cd5B9FE" as const,
 } as const;
+
+export const CANONICAL_EDITION_CONTROLLER_ABI = [
+  "function createEdition(bytes32 storeNode, string metadataURI, string agentCardURI, (uint256 maxSupply, uint256 pricePerToken, uint256 startTimestamp, uint256 quantityLimitPerWallet, address currency) claimParams) returns (uint256 tokenId, uint256 identityId)",
+  "event EditionCreated(bytes32 indexed storeNode, uint256 indexed tokenId, uint256 storeIdentityId, uint256 editionIdentityId, address creator)",
+] as const;
 
 /** ENS parent domain per chain (different from the .joy 2LD on Amoy). */
 export const ARB_SEPOLIA_PARENT_DOMAIN = "joymarketplace.io" as const;

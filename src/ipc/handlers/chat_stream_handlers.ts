@@ -58,7 +58,20 @@ import * as os from "os";
 import * as crypto from "crypto";
 import { readFile, writeFile, unlink } from "fs/promises";
 import { getMaxTokens, getTemperature, estimateRequestTokens, trimMessagesToFitBudget, buildCompressedChatMessages, estimateTokens } from "../utils/token_utils";
-import { MAX_CHAT_TURNS_IN_CONTEXT } from "@/constants/settings_constants";
+import {
+  MAX_CHAT_TURNS_IN_CONTEXT,
+  DEFAULT_CONTEXT_TOKEN_BUDGET,
+  MIN_CONTEXT_TOKEN_BUDGET,
+} from "@/constants/settings_constants";
+import {
+  readBuilderMemory,
+  buildBuilderMemoryBlock,
+  type BuilderMemory,
+} from "../utils/builder_memory";
+import {
+  getStoredChatSummary,
+  updateChatSummaryInBackground,
+} from "../utils/chat_summary_utils";
 import { validateChatContext } from "../utils/context_paths_utils";
 import { getProviderOptions, getAiHeaders } from "../utils/provider_options";
 import { tokenRateLimiter } from "../utils/token_rate_limiter";
@@ -731,6 +744,14 @@ ${componentSnippet}
           enableTurboEditsV2: isTurboEditsV2Enabled(settings),
         });
 
+        // Anchor the builder to a self-maintained PROJECT.md spec so it doesn't
+        // drift from the original spec across turns. Skipped in "ask" mode (no
+        // file writes); summarize/security-review intents replace systemPrompt
+        // entirely below, so this addition is harmlessly dropped for those.
+        if (settings.selectedChatMode !== "ask") {
+          systemPrompt += PROJECT_SPEC_PROTOCOL;
+        }
+
         // For local models (Ollama, LM Studio), add an extra reinforcement
         // because smaller models sometimes ignore <joy-write> instructions.
         // Skip for local-agent mode: it uses XML tool emulation with its own
@@ -999,13 +1020,42 @@ This conversation includes one or more image attachments. When the user uploads 
           logger.warn("Vault context injection failed (non-fatal)", { error: vaultErr });
         }
 
+        // Inject the current PROJECT.md and builder memory (.joy/memory/) as an
+        // authoritative anchor ahead of the codebase context. Read fresh each
+        // turn so the model always sees the latest state. Skipped in
+        // ask/summarize/security-review flows.
+        let projectSpecPrefix: {
+          role: "user" | "assistant";
+          content: string;
+        }[] = [];
+        if (
+          settings.selectedChatMode !== "ask" &&
+          !isSummarizeIntent &&
+          !isSecurityReviewIntent
+        ) {
+          const projectSpec = await readProjectSpec(appPath);
+          const builderMemory = await readBuilderMemory(appPath);
+          if (projectSpec || builderMemory) {
+            projectSpecPrefix = buildProjectSpecPrefix(
+              projectSpec,
+              builderMemory,
+            );
+          }
+        }
+
         const codebasePrefix = isEngineEnabled
           ? // No codebase prefix if engine is set, we will take of it there.
             []
           : (() => {
-              // Cap codebase content to ~5k chars (~1.8k tokens at 2.8 ratio) to fit within
-              // the 30k rate limit after system prompt (~2.5k), history (~3k), and user prompt.
-              const MAX_CODEBASE_CHARS = 5_000;
+              // Cap codebase content proportionally to the context token budget
+              // (~25% of the budget, converted to chars at the 2.8 ratio). The
+              // overall trimMessagesToFitBudget pass still enforces the total.
+              const contextBudget =
+                settings.contextTokenBudget || DEFAULT_CONTEXT_TOKEN_BUDGET;
+              const MAX_CODEBASE_CHARS = Math.max(
+                5_000,
+                Math.round((contextBudget / 4) * 2.8),
+              );
               let codebaseContent = createCodebasePrompt(codebaseInfo);
               if (codebaseContent.length > MAX_CODEBASE_CHARS) {
                 logger.log(
@@ -1064,8 +1114,37 @@ This conversation includes one or more image attachments. When the user uploads 
           },
         }));
 
+        // Rolling conversation summary: when older turns were dropped from the
+        // context window, inject the stored cumulative summary of the earlier
+        // conversation so long-running builds don't lose their history.
+        let summaryPrefix: { role: "user" | "assistant"; content: string }[] =
+          [];
+        if (
+          messageHistory.length > limitedMessageHistory.length &&
+          settings.selectedChatMode !== "ask" &&
+          !isSummarizeIntent
+        ) {
+          const storedSummary = await getStoredChatSummary(req.chatId).catch(
+            () => null,
+          );
+          if (storedSummary) {
+            summaryPrefix = [
+              {
+                role: "user" as const,
+                content: `[Conversation memory — cumulative summary of earlier turns in this chat]\n${storedSummary.summary}`,
+              },
+              { role: "assistant" as const, content: "OK." },
+            ];
+          }
+        }
+
         let chatMessages: ModelMessage[] = buildCompressedChatMessages(
-          [...codebasePrefix, ...otherCodebasePrefix],
+          [
+            ...projectSpecPrefix,
+            ...codebasePrefix,
+            ...otherCodebasePrefix,
+            ...summaryPrefix,
+          ],
           limitedHistoryChatMessages,
           // Keep recent dialog verbatim so the agent can actually follow the
           // conversation. Earlier versions capped at 3k tokens / 2 messages,
@@ -1131,7 +1210,7 @@ This conversation includes one or more image attachments. When the user uploads 
         // --- System Prompt Hard Cap ---
         // If the system prompt grew too large due to RAG, memory, Supabase context,
         // etc., truncate it to fit the token budget. This is a last-resort safety.
-        const MAX_SYSTEM_PROMPT_CHARS = 7_000; // ~2.5k tokens at 2.8 ratio
+        const MAX_SYSTEM_PROMPT_CHARS = 12_000; // ~4.3k tokens at 2.8 ratio
         if (systemPrompt.length > MAX_SYSTEM_PROMPT_CHARS) {
           logger.warn(
             `System prompt truncated from ${systemPrompt.length} to ${MAX_SYSTEM_PROMPT_CHARS} chars ` +
@@ -1197,7 +1276,9 @@ This conversation includes one or more image attachments. When the user uploads 
           const trimmedMessages = trimMessagesToFitBudget(
             systemPromptOverride,
             filteredMessages,
-            6_000, // Hard cap — system (~2.5k) + messages (6k) = ~8.5k, leaves room for caching overhead
+            // User-overridable history budget (default 24k tokens). Rate-limit
+            // retries below step this down proportionally when needed.
+            settings.contextTokenBudget || DEFAULT_CONTEXT_TOKEN_BUDGET,
           );
           const estimatedTokens = estimateRequestTokens(
             systemPromptOverride,
@@ -1283,7 +1364,7 @@ This conversation includes one or more image attachments. When the user uploads 
               builtinProviderId: modelClient.builtinProviderId,
             }),
             maxOutputTokens: await getMaxTokens(settings.selectedModel),
-            temperature: await getTemperature(settings.selectedModel),
+            temperature: await getTemperature(settings.selectedModel, settings),
             maxRetries: 0, // Disabled — we handle rate-limit retries ourselves with proper backoff
             model: modelClient.model,
             stopWhen: [
@@ -1555,8 +1636,14 @@ This conversation includes one or more image attachments. When the user uploads 
           // On retries, progressively trim chatMessages to reduce token count.
           // Each retry removes more history context to get under the limit.
           if (rateLimitAttempt > 0) {
-            const budgetReduction = rateLimitAttempt * 1_500; // remove ~1.5k more tokens each retry
-            const newBudget = Math.max(6_000 - budgetReduction, 2_000);
+            // Proportional stepdown: 25% less budget per retry, floored so the
+            // agent always keeps a workable amount of context.
+            const baseBudget =
+              settings.contextTokenBudget || DEFAULT_CONTEXT_TOKEN_BUDGET;
+            const newBudget = Math.max(
+              Math.round(baseBudget * (1 - 0.25 * rateLimitAttempt)),
+              MIN_CONTEXT_TOKEN_BUDGET,
+            );
             logger.log(
               `Rate limit retry #${rateLimitAttempt}: reducing token budget to ${newBudget}`,
             );
@@ -2043,9 +2130,11 @@ ${problemReport.problems
               rateLimitAttempt < MAX_RATE_LIMIT_RETRIES
             ) {
               const waitSecs = Math.round(RATE_LIMIT_WAIT_MS / 1000);
+              const retryBaseBudget =
+                settings.contextTokenBudget || DEFAULT_CONTEXT_TOKEN_BUDGET;
               const nextBudget = Math.max(
-                6_000 - (rateLimitAttempt + 1) * 1_500,
-                2_000,
+                Math.round(retryBaseBudget * (1 - 0.25 * (rateLimitAttempt + 1))),
+                MIN_CONTEXT_TOKEN_BUDGET,
               );
               logger.warn(
                 `Rate limit hit (attempt ${rateLimitAttempt + 1}/${MAX_RATE_LIMIT_RETRIES + 1}). ` +
@@ -2297,6 +2386,15 @@ ${problemReport.problems
             updatedFiles: false,
           } satisfies ChatResponseEnd);
         }
+
+        // Refresh the rolling conversation summary in the background so long
+        // chats retain earlier context on future turns (fire-and-forget).
+        const isSummarizePrompt = req.prompt.startsWith(
+          "Summarize from chat-id=",
+        );
+        if (settings.selectedChatMode !== "ask" && !isSummarizePrompt) {
+          void updateChatSummaryInBackground(req.chatId);
+        }
       }
 
       // Return the chat ID for backwards compatibility
@@ -2547,6 +2645,111 @@ function escapeJoyTags(text: string): string {
 const CODEBASE_PROMPT_PREFIX = "This is my codebase.";
 function createCodebasePrompt(codebaseInfo: string): string {
   return `${CODEBASE_PROMPT_PREFIX} ${codebaseInfo}`;
+}
+
+// ── PROJECT.md spec anchor ────────────────────────────────────────────────────
+// A self-maintained source-of-truth file that keeps the builder locked to the
+// original spec across turns. We read it at the start of every turn and inject
+// it as an authoritative anchor; the model rewrites it at the end of every turn
+// via a <joy-write path="PROJECT.md"> tag, so the existing write-tag pipeline
+// persists it automatically — no custom parsing required.
+const PROJECT_SPEC_FILENAME = "PROJECT.md";
+
+const PROJECT_SPEC_PROTOCOL = `
+
+# PROJECT.md — Project Spec (Source of Truth)
+This app maintains a \`PROJECT.md\` file in its root that is the single source of truth for what is being built. Follow this protocol on EVERY turn:
+
+1. If a PROJECT.md is provided in the context below, treat its **Core Spec** and **Known constraints / things NOT to change** sections as binding. Do NOT deviate from them unless the user EXPLICITLY asks to change the spec.
+2. If the user's new request seems unrelated to the Core Spec, treat it as an ADDITION or MODIFICATION to the existing project — NOT a new project — unless the user explicitly says "start over" or "new project".
+3. At the END of your response you MUST output an updated PROJECT.md using a \`<joy-write path="PROJECT.md">\` tag, reflecting any new files, decisions, or state changes from this turn. Never omit this. Keep it concise.
+4. If no PROJECT.md exists yet (none provided below), CREATE it this turn with a \`<joy-write path="PROJECT.md">\` tag, locking in the Core Spec derived from the user's request.
+5. The app also maintains a \`.joy/memory/\` folder (its contents are provided in context when present):
+   - \`.joy/memory/progress.md\` — an auto-maintained build ledger written by the system after every turn. NEVER write this file yourself.
+   - \`.joy/memory/decisions.md\` — when you make an important design/architecture decision, APPEND it here via \`<joy-write path=".joy/memory/decisions.md">\` (rewrite the file including prior entries plus the new one; one \`## {decision title}\` heading per entry).
+   - \`.joy/memory/todo.md\` — maintain the list of open/planned work here via \`<joy-write path=".joy/memory/todo.md">\` whenever it changes (markdown checklist).
+
+Use this exact PROJECT.md structure:
+\`\`\`
+# Project: {name}
+Last updated: turn {n}
+
+## Core Spec (do not deviate without explicit user instruction)
+{1-3 sentence description of what is being built, locked in on turn 1}
+
+## Tech stack
+{frameworks, libraries, file structure conventions}
+
+## Current file tree
+{list of files + one-line purpose of each}
+
+## Design decisions locked in
+- {decision}: {why}
+
+## Known constraints / things NOT to change
+- {e.g. "color scheme is fixed", "do not restructure routing"}
+
+## Next intended step
+{what the user asked for most recently, in your own words}
+\`\`\`
+`;
+
+/**
+ * Read the app's PROJECT.md spec anchor. Returns null when it does not exist or
+ * is empty. Capped so the anchor stays cheap in tokens (the file is meant to be
+ * concise, model-maintained state — not a full codebase dump).
+ */
+async function readProjectSpec(appPath: string): Promise<string | null> {
+  try {
+    const spec = await fs.promises.readFile(
+      path.join(appPath, PROJECT_SPEC_FILENAME),
+      "utf8",
+    );
+    const trimmed = spec.trim();
+    if (!trimmed) return null;
+    const MAX_SPEC_CHARS = 12_000;
+    return trimmed.length > MAX_SPEC_CHARS
+      ? trimmed.slice(0, MAX_SPEC_CHARS) +
+          "\n[NOTE: PROJECT.md was truncated here because it grew too large. " +
+          "When you output the updated PROJECT.md this turn, rewrite it more concisely " +
+          "so it fits — keep Core Spec, constraints, and decisions; compress the file tree.]"
+      : trimmed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the prefix messages that inject the current PROJECT.md and builder
+ * memory (.joy/memory/) into context as an authoritative anchor, placed ahead
+ * of the codebase context.
+ */
+function buildProjectSpecPrefix(
+  projectSpec: string | null,
+  builderMemory: BuilderMemory | null,
+): { role: "user" | "assistant"; content: string }[] {
+  const parts: string[] = [];
+  if (projectSpec) {
+    parts.push(
+      `This is the current PROJECT.md — the source of truth for this project. Honor its Core Spec and constraints, and remember to output an updated PROJECT.md at the end of your response.\n\n--- PROJECT.md ---\n${projectSpec}\n--- END PROJECT.md ---`,
+    );
+  }
+  if (builderMemory) {
+    parts.push(buildBuilderMemoryBlock(builderMemory));
+    if (!projectSpec) {
+      parts.push(
+        "NOTE: No PROJECT.md exists yet for this project. Create it this turn per the PROJECT.md protocol, deriving the Core Spec from the build memory above and the user's request.",
+      );
+    } else if (builderMemory.turnsSinceSpecWrite >= 3) {
+      parts.push(
+        `IMPORTANT: PROJECT.md has NOT been updated for ${builderMemory.turnsSinceSpecWrite} turns and may be stale. You MUST output an updated <joy-write path="PROJECT.md"> at the end of THIS response, reconciling it with the build progress above.`,
+      );
+    }
+  }
+  return [
+    { role: "user" as const, content: parts.join("\n\n") },
+    { role: "assistant" as const, content: "OK." },
+  ];
 }
 
 function createOtherAppsCodebasePrompt(otherAppsCodebaseInfo: string): string {

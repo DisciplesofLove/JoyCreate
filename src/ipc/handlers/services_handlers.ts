@@ -291,15 +291,16 @@ async function startN8nService(): Promise<ServiceStatus> {
     
     let n8nCommand: string;
     
-    // Prefer the locally installed n8n binstub. This avoids `npx` entirely,
-    // which on nvm-windows can fail with MODULE_NOT_FOUND for npm-prefix.js
-    // when an `npm`-spawned parent process leaks env vars (npm_config_*) into
-    // the detached cmd shell, redirecting npx's prefix lookup to the project
-    // root instead of the active Node install.
+    // Prefer a locally-bundled n8n binstub if present. Otherwise fall back to
+    // the globally-installed `n8n` (npm i -g n8n), resolved from PATH inside
+    // the external cmd window. We deliberately AVOID `npx` here: on nvm-windows
+    // / packaged builds it fails with MODULE_NOT_FOUND for npm-prefix.js
+    // because the app dir has no node_modules/npm. The external cmd window
+    // inherits the enriched PATH (includes the nvm global bin), so a bare
+    // `n8n` resolves the global shim, which runs on the PATH-resolved Node
+    // (>=22.22, satisfying n8n's version gate).
     const localN8n = path.join(getAppBasePath(), "node_modules", ".bin", "n8n.cmd");
-    const n8nLauncher = fs.existsSync(localN8n)
-      ? `"${localN8n}"`
-      : `"${resolveNodeCli("npx")}" n8n`;
+    const n8nLauncher = fs.existsSync(localN8n) ? `"${localN8n}"` : `n8n`;
     
     if (pgReady) {
       logger.info(`PostgreSQL detected on ${pgHost}:${pgPort} — using postgresdb backend`);

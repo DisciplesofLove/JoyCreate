@@ -1,6 +1,13 @@
-import { app, BrowserWindow, dialog, Menu, session } from "electron";
+import { app, BrowserWindow, dialog, Menu, session, shell } from "electron";
 import * as path from "node:path";
 import { registerIpcHandlers } from "./ipc/ipc_host";
+import {
+  isInternalNavigation,
+  isSafeExternalUrl,
+  isAllowedLoopbackIframe,
+  isAllowedThirdPartyIframe,
+  decidePermissionRequest,
+} from "./main_security";
 import {
   startModelCatalogWatchdog,
   stopModelCatalogWatchdog,
@@ -154,6 +161,11 @@ export async function onReady() {
 
   // Start performance monitoring
   startPerformanceMonitoring();
+
+  // Install app-wide security policies BEFORE the main window is created so
+  // that the very first webContents picks up the will-attach-webview /
+  // setWindowOpenHandler guards.
+  applyAppSecurityPolicies();
 
   await onFirstRunMaybe(settings);
   createWindow();
@@ -456,13 +468,12 @@ export async function onReady() {
           const daemonAlive = await probeGatewayHealth(daemonPort);
 
           if (daemonAlive) {
-            // Trust the daemon config to decide whether it owns Telegram
+            // Trust the daemon config to decide whether it owns Telegram.
+            // Checks the daemon's REAL config (e.g. openclaw-ollama.json via
+            // gateway.cmd's OPENCLAW_CONFIG_PATH), not just openclaw.json.
             try {
-              const { readFileSync } = await import("node:fs");
-              const { join } = await import("node:path");
-              const { homedir } = await import("node:os");
-              const daemonCfg = JSON.parse(readFileSync(join(homedir(), ".openclaw", "openclaw.json"), "utf8"));
-              if (daemonCfg?.channels?.telegram?.enabled && daemonCfg?.channels?.telegram?.botToken) {
+              const { daemonTelegramChannelEnabled } = await import("./ipc/handlers/telegram_handlers");
+              if (daemonTelegramChannelEnabled()) {
                 daemonHandlesTelegram = true;
               }
             } catch {
@@ -487,11 +498,8 @@ export async function onReady() {
         // answer messages without JoyCreate's IPC tools (causing 409 flapping).
         if (bridged && telegramOwner === "local" && tgBot.getStatus().running) {
           try {
-            const { readFileSync } = await import("node:fs");
-            const { join } = await import("node:path");
-            const { homedir } = await import("node:os");
-            const daemonCfg = JSON.parse(readFileSync(join(homedir(), ".openclaw", "openclaw.json"), "utf8"));
-            if (daemonCfg?.channels?.telegram?.enabled && daemonCfg?.channels?.telegram?.botToken) {
+            const { daemonTelegramChannelEnabled } = await import("./ipc/handlers/telegram_handlers");
+            if (daemonTelegramChannelEnabled()) {
               svcLogger.info("Bot watchdog: daemon re-enabled its Telegram channel — re-claiming ownership (owner=local)");
               await tryAutoStartTelegramBot();
             }
@@ -704,6 +712,10 @@ const createWindow = () => {
   // iframe can embed the daemon UI.
   setupResponseHeaderOverrides();
 
+  // Lock down navigation / window.open / permission requests on this
+  // window's webContents. See applyWindowSecurityPolicies() for rationale.
+  applyWindowSecurityPolicies(mainWindow);
+
   // Send force-close event if it was detected
   if (pendingForceCloseData) {
     mainWindow.webContents.once("did-finish-load", () => {
@@ -783,6 +795,158 @@ const createWindow = () => {
     menu.popup({ window: mainWindow! });
   });
 };
+
+/**
+ * Apply per-window Electron security hardening:
+ *  1. `will-navigate` — block any navigation away from the renderer's own
+ *     origin (file:// in packaged builds, the Vite dev server in dev). Safe
+ *     http(s) links are routed through `shell.openExternal` so the user gets
+ *     them in their default browser instead of inside the desktop window.
+ *  2. `setWindowOpenHandler` — refuse to create a new BrowserWindow on
+ *     `window.open()`. Safe http(s) targets are forwarded to the system
+ *     browser. Anything else (file:, javascript:, data:, …) is denied.
+ *  3. `setPermissionRequestHandler` / `setPermissionCheckHandler` — default
+ *     deny dangerous permissions (camera, mic, geolocation, etc.) for any
+ *     frame that isn't the renderer's own origin. See `decidePermissionRequest`
+ *     for the policy.
+ *
+ * These guards complement the per-BrowserWindow `webPreferences` (which
+ * already set `nodeIntegration:false`, `contextIsolation:true`, etc.).
+ */
+function applyWindowSecurityPolicies(win: BrowserWindow): void {
+  const wc = win.webContents;
+  const devServerUrl: string | undefined = MAIN_WINDOW_VITE_DEV_SERVER_URL
+    ? MAIN_WINDOW_VITE_DEV_SERVER_URL
+    : undefined;
+
+  wc.on("will-navigate", (event, targetUrl) => {
+    if (isInternalNavigation(targetUrl, { devServerUrl })) return;
+    event.preventDefault();
+    if (isSafeExternalUrl(targetUrl)) {
+      void shell.openExternal(targetUrl).catch((err) => {
+        logger.warn("shell.openExternal failed for will-navigate", err);
+      });
+      return;
+    }
+    logger.warn("Blocked unsafe navigation", targetUrl);
+  });
+
+  wc.setWindowOpenHandler(({ url }) => {
+    if (isSafeExternalUrl(url)) {
+      void shell.openExternal(url).catch((err) => {
+        logger.warn("shell.openExternal failed for window.open", err);
+      });
+    } else {
+      logger.warn("Blocked window.open for unsafe URL", url);
+    }
+    // Never let the renderer spawn a fresh BrowserWindow with default prefs.
+    return { action: "deny" };
+  });
+
+  // Permission request / check handlers default-deny dangerous permissions.
+  // Camera / mic / notifications are only granted to the renderer's own
+  // origin (file:// or the Vite dev server), never to embedded iframes /
+  // webviews of third-party content.
+  wc.session.setPermissionRequestHandler((requestingContents, permission, callback, details) => {
+    const requestingUrl = details?.requestingUrl || requestingContents.getURL();
+    const allow = decidePermissionRequest({
+      permission,
+      requestingUrl,
+      devServerUrl,
+    });
+    if (!allow) {
+      logger.warn(
+        `Denied permission '${permission}' for ${requestingUrl || "<unknown>"}`,
+      );
+    }
+    callback(allow);
+  });
+  wc.session.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
+    decidePermissionRequest({
+      permission,
+      requestingUrl: requestingOrigin,
+      devServerUrl,
+    }),
+  );
+}
+
+/**
+ * App-wide hardening that doesn't depend on a single BrowserWindow.
+ *
+ *  • `will-attach-webview` — JoyCreate uses an embedded <webview> tag in the
+ *    Smart Browser. Even though the JSX sets safe attributes (`nodeintegration="false"`,
+ *    `disablewebsecurity="false"`), a compromised renderer could mutate the
+ *    DOM before the attach event fires. We enforce the safe values from the
+ *    main process so the renderer cannot escape the sandbox via webview.
+ *
+ *  • `web-contents-created` for non-window webContents (e.g. webview pages)
+ *    receives the same navigation / window-open guards as the main window.
+ */
+function applyAppSecurityPolicies(): void {
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-attach-webview", (_e, webPreferences, params) => {
+      // Force-set the safe webPreferences — even if the JSX / attacker put
+      // unsafe values on the DOM node.
+      webPreferences.nodeIntegration = false;
+      webPreferences.nodeIntegrationInSubFrames = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.webSecurity = true;
+      webPreferences.sandbox = true;
+      webPreferences.allowRunningInsecureContent = false;
+      webPreferences.experimentalFeatures = false;
+      delete (webPreferences as Record<string, unknown>).preload;
+      delete (webPreferences as Record<string, unknown>).preloadURL;
+
+      // Restrict src to http(s) and our allow-listed loopback iframes. Any
+      // other scheme (file:, javascript:, data:) is rejected to prevent the
+      // renderer from loading attacker-controlled local files or evaluating
+      // inline scripts.
+      const src = (params as { src?: string } | undefined)?.src ?? "";
+      const allowed =
+        isSafeExternalUrl(src) ||
+        isAllowedLoopbackIframe(src) ||
+        isAllowedThirdPartyIframe(src);
+      if (!allowed) {
+        logger.warn("Blocked webview attach with unsafe src", src);
+        // Setting src to about:blank effectively cancels the attach with a
+        // visible-but-empty webview, which is safer than throwing inside an
+        // event handler.
+        (params as { src?: string }).src = "about:blank";
+      }
+    });
+
+    // Webview-hosted webContents inherits the same navigation guards as the
+    // main window. We don't have a dev server URL inside webviews — they're
+    // always loading remote content.
+    contents.on("will-navigate", (event, targetUrl) => {
+      if (isInternalNavigation(targetUrl)) return;
+      if (
+        isSafeExternalUrl(targetUrl) ||
+        isAllowedLoopbackIframe(targetUrl) ||
+        isAllowedThirdPartyIframe(targetUrl)
+      ) {
+        // For embedded webviews we let the navigation through (the user
+        // expects the browser tab to follow http(s) links). External-link
+        // routing to the system browser is handled by the parent <webview>
+        // tab's new-window listener.
+        return;
+      }
+      event.preventDefault();
+      logger.warn("Blocked unsafe webview navigation", targetUrl);
+    });
+
+    contents.setWindowOpenHandler(({ url }) => {
+      if (isSafeExternalUrl(url)) {
+        void shell.openExternal(url).catch((err) => {
+          logger.warn("shell.openExternal failed for webview window.open", err);
+        });
+      } else {
+        logger.warn("Blocked webview window.open for unsafe URL", url);
+      }
+      return { action: "deny" };
+    });
+  });
+}
 
 /**
  * Patch response headers for two purposes:

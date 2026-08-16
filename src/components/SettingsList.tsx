@@ -28,6 +28,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     isEnabled: (settings) => !!settings?.experiments?.enableLocalAgent,
   },
   { id: "tools-mcp", label: "Tools (MCP)" },
+  { id: "sidebar-settings", label: "Sidebar" },
   { id: "experiments", label: "Experiments" },
   { id: "danger-zone", label: "Danger Zone" },
 ];

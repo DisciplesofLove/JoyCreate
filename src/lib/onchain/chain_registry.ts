@@ -82,7 +82,7 @@ const DROP_ERC1155_EVENT_ABI = [
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 export function isMarketplaceChainId(value: unknown): value is MarketplaceChainId {
-  return value === "polygonAmoy" || value === "arbitrumSepolia" || value === "arbitrumOne";
+  return value === "arbitrumSepolia";
 }
 
 export function getMarketplaceChain(id: MarketplaceChainId): MarketplaceChainConfig {

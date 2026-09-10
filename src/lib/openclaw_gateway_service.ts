@@ -616,6 +616,27 @@ export class OpenClawGatewayService extends EventEmitter {
   // BRIDGE MODE — connect as WS client to an external OpenClaw gateway
   // ===========================================================================
   
+  /**
+   * Is the external OpenClaw daemon alive?
+   *
+   * Public because channel ownership depends on it: Telegram allows exactly one
+   * `getUpdates` poller per token, so if the daemon is running and already owns
+   * a channel, JoyCreate must not start a competing in-process poller. The
+   * daemon's own log records what happens otherwise — a 409 "terminated by
+   * other getUpdates request", with both sides losing messages.
+   *
+   * Reuses the same TCP probe the bridge uses rather than duplicating it.
+   */
+  async isDaemonAlive(): Promise<boolean> {
+    const port = this.config.gateway.daemonPort ?? 18790;
+    const host = this.config.gateway.host === "0.0.0.0"
+      ? "127.0.0.1"
+      : (this.config.gateway.host ?? "127.0.0.1");
+    // Short timeout: this runs on the start path and at boot, where a slow
+    // answer is worse than assuming the daemon is absent.
+    return this.probeTcpPort(host, port, 1500);
+  }
+
   /** HTTP probe to see if an external gateway is listening */
   private async probeExternalGateway(host: string, port: number): Promise<boolean> {
     // We deliberately use a TCP-level probe (not HTTP /health) because the

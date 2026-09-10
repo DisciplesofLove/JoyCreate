@@ -355,6 +355,18 @@ export const UserSettingsSchema = z.object({
   isRunning: z.boolean().optional(),
   /** Auto-start the Hypercore peer layer (Holepunch) on app boot. Default true. */
   hyperEnabled: z.boolean().optional(),
+  /**
+   * Keep the app running in the tray after the last window is closed.
+   *
+   * Every scheduler, watchdog and in-flight agent run lives in the main
+   * process, so on Windows and Linux `window-all-closed` used to end all of
+   * them. With this on, closing the window hides the app instead; quitting is
+   * explicit, from the tray. Default true — an agent OS whose agents stop when
+   * you close the window is not one.
+   */
+  backgroundMode: z.boolean().optional(),
+  /** Launch JoyCreate at login, so scheduled agents run without being started by hand. */
+  openAtLogin: z.boolean().optional(),
   lastKnownPerformance: z
     .object({
       timestamp: z.number(),
@@ -461,6 +473,13 @@ export const UserSettingsSchema = z.object({
    * assets still mint but no purchasable x402 drop is created.
    */
   marketplaceStoreSlug: z.string().optional(),
+
+  /**
+   * Address the creator intends to receive the 80% Seller bucket at. Drops
+   * pay out to the wallet that created them (drop.creator); publish warns
+   * when the signer differs from this address. See docs/payments/phase-2.
+   */
+  marketplacePayoutAddress: z.string().optional(),
 
   ////////////////////////////////
   // GENIUS CORE (local ONNX runtime)

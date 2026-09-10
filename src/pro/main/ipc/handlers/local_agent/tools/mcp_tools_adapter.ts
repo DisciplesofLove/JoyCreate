@@ -37,6 +37,14 @@ import { registerMarketplaceTools } from "@/mcp_server/tools/marketplace_tools";
 import { registerChatTools } from "@/mcp_server/tools/chat_tools";
 import { registerComputeTools } from "@/mcp_server/tools/compute_tools";
 import { registerCreatorDashboardTools } from "@/mcp_server/tools/creator_dashboard_tools";
+// Publishing, email and the agent economy were absent, so the local agent and
+// the swarm runtime could build an asset but not sell it, and could reason
+// about a mailbox they had no way to read. The adapter's own doc comment says
+// anything available via MCP is automatically available to agents — these are
+// the files that stopped being true when they were added.
+import { registerPublishTools } from "@/mcp_server/tools/publish_tools";
+import { registerEmailTools } from "@/mcp_server/tools/email_tools";
+import { registerEconomyTools } from "@/mcp_server/tools/economy_tools";
 
 const logger = log.scope("mcp_tools_adapter");
 
@@ -180,6 +188,9 @@ export function getMcpAgentTools(): ToolDefinition[] {
     registerChatTools,
     registerComputeTools,
     registerCreatorDashboardTools,
+    registerPublishTools,
+    registerEmailTools,
+    registerEconomyTools,
   ];
 
   for (const fn of registrars) {

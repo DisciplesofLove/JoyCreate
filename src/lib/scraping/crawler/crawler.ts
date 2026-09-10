@@ -210,7 +210,8 @@ export class JoyCrawler {
       depth,
       statusCode: result.statusCode,
       linksFound: added,
-      extractedRecords: 0, // Filled by orchestrator
+      extractedRecords: 0, // the orchestrator fills this after extracting
+      result,
     };
 
     this.config.onPageDone?.(pageResult);

@@ -4,6 +4,8 @@ interface ToastOptions {
   title?: string;
   description?: string;
   variant?: "default" | "destructive";
+  /** Milliseconds to keep the toast up. Forwarded to sonner. */
+  duration?: number;
 }
 
 /**
@@ -17,10 +19,11 @@ export function toast(opts: ToastOptions) {
       : opts.title
     : opts.description ?? "";
 
+  const options = opts.duration != null ? { duration: opts.duration } : undefined;
   if (opts.variant === "destructive") {
-    sonnerToast.error(message);
+    sonnerToast.error(message, options);
   } else {
-    sonnerToast.success(message);
+    sonnerToast.success(message, options);
   }
 }
 

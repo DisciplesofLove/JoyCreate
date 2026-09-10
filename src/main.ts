@@ -15,6 +15,23 @@ import {
 import dotenv from "dotenv";
 // @ts-ignore
 import started from "electron-squirrel-startup";
+import {
+  applyOpenAtLogin,
+  destroyBackgroundTray,
+  initBackgroundTray,
+  isAppQuitting,
+  setActivityCounter,
+} from "@/main/background_tray";
+import { countRunning } from "@/lib/runtime/activity_store";
+import {
+  reconcileRunsAtBoot,
+  startSupervisor,
+  stopSupervisor,
+} from "@/lib/runtime/supervisor";
+import { reconcileStrandedContracts } from "@/lib/a2a_economy";
+import { registerBuiltinA2aExecutors } from "@/lib/a2a_executors";
+import { applyPendingRestoreAtBoot } from "@/lib/backup_service";
+import { reconcileTrainingJobsAtBoot } from "@/lib/training_job_store";
 import { updateElectronApp, UpdateSourceType } from "update-electron-app";
 import log from "electron-log";
 import {
@@ -113,6 +130,19 @@ if (process.defaultApp) {
 }
 
 export async function onReady() {
+  // A restore staged by a previous run has to be applied BEFORE anything opens
+  // the database — including the upgrade BackupManager below, which reads it.
+  // The running process holds an open handle to `sqlite.db`, so a restore can
+  // only ever swap the file at a moment when nothing has opened it yet, and
+  // this is the only such moment.
+  try {
+    if (applyPendingRestoreAtBoot()) {
+      logger.info("Applied a restore staged before the last shutdown");
+    }
+  } catch (e) {
+    logger.error("Error applying pending restore", e);
+  }
+
   try {
     const backupManager = new BackupManager({
       settingsFile: getSettingsFilePath(),
@@ -167,8 +197,78 @@ export async function onReady() {
   // setWindowOpenHandler guards.
   applyAppSecurityPolicies();
 
+  // Background mode + tray, before the window exists, so the very first close
+  // is already handled. Defaults to on when unset.
+  backgroundModeEnabled = settings.backgroundMode !== false;
+  applyOpenAtLogin(settings.openAtLogin === true);
+
   await onFirstRunMaybe(settings);
   createWindow();
+
+  if (backgroundModeEnabled) {
+    setActivityCounter(() => countRunning());
+    initBackgroundTray(() => mainWindow);
+  }
+
+  // ── Reconcile agent runs left over from the previous process. ─────
+  //
+  // Runs still marked `running` belong to a process that no longer exists — no
+  // controller, timer or abort signal survives a restart. Mark them, resume
+  // what carries a cursor, and fail the rest with a reason rather than leaving
+  // rows that claim to be active forever. Runs before the schedulers start so
+  // nothing new is competing with the reconcile.
+  try {
+    const outcome = await reconcileRunsAtBoot();
+    if (outcome.interrupted > 0) {
+      logger.info(
+        `Run reconcile: ${outcome.interrupted} interrupted, ${outcome.resumed} resumed, ${outcome.failed} failed`,
+      );
+    }
+    startSupervisor();
+    app.on("will-quit", () => stopSupervisor());
+  } catch (err) {
+    logger.warn("Run reconcile failed:", err);
+  }
+
+  // ── Reconcile A2A contracts left mid-execution. ────────────────────────────
+  //
+  // Separate from the run reconcile above because this one is about money, not
+  // observability. A contract stuck `IN_PROGRESS` holds the caller's escrow
+  // against their daily cap indefinitely; the activity row for it may be
+  // missing or carry no resume cursor, so the run reconcile cannot see it.
+  try {
+    const swept = await reconcileStrandedContracts();
+    if (swept.contracts > 0 || swept.invocations > 0) {
+      logger.info(
+        `A2A reconcile: ${swept.contracts} contract(s) refunded, ${swept.invocations} invocation(s) closed`,
+      );
+    }
+  } catch (err) {
+    logger.warn("A2A contract reconcile failed:", err);
+  }
+
+  // A fine-tune runs as a child process, so a job still marked `running` at
+  // boot belonged to a process that died with the app. Mark those rather than
+  // leaving "list jobs" claiming a training run is in flight days later.
+  try {
+    const interrupted = reconcileTrainingJobsAtBoot();
+    if (interrupted > 0) {
+      logger.info(`Training reconcile: ${interrupted} interrupted run(s)`);
+    }
+  } catch (err) {
+    logger.warn("Training reconcile failed:", err);
+  }
+
+  // Bind the capabilities an agent can actually sell. Must come after the IPC
+  // handlers are registered, since each executor resolves its channel through
+  // the same registry `ipcMain.handle` writes to.
+  try {
+    registerBuiltinA2aExecutors();
+  } catch (err) {
+    logger.warn("A2A executor registration failed:", err);
+  }
+
+
 
   // ── Auto-start the Hypercore peer layer (Holepunch). ─────────────
   // Best-effort, fire-and-forget — never blocks UI even if discovery / DHT
@@ -627,6 +727,21 @@ declare global {
 let mainWindow: BrowserWindow | null = null;
 let pendingForceCloseData: any = null;
 
+/**
+ * Whether closing the last window should keep the process alive.
+ *
+ * Read from settings once and cached, because `window-all-closed` and the
+ * per-window `close` handler both fire on paths where a disk read would be
+ * inappropriate. Defaults to true: agents surviving a window close is the
+ * intended behaviour, and an unreadable settings file should not silently
+ * revert to killing them.
+ */
+let backgroundModeEnabled = true;
+
+function isBackgroundModeEnabled(): boolean {
+  return backgroundModeEnabled;
+}
+
 const createWindow = () => {
   // Create the browser window.
   mainWindow = new BrowserWindow({
@@ -715,6 +830,17 @@ const createWindow = () => {
   // Lock down navigation / window.open / permission requests on this
   // window's webContents. See applyWindowSecurityPolicies() for rationale.
   applyWindowSecurityPolicies(mainWindow);
+
+  // Background mode: closing the window hides the app instead of ending the
+  // main process, so schedulers, watchdogs and in-flight agent runs survive.
+  // Quitting is explicit — the tray menu, or Cmd/Ctrl-Q — and sets isQuitting
+  // first, which is what lets the close through here.
+  mainWindow.on("close", (event) => {
+    if (isAppQuitting()) return;
+    if (!isBackgroundModeEnabled()) return;
+    event.preventDefault();
+    mainWindow?.hide();
+  });
 
   // Send force-close event if it was detected
   if (pendingForceCloseData) {
@@ -1194,6 +1320,10 @@ async function handleDeepLinkReturn(url: string) {
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
 app.on("window-all-closed", () => {
+  // Background mode keeps the main process alive after the last window closes,
+  // because that is where every scheduler, watchdog and in-flight agent run
+  // lives. Without it, closing the window on Windows/Linux ended all of them.
+  if (isBackgroundModeEnabled()) return;
   if (process.platform !== "darwin") {
     app.quit();
   }
@@ -1202,6 +1332,8 @@ app.on("window-all-closed", () => {
 // Only set isRunning to false when the app is properly quit by the user
 app.on("will-quit", () => {
   logger.info("App is quitting, setting isRunning to false");
+
+  destroyBackgroundTray();
 
   // Stop performance monitoring and capture final metrics
   stopPerformanceMonitoring();

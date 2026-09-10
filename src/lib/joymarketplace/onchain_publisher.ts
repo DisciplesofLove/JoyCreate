@@ -19,15 +19,17 @@
 import { ethers } from "ethers";
 import log from "electron-log";
 import {
-  AMOY_ENS_CONTRACTS,
+  ARBITRUM_SEPOLIA,
   ARB_SEPOLIA_ENS_CONTRACTS,
   CANONICAL_EDITION_CONTROLLER_ABI,
   CONTRACT_ABIS,
   CONTRACT_ADDRESSES,
-  POLYGON_AMOY,
   STYLUS_DROP_ABI,
 } from "@/config/joymarketplace";
-import type { MarketplaceChainConfig } from "@/lib/onchain/chain_registry";
+import {
+  DEFAULT_MARKETPLACE_CHAIN,
+  type MarketplaceChainConfig,
+} from "@/lib/onchain/chain_registry";
 
 const logger = log.scope("onchain_publisher");
 
@@ -117,7 +119,7 @@ export class OnchainPublisher {
 
   constructor(
     wallet: ethers.Wallet,
-    chain: ChainConfig = POLYGON_AMOY,
+    chain: ChainConfig = ARBITRUM_SEPOLIA,
     marketplaceChain: MarketplaceChainConfig | null = null,
   ) {
     this.chain = chain;
@@ -135,9 +137,9 @@ export class OnchainPublisher {
     return this.wallet.address;
   }
 
-  /** Returns the resolved marketplace chain id, or "polygonAmoy" by default. */
+  /** Returns the resolved marketplace chain id, or the default chain. */
   get marketplaceChainId(): string {
-    return this.marketplaceChain?.id ?? "polygonAmoy";
+    return this.marketplaceChain?.id ?? DEFAULT_MARKETPLACE_CHAIN;
   }
 
   // -- gate -----------------------------------------------------------------
@@ -150,7 +152,7 @@ export class OnchainPublisher {
   async verifyCreatorGate(signerAddress: string): Promise<VerifyResult> {
     try {
       const gateAddr =
-        this.marketplaceChain?.contracts.creatorGate ?? AMOY_ENS_CONTRACTS.JoyCreatorGate;
+        this.marketplaceChain?.contracts.creatorGate ?? ARB_SEPOLIA_ENS_CONTRACTS.JoyCreatorGate;
       const gate = new ethers.Contract(
         gateAddr,
         CONTRACT_ABIS.JOY_CREATOR_GATE,
@@ -186,9 +188,9 @@ export class OnchainPublisher {
       throw new Error(`invalid mint inputs: uri=${metadataUri} qty=${quantity}`);
     }
     const dropAddr =
-      this.marketplaceChain?.contracts.dropEdition ?? AMOY_ENS_CONTRACTS.platformDrop;
+      this.marketplaceChain?.contracts.dropEdition ?? ARB_SEPOLIA_ENS_CONTRACTS.platformDrop;
     const gateAddr =
-      this.marketplaceChain?.contracts.creatorGate ?? AMOY_ENS_CONTRACTS.JoyCreatorGate;
+      this.marketplaceChain?.contracts.creatorGate ?? ARB_SEPOLIA_ENS_CONTRACTS.JoyCreatorGate;
 
     // 1. Derive nextTokenId
     const drop = new ethers.Contract(dropAddr, DROP_ERC1155_ABI, this.provider);
@@ -515,7 +517,7 @@ export class OnchainPublisher {
  * Build an ethers.Wallet from a hex private key + a chain config.
  * Used by the orchestrator after pulling the key from JcnKeyManager.
  */
-export function buildWallet(privateKeyHex: string, chain: ChainConfig = POLYGON_AMOY): ethers.Wallet {
+export function buildWallet(privateKeyHex: string, chain: ChainConfig = ARBITRUM_SEPOLIA): ethers.Wallet {
   const provider = new ethers.JsonRpcProvider(chain.rpcUrl, chain.chainId);
   const pk = privateKeyHex.startsWith("0x") ? privateKeyHex : `0x${privateKeyHex}`;
   return new ethers.Wallet(pk, provider);

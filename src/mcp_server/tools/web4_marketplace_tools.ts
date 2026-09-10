@@ -31,12 +31,46 @@ async function invokeHandler(channel: string, ...args: unknown[]): Promise<any> 
 const CHAIN_DESC =
   "Target chain key: 'arbitrumSepolia' (default) or 'arbitrumOne'.";
 
+/**
+ * These tools write to a Stylus deployment the marketplace does not index.
+ *
+ * StoreRegistry (0x2e6f02…), EditionController (0x93b334…) and AgentMandate
+ * (0xe326ec…) appear nowhere in the marketplace's source or in either of its
+ * subgraphs — a grep across its src/, subgraph/, scripts/, supabase/,
+ * contracts/ and docs/ returns nothing for all three. So a store registered or
+ * a drop launched here is invisible to every buyer, and `purchase_execute`
+ * spends real USDC against a listing nobody can discover.
+ *
+ * They are disabled rather than deleted: the pipeline itself works, and the
+ * intent is to index these contracts before mainnet. Set
+ * JOY_ENABLE_WEB4_TOOLS=1 to re-enable them once the subgraphs cover them.
+ *
+ * Publishing that buyers can actually see goes through joycreate_publish_asset.
+ */
+const WEB4_TOOLS_ENABLED = process.env.JOY_ENABLE_WEB4_TOOLS === "1";
+
+const WEB4_DISABLED_MESSAGE =
+  "This tool is disabled. It writes to a Stylus deployment (StoreRegistry " +
+  "0x2e6f02…, EditionController 0x93b334…, AgentMandate 0xe326ec…) that the Joy " +
+  "Marketplace does not index — nothing created through it is discoverable, and " +
+  "purchase_execute would spend real USDC against an invisible listing. " +
+  "To publish an asset buyers can see, use joycreate_publish_asset. " +
+  "To re-enable these once the contracts are indexed, set JOY_ENABLE_WEB4_TOOLS=1.";
+
+function web4Disabled() {
+  return {
+    isError: true as const,
+    content: [{ type: "text" as const, text: WEB4_DISABLED_MESSAGE }],
+  };
+}
+
 export function registerWeb4MarketplaceTools(server: McpServer) {
   // ── store_register ───────────────────────────────────────────────
   server.registerTool(
     "store_register",
     {
       description:
+        "DISABLED (JOY_ENABLE_WEB4_TOOLS=1 to enable): writes to a deployment the marketplace does not index. " +
         "Register a new ENS-named storefront on the StoreRegistry. The store is bound to an " +
         "ERC-8004 agent identity and addressable as <slug>.store.<marketplace>.eth. " +
         "Returns the new storeId. Uses the local signing wallet (gas-only).",
@@ -52,6 +86,7 @@ export function registerWeb4MarketplaceTools(server: McpServer) {
       },
     },
     async (params) => {
+      if (!WEB4_TOOLS_ENABLED) return web4Disabled();
       try {
         const result = await invokeHandler("glue:register-store", {
           chain: params.chain,
@@ -63,6 +98,7 @@ export function registerWeb4MarketplaceTools(server: McpServer) {
         };
       } catch (err: any) {
         return {
+          isError: true as const,
           content: [{ type: "text" as const, text: `Error registering store: ${err.message}` }],
         };
       }
@@ -74,6 +110,7 @@ export function registerWeb4MarketplaceTools(server: McpServer) {
     "drop_launch",
     {
       description:
+        "DISABLED (JOY_ENABLE_WEB4_TOOLS=1 to enable): writes to a deployment the marketplace does not index. " +
         "Launch a priced ERC-1155 drop under a store via the EditionController. The drop is keyed " +
         "by an asset leaf (IPLD Merkle root of the content shard) and priced in USDC atomic units " +
         "(6 decimals; e.g. '1000000' = 1 USDC). Returns the new dropId. Uses the local signing wallet.",
@@ -98,6 +135,7 @@ export function registerWeb4MarketplaceTools(server: McpServer) {
       },
     },
     async (params) => {
+      if (!WEB4_TOOLS_ENABLED) return web4Disabled();
       try {
         const result = await invokeHandler("glue:create-drop", {
           chain: params.chain,
@@ -112,6 +150,7 @@ export function registerWeb4MarketplaceTools(server: McpServer) {
         };
       } catch (err: any) {
         return {
+          isError: true as const,
           content: [{ type: "text" as const, text: `Error launching drop: ${err.message}` }],
         };
       }
@@ -133,7 +172,13 @@ export function registerWeb4MarketplaceTools(server: McpServer) {
           .describe("What to discover: a 'drop', a 'store', or an 'agent'."),
         id: z
           .string()
-          .describe("The dropId, storeId, or agentId to inspect (matching 'kind')."),
+          .describe(
+            "Numeric on-chain registry id matching 'kind' — NOT an ENS label. " +
+            "A store's id is its index in the store registry, not 'my-store'; " +
+            "passing a name fails inside ethers with a BigNumberish conversion " +
+            "error that says nothing about what was wrong. Get ids from " +
+            "agent_marketplace_browse or the glue registry channels.",
+          ),
         chain: z.string().optional().describe(CHAIN_DESC),
       },
     },
@@ -161,7 +206,8 @@ export function registerWeb4MarketplaceTools(server: McpServer) {
         };
       } catch (err: any) {
         return {
-          content: [{ type: "text" as const, text: `Error discovering ${params.kind}: ${err.message}` }],
+          isError: true as const,
+          content: [{ type: "text" as const, text: `Error discovering ${params.kind}: ${err.message}. Note: the Web 4.0 registry is not indexed by the marketplace — see JOY_ENABLE_WEB4_TOOLS.` }],
         };
       }
     },
@@ -172,6 +218,7 @@ export function registerWeb4MarketplaceTools(server: McpServer) {
     "purchase_execute",
     {
       description:
+        "DISABLED (JOY_ENABLE_WEB4_TOOLS=1 to enable): would spend real USDC against a listing no buyer can discover. " +
         "Execute an end-to-end pay-per-mint purchase of a drop over the X402 USDC rail. " +
         "This SPENDS REAL FUNDS: it signs an EIP-3009 USDC authorization, settles the payment " +
         "through the RevenueSplitter (80/10/10), grants proof if required, then mints the edition " +
@@ -184,6 +231,7 @@ export function registerWeb4MarketplaceTools(server: McpServer) {
       },
     },
     async (params) => {
+      if (!WEB4_TOOLS_ENABLED) return web4Disabled();
       try {
         const result = await invokeHandler("x402:purchase-edition", {
           chain: params.chain,
@@ -194,6 +242,7 @@ export function registerWeb4MarketplaceTools(server: McpServer) {
         };
       } catch (err: any) {
         return {
+          isError: true as const,
           content: [{ type: "text" as const, text: `Error executing purchase: ${err.message}` }],
         };
       }

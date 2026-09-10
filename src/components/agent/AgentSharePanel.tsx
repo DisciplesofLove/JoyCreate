@@ -157,6 +157,13 @@ export default function AgentSharePanel({
     showBranding: true,
   });
 
+  // The Live URL is a controlled input like the two forms above, so it needs
+  // local state too. It previously used `value={shareConfig.liveUrl}` with
+  // `onChange={() => {}}`, which meant React reset the field on every keystroke
+  // — the box could not be typed into at all, and the onBlur that was supposed
+  // to save it always read back the unchanged value.
+  const [liveUrl, setLiveUrl] = useState("");
+
   // Seed local state from server when config loads
   const [seeded, setSeeded] = useState(false);
   if (shareConfig && !seeded) {
@@ -164,6 +171,7 @@ export default function AgentSharePanel({
       setBc((prev) => ({ ...prev, ...shareConfig.backendConfig }));
     if (shareConfig.widgetConfig)
       setWc((prev) => ({ ...prev, ...shareConfig.widgetConfig }));
+    setLiveUrl(shareConfig.liveUrl ?? "");
     setSeeded(true);
   }
 
@@ -357,15 +365,19 @@ export default function AgentSharePanel({
             </CardHeader>
             <CardContent className="flex gap-2">
               <Input
-                value={shareConfig.liveUrl ?? ""}
-                onChange={() => {}}
+                value={liveUrl}
+                onChange={(e) => setLiveUrl(e.target.value)}
                 placeholder="https://my-agent.example.com"
-                onBlur={(e) =>
+                onBlur={() => {
+                  // Only write when it actually changed, so tabbing through the
+                  // field does not fire a mutation on every focus loss.
+                  const next = liveUrl.trim();
+                  if (next === (shareConfig.liveUrl ?? "")) return;
                   updateMut.mutate({
                     id: shareConfig.id,
-                    liveUrl: e.target.value || undefined,
-                  })
-                }
+                    liveUrl: next || undefined,
+                  });
+                }}
               />
             </CardContent>
           </Card>

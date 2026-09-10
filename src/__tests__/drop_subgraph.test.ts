@@ -87,13 +87,13 @@ describe("endpoint resolution", () => {
     expect(getStoreDropsSubgraphUrl()).toBe(DEFAULT_STORE_DROPS_SUBGRAPH_URL);
     expect(getStoresSubgraphUrl()).toBe(DEFAULT_STORES_SUBGRAPH_URL);
     expect(DEFAULT_DROP_SUBGRAPH_URL).toContain(
-      "/joy-drop-arbitrum-sepolia/0.0.5/gn",
+      "/joy-store-drops-arbitrum-sepolia/0.0.2/gn",
     );
     expect(DEFAULT_STORE_DROPS_SUBGRAPH_URL).toContain(
       "/joy-store-drops-arbitrum-sepolia/0.0.2/gn",
     );
     expect(DEFAULT_STORES_SUBGRAPH_URL).toContain(
-      "/joy-stores-arbitrum-sepolia/0.0.4/gn",
+      "/joy-stores-arbitrum-sepolia/0.0.5/gn",
     );
   });
 
@@ -164,24 +164,35 @@ describe("listDrops", () => {
 
 describe("getDrop", () => {
   it("looks up by string tokenId and returns the token", async () => {
-    mockOnce({ data: { token: sampleToken } });
+    mockOnce({ data: { tokens: [sampleToken] } });
     const t = await getDrop("11");
     expect(t).toEqual(sampleToken);
-    expect(calls[0].body.variables).toEqual({ id: "11" });
+    // A bare tokenId is ambiguous across per-store drops, so it resolves via a
+    // filtered `tokens` query rather than a direct id lookup.
+    expect(calls[0].body.variables).toEqual({ tokenId: "11" });
+  });
+
+  it("resolves a contract-scoped id directly by entity id", async () => {
+    mockOnce({ data: { token: sampleToken } });
+    const t = await getDrop("0x718dc61b458af07179192f119c8d847bd71968a1-4");
+    expect(t).toEqual(sampleToken);
+    expect(calls[0].body.variables).toEqual({
+      id: "0x718dc61b458af07179192f119c8d847bd71968a1-4",
+    });
   });
 
   it("accepts numeric and bigint tokenIds (stringifies them)", async () => {
-    mockOnce({ data: { token: null } });
+    mockOnce({ data: { tokens: [] } });
     await getDrop(42);
-    expect(calls[0].body.variables).toEqual({ id: "42" });
+    expect(calls[0].body.variables).toEqual({ tokenId: "42" });
 
-    mockOnce({ data: { token: null } });
+    mockOnce({ data: { tokens: [] } });
     await getDrop(99n);
-    expect(calls[1].body.variables).toEqual({ id: "99" });
+    expect(calls[1].body.variables).toEqual({ tokenId: "99" });
   });
 
   it("returns null for missing drops", async () => {
-    mockOnce({ data: { token: null } });
+    mockOnce({ data: { tokens: [] } });
     expect(await getDrop("999")).toBeNull();
   });
 });

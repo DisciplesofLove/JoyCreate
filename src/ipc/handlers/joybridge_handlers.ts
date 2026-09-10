@@ -14,6 +14,7 @@
  *   joybridge:get-store
  *   joybridge:list-my-stores
  *   joybridge:publish-asset
+ *   joybridge:check-store
  *   joybridge:get-asset
  *   joybridge:list-my-assets
  *   joybridge:browse-marketplace
@@ -295,6 +296,7 @@ export const __test__ = {
     "joybridge:get-store",
     "joybridge:list-my-stores",
     "joybridge:publish-asset",
+    "joybridge:check-store",
     "joybridge:get-asset",
     "joybridge:list-my-assets",
     "joybridge:browse-marketplace",
@@ -354,9 +356,27 @@ export function registerJoyBridgeHandlers(): void {
 
   ipcMain.handle(
     "joybridge:create-store",
-    async (_e, input: CreateStoreInput) => {
-      await loadConfig();
-      return ensureClient().createStore(input);
+    async (_e, _input: CreateStoreInput): Promise<Result<BridgeStore>> => {
+      // This posted to the `store-contract-factory` edge function, which has
+      // been deleted from the marketplace along with seven others JoyBridge
+      // still names. It returned a 404 dressed as a failed Result, so store
+      // creation looked like a transient backend problem rather than a missing
+      // feature.
+      //
+      // Creating a store is not a REST call any more: it registers an ENS name
+      // through the JoyRegistrarController and deploys a DropERC1155 clone from
+      // the factory, both of which spend gas and need the owning wallet. Until
+      // that is implemented here, say so and point at the tool that does it.
+      return {
+        ok: false,
+        error:
+          "Store creation is not available in JoyCreate. The `store-contract-factory` " +
+          "edge function it used was removed from the marketplace. Creating a store " +
+          "registers a .joymarketplace.io ENS name and deploys the store's drop " +
+          "contract — both on-chain, both spending gas. Use the marketplace repo's " +
+          "scripts/create-store.mjs, then joybridge:check-store to confirm the drop " +
+          "is live before publishing.",
+      };
     },
   );
 
@@ -389,6 +409,16 @@ export function registerJoyBridgeHandlers(): void {
         /** Raw content (orchestrator-only) — base64 of bytes to pin to IPFS. */
         contentBase64?: string;
         contentMimeType?: string;
+        /**
+         * Cover art, base64. Structured clone can carry a Buffer across IPC but
+         * not reliably from every renderer surface, so this takes base64 like
+         * `contentBase64` does.
+         */
+        coverImageBase64?: string;
+        coverImageMimeType?: string;
+        coverImageFileName?: string;
+        coverImageCid?: string;
+        extraAttributes?: Array<{ trait_type: string; value: string }>;
         /** Optional flat metadata bag passed through. */
         properties?: Record<string, unknown>;
         quantity?: number;
@@ -408,6 +438,16 @@ export function registerJoyBridgeHandlers(): void {
           contentBuffer: buf,
           contentCid: input.contentCid,
           contentMimeType: input.contentMimeType,
+          coverImage:
+            input.coverImageBase64 != null
+              ? {
+                  bytes: Buffer.from(input.coverImageBase64, "base64"),
+                  mimeType: input.coverImageMimeType ?? "image/png",
+                  fileName: input.coverImageFileName ?? "cover.png",
+                }
+              : undefined,
+          coverImageCid: input.coverImageCid,
+          extraAttributes: input.extraAttributes,
           metadata: {
             ...input.properties,
             storeId: input.storeId,
@@ -460,6 +500,48 @@ export function registerJoyBridgeHandlers(): void {
         } as Result<BridgeAsset> & { outcome: typeof outcome };
       }
       return ensureClient().publishAsset(input);
+    },
+  );
+
+  /**
+   * Read-only publishability check for a store.
+   *
+   * Resolving a store's drop clone and reading `nextTokenIdToMint` are both
+   * plain RPC reads, so this deliberately does NOT load a signer. The publish
+   * path loads one as its first step, which meant a dry run failed with
+   * "no signer configured" before it ever looked at the store — useless
+   * precisely when you want it, i.e. before a wallet is set up.
+   *
+   * Owning the store is still required to publish (lazyMint is
+   * onlyStoreOwner); this only answers "does this store have a drop, and which
+   * token id is next".
+   */
+  ipcMain.handle(
+    "joybridge:check-store",
+    async (_e, params: { storeSlug: string }) => {
+      const label = (params?.storeSlug ?? "").trim().toLowerCase();
+      if (!label) throw new Error("storeSlug is required");
+
+      const { ethers } = await import("ethers");
+      const { ARBITRUM_SEPOLIA } = await import("@/config/joymarketplace");
+      const { resolveStoreDrop, readNextTokenId } = await import(
+        "@/lib/joymarketplace/store_drop_publisher"
+      );
+
+      const provider = new ethers.JsonRpcProvider(
+        ARBITRUM_SEPOLIA.rpcUrl,
+        ARBITRUM_SEPOLIA.chainId,
+      );
+      const dropAddress = await resolveStoreDrop(provider, label);
+      const nextTokenId = await readNextTokenId(provider, dropAddress);
+
+      return {
+        publishable: true,
+        store: label,
+        storeDomain: `${label}.joymarketplace.io`,
+        dropAddress,
+        nextTokenId: nextTokenId.toString(),
+      };
     },
   );
 

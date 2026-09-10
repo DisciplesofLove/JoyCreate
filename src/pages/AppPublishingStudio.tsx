@@ -1173,7 +1173,7 @@ function Web3DeployTab({ app }: { app: AppInfo | null }) {
       try {
         const [plats, deps] = await Promise.all([
           invoke("decentralized:get-platforms").catch(() => null),
-          invoke("decentralized:list-deployments", app?.id ? { appId: app.id } : {}).catch(() => []),
+          invoke("decentralized:get-deployments", app?.id).catch(() => []),
         ]);
         if (plats) setPlatforms(plats);
         setDeployments(deps ?? []);
@@ -1203,7 +1203,7 @@ function Web3DeployTab({ app }: { app: AppInfo | null }) {
       });
       setDeployStep(3);
       // Refresh deployments
-      const deps = await invoke("decentralized:list-deployments", { appId: app.id }).catch(() => []);
+      const deps = await invoke("decentralized:get-deployments", app.id).catch(() => []);
       setDeployments(deps ?? []);
     } catch (err) {
       console.error(err);

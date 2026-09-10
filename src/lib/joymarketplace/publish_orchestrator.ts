@@ -7,7 +7,6 @@
  *   3. Pin contentBuffer (if any) -> contentCid; build + pin metadata JSON.
  *   4. JoyCreatorGate.canMint(signer) -> blockedAt="no-gate" if false.
  *   5. lazyMintDrop(metadataUri, quantity) -> tokenId.
- *   6. createListing(tokenId, parseUSDC(price), USDC_POLYGON, qty).
  *   7. Update publish_bundles row + jcn_publish_records / jcn_chain_transactions.
  *   8. Best-effort goldskyWatch (Promise.race w/ 30s budget).
  *   9. Return PublishOutcome.
@@ -43,6 +42,8 @@ import { readSettings } from "@/main/settings";
 
 import { IpfsPinner, loadPinnerKeysFromSettings } from "./ipfs_pinner";
 import { OnchainPublisher, buildWallet } from "./onchain_publisher";
+import { publishToMarketplace } from "./canonical_publish";
+import { readNextTokenId, resolveStoreDrop } from "./store_drop_publisher";
 
 const logger = log.scope("publish_orchestrator");
 
@@ -70,14 +71,23 @@ export interface PublishInput {
   /** Existing IPFS CID when the renderer has already pinned the content. */
   contentCid?: string;
   contentMimeType?: string;
+  /**
+   * Cover art shown on the listing card. Without it the asset renders with no
+   * image — the content itself is encrypted, so it can never be the thumbnail.
+   */
+  coverImage?: { bytes: Buffer; mimeType: string; fileName: string };
+  /** Already-pinned cover CID, when the caller pinned it itself. */
+  coverImageCid?: string;
+  /** Extra `{trait_type, value}` pairs appended to the listing's attributes. */
+  extraAttributes?: Array<{ trait_type: string; value: string }>;
   /** Extra props merged into metadata.properties. */
   metadata?: Record<string, unknown>;
-  /** USDC base units (6 decimals); 0 = free. Used on Polygon Amoy. */
+  /** USDC base units (6 decimals); 0 = free. */
   priceUsdc?: number;
   /**
    * Per-edition price in wei (string for safe IPC transport).
    * Required when the active marketplace chain pays in native ETH
-   * (Arbitrum Sepolia / Arbitrum One). Ignored on Polygon Amoy.
+   * (Arbitrum Sepolia / Arbitrum One).
    */
   priceWei?: string;
   /** ERC-1155 quantity to mint. Default 1. */
@@ -132,6 +142,16 @@ export interface PublishOutcome {
   /** DataProvenance soulbound token. */
   provenanceTokenId?: string;
   provenanceTxHash?: string;
+
+  // ── Canonical marketplace path (Arbitrum Sepolia store drops) ────────────
+  /** Per-store DropERC1155 clone the edition was minted on. */
+  dropAddress?: string;
+  /** ENS label of the store that owns the drop. */
+  storeLabel?: string;
+  /** CID of the `chunked-aes-lit-v2` decryption envelope. */
+  envelopeCid?: string;
+  /** Number of encrypted chunks the content was split into. */
+  chunkCount?: number;
 }
 
 // Public marketplace URL pattern
@@ -187,6 +207,18 @@ export class PublishOrchestrator {
     } catch (err) {
       outcome.errors!.push(`publish_bundles insert: ${(err as Error).message}`);
       // non-fatal; continue
+    }
+
+    // 2b. Canonical Joy Marketplace path.
+    //
+    // On Arbitrum Sepolia the marketplace publishes to per-store DropERC1155
+    // clones with Lit-encrypted, chunked content. The legacy path below pins
+    // plaintext, writes a metadata shape the marketplace does not read, and
+    // mints to a shared drop that carries no indexed tokens — so it is not a
+    // fallback for this chain, and a failure here is reported rather than
+    // silently downgraded.
+    if (this.resolveMarketplaceChain().id === "arbitrumSepolia") {
+      return this.publishCanonical(input, wallet, bundleId, outcome);
     }
 
     // 3. Pin content + metadata
@@ -303,7 +335,7 @@ export class PublishOrchestrator {
           { dryRun },
         );
       } else if (marketplaceChain.enforceJoyCreatorGate) {
-        // Gate-first path (Amoy + Arbitrum Sepolia). The gate forwards
+        // Gate-first path. The gate forwards
         // mint(creator, tokenId, qty, data) into the platformDrop proxy and
         // the drop subgraph indexes it as Token.creator = tx.from.
         mint = await publisher.lazyMintDrop(metadataUri!, quantity, { dryRun });
@@ -339,58 +371,22 @@ export class PublishOrchestrator {
       return outcome;
     }
 
-    // Dry run stops here with ok=true
+    // Dry run stops here with ok=true.
+    //
+    // There is no separate listing step any more: the MarketplaceV3 listing tx
+    // only ever applied to Polygon Amoy, and on Arbitrum the mint price IS the
+    // listing price (claim condition installed at mint time).
     if (dryRun) {
-      // Listing only happens on Polygon Amoy (USDC); Arbitrum mints are
-      // self-listed via mint_edition price.
-      if (marketplaceChain.currency === "USDC") {
-        try {
-          const list = await publisher.createListing(
-            mint.tokenId,
-            parseUSDC(input.priceUsdc ?? 0),
-            CONTRACT_ADDRESSES.USDC_POLYGON,
-            quantity,
-            { dryRun: true },
-          );
-          if (list.gasEstimate != null) {
-            outcome.estimatedGas = {
-              ...outcome.estimatedGas,
-              listing: list.gasEstimate.toString(),
-            };
-          }
-        } catch (err) {
-          outcome.errors!.push(`listing dry-run: ${(err as Error).message}`);
-        }
-      }
       outcome.ok = true;
       await this.persistBundle(bundleId, { ...outcome, status: "dry-run-ok" });
       return outcome;
     }
 
-    // 6. Listing — only on Polygon Amoy. On Arbitrum the mint price IS the
-    //    listing price (set on the contract at initialize-time + per-mint
-    //    msg.value), so there is no separate listing tx.
-    if (marketplaceChain.currency === "USDC") {
-      try {
-        const list = await publisher.createListing(
-          mint.tokenId,
-          parseUSDC(input.priceUsdc ?? 0),
-          CONTRACT_ADDRESSES.USDC_POLYGON,
-          quantity,
-        );
-        outcome.listingId = list.listingId;
-        if (list.txHash) outcome.listTxHash = list.txHash;
-      } catch (err) {
-        outcome.errors!.push(`listing: ${(err as Error).message}`);
-        outcome.blockedAt = "list-failed";
-        await this.persistBundle(bundleId, outcome);
-        return outcome;
-      }
-    } else {
-      // Arbitrum: synthesize a listingId so downstream consumers (UI,
-      // Goldsky watch) have a stable identifier.
-      outcome.listingId = `stylus-${marketplaceChain.id}-${mint.tokenId}`;
-    }
+    // 6. No listing tx. Arbitrum mints carry their own price via the claim
+    //    condition, so there is nothing to list separately. Synthesize a
+    //    listingId so downstream consumers (UI, Goldsky watch) have a stable
+    //    identifier.
+    outcome.listingId = `stylus-${marketplaceChain.id}-${mint.tokenId}`;
 
     // 6b. Mint the DataProvenance soulbound token committing the shard's
     //     merkle root on-chain. Best-effort and gated to Arbitrum Sepolia
@@ -500,9 +496,115 @@ export class PublishOrchestrator {
 
   /**
    * Resolve the active marketplace chain from user settings. Defaults to
-   * `polygonAmoy` when the setting is missing or invalid so existing
+   * the default chain when the setting is missing or invalid so existing
    * publishes continue to work unchanged.
    */
+  /**
+   * Publish through the canonical marketplace pipeline (encrypt -> chunk ->
+   * pin -> store-drop lazyMint). Never throws; failures land in
+   * `outcome.errors` / `outcome.blockedAt` like every other path here.
+   */
+  private async publishCanonical(
+    input: PublishInput,
+    wallet: ethers.Wallet,
+    bundleId: number | undefined,
+    outcome: PublishOutcome,
+  ): Promise<PublishOutcome> {
+    const storeLabel = (input.storeSlug ?? "").trim().toLowerCase();
+    if (!storeLabel) {
+      outcome.errors!.push(
+        "storeSlug is required to publish to Joy Marketplace — a per-store drop " +
+          "contract is derived from the store's ENS label",
+      );
+      outcome.blockedAt = "mint-failed";
+      await this.persistBundle(bundleId, outcome);
+      return outcome;
+    }
+
+    if (!input.contentBuffer?.length) {
+      outcome.errors!.push(
+        "contentBuffer is required — the canonical path encrypts the asset " +
+          "bytes, so a CID-only publish cannot produce a decryptable listing",
+      );
+      outcome.blockedAt = "pin-failed";
+      await this.persistBundle(bundleId, outcome);
+      return outcome;
+    }
+
+    // Dry run: prove the store resolves and reserve nothing. Encryption and
+    // pinning both cost real resources, so there is no meaningful "estimate"
+    // short of doing the work.
+    if (input.dryRun) {
+      try {
+        const drop = await resolveStoreDrop(wallet.provider!, storeLabel);
+        const tokenId = await readNextTokenId(wallet.provider!, drop);
+        outcome.ok = true;
+        outcome.dropAddress = drop;
+        outcome.storeLabel = storeLabel;
+        outcome.tokenId = tokenId.toString();
+        await this.persistBundle(bundleId, { ...outcome, status: "dry-run-ok" });
+      } catch (err) {
+        outcome.errors!.push(`dry-run: ${(err as Error).message}`);
+        outcome.blockedAt = "mint-failed";
+        await this.persistBundle(bundleId, outcome);
+      }
+      return outcome;
+    }
+
+    try {
+      const result = await publishToMarketplace({
+        wallet,
+        storeLabel,
+        name: input.name,
+        description: input.description,
+        content: input.contentBuffer,
+        contentFileName: this.deriveFilename(input),
+        contentMimeType: input.contentMimeType,
+        coverImage: input.coverImage,
+        coverImageCid: input.coverImageCid,
+        extraAttributes: input.extraAttributes,
+        priceUsdc: BigInt(input.priceUsdc ?? 0),
+        royaltyBps: input.royaltyBps,
+        licenseType: input.license,
+        assetCategory: input.assetType,
+        onProgress: (stage) => logger.info(`[canonical] ${stage}`),
+      });
+
+      outcome.ok = true;
+      outcome.tokenId = result.tokenId;
+      outcome.dropAddress = result.dropAddress;
+      outcome.storeLabel = result.storeLabel;
+      outcome.metadataCid = result.metadataCid;
+      outcome.metadataUri = result.metadataUri;
+      outcome.envelopeCid = result.envelopeCid;
+      outcome.contentCid = result.envelopeCid;
+      outcome.merkleRoot = result.merkleRoot;
+      outcome.chunkCount = result.chunkCids.length;
+      outcome.mintTxHash = result.lazyMintTxHash;
+      outcome.listTxHash = result.setClaimTxHash;
+      outcome.listingId = `store-drop-${result.dropAddress}-${result.tokenId}`;
+      outcome.marketplaceUrl = `${MARKETPLACE_URL_BASE}/#/store/${result.storeLabel}`;
+      if (!result.uriCheck.ok && result.uriCheck.detail) {
+        outcome.errors!.push(result.uriCheck.detail);
+      }
+
+      await this.persistBundle(bundleId, { ...outcome, status: "published" });
+      await this.persistChainTxReceipts(outcome).catch((err) => {
+        logger.warn(`chain tx receipt persist failed: ${(err as Error).message}`);
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      outcome.errors!.push(`canonical publish: ${message}`);
+      // A token-id collision aborts before any write, so it is a mint failure,
+      // not a partial publish. Everything else that reaches here failed before
+      // or during the mint too — `mintEdition` is the last thing that can throw.
+      outcome.blockedAt = /token id moved/.test(message) ? "mint-failed" : "pin-failed";
+      await this.persistBundle(bundleId, outcome);
+    }
+
+    return outcome;
+  }
+
   private resolveMarketplaceChain(): MarketplaceChainConfig {
     let id: MarketplaceChainId = DEFAULT_MARKETPLACE_CHAIN;
     try {
@@ -626,7 +728,7 @@ export class PublishOrchestrator {
       rows.push({
         id: cryptoRandomId(),
         txHash: outcome.mintTxHash,
-        network: "polygon",
+        network: this.resolveMarketplaceChain().id,
         status: "confirmed",
         confirmations: 1,
         requiredConfirmations: 12,
@@ -641,7 +743,7 @@ export class PublishOrchestrator {
       rows.push({
         id: cryptoRandomId(),
         txHash: outcome.listTxHash,
-        network: "polygon",
+        network: this.resolveMarketplaceChain().id,
         status: "confirmed",
         confirmations: 1,
         requiredConfirmations: 12,

@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "description": "Deployment + audit record for the payments rail. Update on every deploy, initialize, setWallets, or audit milestone.",
+  "contracts": {
+    "revenueSplitter": {
+      "source": "contracts/revenue_splitter_stylus/",
+      "kind": "Arbitrum Stylus (Rust)",
+      "audit": {
+        "status": "not-commissioned",
+        "scopeDoc": "docs/payments/audit/scope.md",
+        "mainnetGate": true
+      },
+      "deployments": {
+        "arbitrumSepolia": {
+          "address": "0x34fa204ca5db1a25a0003b1c7b45ab9c858d63bf",
+          "initialized": true,
+          "platformWallet": "0x5939229582A5b42A6C5f55Fe55eC47523Cd5B9FE",
+          "protocolWallet": "0x5939229582A5b42A6C5f55Fe55eC47523Cd5B9FE",
+          "walletsHardened": false,
+          "notes": "Deploy/init tx hashes recorded in repo memory (x402-deploy.md). walletsHardened flips true after Phase 1 set_wallets.cjs run."
+        },
+        "arbitrumOne": {
+          "address": null,
+          "blockedOn": "audit (Phase 4) — see phase-5-mainnet-gate.md"
+        }
+      }
+    },
+    "editionController": {
+      "source": "contracts/edition_controller_stylus/",
+      "deployments": {
+        "arbitrumSepolia": { "address": "0x93b334ce8043195d57259c55ca2b336e63c17255" },
+        "arbitrumOne": { "address": null }
+      }
+    },
+    "storeRegistry": {
+      "source": "contracts/store_registry_stylus/",
+      "deployments": {
+        "arbitrumSepolia": { "address": "0x2e6f02271ae08250d2c87f4fa02eb468f4abe3e4" },
+        "arbitrumOne": { "address": null }
+      }
+    },
+    "agentMandate": {
+      "source": "contracts/agent_mandate_stylus/",
+      "deployments": {
+        "arbitrumSepolia": { "address": "0xe326ec664c22ac6adde0215e619fe8aece669408" },
+        "arbitrumOne": { "address": null }
+      }
+    },
+    "usdc": {
+      "source": "Circle (external, EIP-3009)",
+      "deployments": {
+        "arbitrumSepolia": { "address": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d" },
+        "arbitrumOne": { "address": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" }
+      }
+    }
+  }
+}

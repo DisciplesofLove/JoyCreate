@@ -125,6 +125,12 @@ export interface ScrapingConfig {
     requestsPerSecond?: number;
     delayBetweenRequests?: number;
     maxConcurrent?: number;
+    /**
+     * Honour robots.txt. Defaults to true — a scraper that ignores it by
+     * default gets the user's IP blocked and is the kind of thing that should
+     * be opted into deliberately, never inherited by accident.
+     */
+    respectRobots?: boolean;
   };
 
   // Output configuration

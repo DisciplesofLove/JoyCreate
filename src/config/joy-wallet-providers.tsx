@@ -114,7 +114,7 @@ export function JoyWalletProviders({ children }: { children: ReactNode }) {
         embeddedWallets: {
           createOnLogin: "users-without-wallets",
         },
-        defaultChain: { id: 80002, name: "Polygon Amoy" } as never,
+        defaultChain: { id: 421614, name: "Arbitrum Sepolia" } as never,
       }}
     >
       {inner}

@@ -24,17 +24,36 @@ import type { MarketplaceChainId } from "@/lib/onchain/chain_registry";
 
 // ── Endpoints ──────────────────────────────────────────────────────────────
 
-/** Default marketplace DropERC1155 subgraph (Arbitrum Sepolia). */
+/**
+ * The live drop lane: per-store DropERC1155 clones plus the shared platform
+ * drop that predates them.
+ *
+ * This used to point at `joy-drop-arbitrum-sepolia`, which the marketplace
+ * calls the *editions* subgraph and keeps only for `Edition` and
+ * `ReputationScore`. Reading it as the drop lane meant browse returned the old
+ * lineage and `listClaimsByBuyer` reported zero licences for wallets that
+ * demonstrably hold them — an empty result, not an error, so nothing surfaced.
+ *
+ * `Token.id` here is `<contract>-<tokenId>`, because per-store drops each
+ * restart numbering at zero.
+ */
 export const DEFAULT_DROP_SUBGRAPH_URL =
-  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-arbitrum-sepolia/0.0.5/gn";
-
-/** Store-scoped DropERC1155 subgraph with creator ownership (Arbitrum Sepolia). */
-export const DEFAULT_STORE_DROPS_SUBGRAPH_URL =
   "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-store-drops-arbitrum-sepolia/0.0.2/gn";
+
+/** Alias — the store-scoped lane is now the default drop lane. */
+export const DEFAULT_STORE_DROPS_SUBGRAPH_URL = DEFAULT_DROP_SUBGRAPH_URL;
+
+/**
+ * Legacy editions lineage. Retained because it is the only source of the
+ * `Edition` and `ReputationScore` entities; it indexes none of the per-store
+ * drops, so it must never back a browse or ownership query.
+ */
+export const DEFAULT_EDITIONS_SUBGRAPH_URL =
+  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-arbitrum-sepolia/0.0.5/gn";
 
 /** Default marketplace Stores subgraph (Arbitrum Sepolia). */
 export const DEFAULT_STORES_SUBGRAPH_URL =
-  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.4/gn";
+  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.5/gn";
 
 /**
  * Chains for which an indexed subgraph is available. Arbitrum One has no
@@ -95,6 +114,8 @@ export interface DropToken {
   id: string;
   /** Decimal string. */
   tokenId: string;
+  /** Drop contract this token lives on (lowercase hex). */
+  contract?: string;
   /** ipfs://... or https://... metadata base URI. */
   baseURI: string;
   /** Unix-second string when lazyMint tx was indexed. */
@@ -237,6 +258,7 @@ async function gql<T>(
 const TOKEN_FIELDS = `
   id
   tokenId
+  contract
   baseURI
   lazyMintedAt
   lazyMintBlock
@@ -315,16 +337,34 @@ export async function getDrop(
   tokenId: string | number | bigint,
   chainId: SubgraphChainId = "arbitrumSepolia",
 ): Promise<DropToken | null> {
-  const id = String(tokenId);
+  const ref = String(tokenId);
   const chain = assertSubgraphChain(chainId);
-  const data = await gql<{ token: DropToken | null }>(
+
+  // `Token.id` is `<contract>-<tokenId>` on the store-drops lane, but old links
+  // and pre-migration data still carry a bare tokenId. Resolve a composite id
+  // directly; for a bare one, fall back to a filtered query, since the same
+  // number can exist on several store drops.
+  if (ref.includes("-")) {
+    const data = await gql<{ token: DropToken | null }>(
+      getDropSubgraphUrl(chain),
+      `query GetDrop($id: ID!) {
+        token(id: $id) { ${TOKEN_FIELDS} }
+      }`,
+      { id: ref },
+    );
+    return data.token;
+  }
+
+  const data = await gql<{ tokens: DropToken[] }>(
     getDropSubgraphUrl(chain),
-    `query GetDrop($id: ID!) {
-      token(id: $id) { ${TOKEN_FIELDS} }
+    `query GetDropByTokenId($tokenId: BigInt!) {
+      tokens(where: { tokenId: $tokenId }, first: 1, orderBy: lazyMintBlock, orderDirection: asc) {
+        ${TOKEN_FIELDS}
+      }
     }`,
-    { id },
+    { tokenId: ref },
   );
-  return data.token;
+  return data.tokens?.[0] ?? null;
 }
 
 /**

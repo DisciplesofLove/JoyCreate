@@ -71,7 +71,7 @@ export const privyAdapter: WalletAdapter = {
     if (!controller) return null;
     const address = controller.currentAddress();
     if (!address) return null;
-    const chainId = controller.currentChainId() ?? 80002;
+    const chainId = controller.currentChainId() ?? 421614;
     attachProviderListeners(privyAdapter);
     return { address, chainId };
   },

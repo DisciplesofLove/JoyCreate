@@ -1,122 +1,138 @@
 /**
- * MCP Tools — Neural / Model Builder
- * Fine-tune, manage, and deploy local AI models via JoyCreate's Model Factory,
- * Local Model system (Ollama/LM Studio), and Model Registry.
+ * MCP Tools — local models and the fine-tuning factory.
+ *
+ * Routed through the registered `model-registry:*` and `model-factory:*` IPC
+ * channels.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { invokeHandler, runTool, toolError } from "./invoke_handler";
 
 export function registerNeuralModelTools(server: McpServer) {
   server.registerTool(
     "joycreate_model_list_local",
     {
-      description: "List locally available AI models in JoyCreate (Ollama, LM Studio, downloaded HuggingFace models).",
+      description: "List models available locally in the JoyCreate model registry.",
       inputSchema: {
-        provider: z.enum(["ollama", "lmstudio", "huggingface", "all"]).optional().describe("Filter by model provider"),
-        search: z.string().optional().describe("Search by model name"),
+        limit: z.number().optional().describe("Max results"),
       },
     },
-    async (params) => {
-      try {
-        const { listLocalModels } = require("@/ipc/handlers/local_model_handlers");
-        const result = await listLocalModels?.(params) ?? { models: [] };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async (params) => runTool("joycreate_model_list_local", () =>
+      invokeHandler("model-registry:list-local", params)),
   );
 
   server.registerTool(
     "joycreate_model_download",
     {
-      description: "Download an AI model from HuggingFace or Ollama registry to run locally in JoyCreate.",
+      description:
+        "Download a model into the local registry. Returns a download id; progress is " +
+        "reported on the download-status channel.",
       inputSchema: {
-        model_id: z.string().describe("Model ID (e.g. 'mistral:7b' for Ollama, 'meta-llama/Llama-3-8B' for HuggingFace)"),
-        provider: z.enum(["ollama", "huggingface"]).describe("Model provider/registry"),
-        quantization: z.string().optional().describe("Quantization level (e.g. Q4_K_M, Q8_0, fp16)"),
+        modelId: z.string().describe("Model identifier to download"),
+        source: z.string().optional().describe("Source, e.g. huggingface"),
       },
     },
-    async (params) => {
-      try {
-        const { downloadModel } = require("@/ipc/handlers/model_download_manager_handlers");
-        const result = await downloadModel?.(params) ?? { error: "Model download not available" };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async (params) => runTool("joycreate_model_download", () =>
+      invokeHandler("model-registry:download", params)),
   );
 
   server.registerTool(
     "joycreate_model_finetune",
     {
-      description: "Fine-tune a base model using a dataset in JoyCreate's Model Factory. Supports LoRA, QLoRA, and full fine-tuning.",
+      description:
+        "Start a LoRA / QLoRA fine-tuning run. Requires Python with transformers and " +
+        "peft installed — check model-factory system info first. Returns a job id.",
       inputSchema: {
-        base_model: z.string().describe("Base model ID to fine-tune"),
-        dataset_id: z.string().describe("Dataset ID (from joycreate_dataset_create)"),
-        method: z.enum(["lora", "qlora", "full"]).optional().describe("Fine-tuning method (default: qlora)"),
-        epochs: z.number().optional().describe("Training epochs (default: 3)"),
-        learning_rate: z.number().optional().describe("Learning rate (default: 2e-4)"),
-        output_name: z.string().optional().describe("Name for the fine-tuned model"),
+        baseModel: z.string().describe("Base model to fine-tune"),
+        datasetId: z.string().describe("Dataset to train on"),
+        method: z
+          .enum(["lora", "qlora", "full"])
+          .optional()
+          .describe("Fine-tuning method. Default qlora on constrained GPUs."),
+        hyperparameters: z
+          .record(z.any())
+          .optional()
+          .describe("loraRank, loraAlpha, loraDropout, epochs, learningRate, ..."),
       },
     },
-    async (params) => {
-      try {
-        const { fineTuneModel } = require("@/ipc/handlers/model_factory_handlers");
-        const result = await fineTuneModel?.(params) ?? { error: "Model fine-tuning not available" };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async (params) =>
+      runTool("joycreate_model_finetune", async () => {
+        // `model-factory:start-training` takes a job ID string, not a request.
+        // This passed the whole params object straight through, so every call
+        // died on "Training job not found: [object Object]" — the tool could
+        // never start a run at all. Creating the job first is what the UI does.
+        const method = params.method ?? "qlora";
+        const hp = (params.hyperparameters ?? {}) as Record<string, unknown>;
+
+        const job = await invokeHandler("model-factory:create-job", {
+          name: `${params.baseModel} · ${method}`,
+          baseModelSource: "huggingface",
+          baseModelId: params.baseModel,
+          method,
+          datasetPath: params.datasetId,
+          datasetFormat: "alpaca",
+          hyperparameters: {
+            epochs: Number(hp.epochs ?? 3),
+            batchSize: Number(hp.batchSize ?? 1),
+            learningRate: Number(hp.learningRate ?? 2e-4),
+            ...hp,
+          },
+        });
+
+        if (!job?.id) throw new Error("training job was not created");
+
+        // Throws with the preflight's reason when this machine cannot run the
+        // requested method — a missing package, or QLoRA without CUDA.
+        await invokeHandler("model-factory:start-training", job.id);
+
+        return {
+          jobId: job.id,
+          method,
+          baseModel: params.baseModel,
+          status: "training",
+          note:
+            "Runs for hours as a child process. The job is persisted, so poll " +
+            "model-factory:get-job — and if JoyCreate restarts, the run is marked " +
+            "interrupted rather than disappearing.",
+        };
+      }),
   );
 
   server.registerTool(
     "joycreate_model_publish",
     {
-      description: "Publish a local or fine-tuned model to Joy Marketplace. Handles IPFS packaging, metadata, and listing creation.",
+      description:
+        "Publish a model to Joy Marketplace. Models go through the same encrypted " +
+        "publish path as every other asset.",
       inputSchema: {
-        model_id: z.string().describe("Local model ID to publish"),
-        name: z.string().describe("Display name for the marketplace"),
-        description: z.string().describe("Model description, capabilities, and use cases"),
-        price_usd: z.number().optional().describe("Price in USD (0 for free)"),
-        license: z.string().optional().describe("License (MIT, Apache-2.0, proprietary, etc.)"),
-        tags: z.array(z.string()).optional().describe("Tags for discoverability"),
-        royalty_percent: z.number().optional().describe("Royalty % on resales (default 10)"),
+        modelId: z.string().describe("Model id (unused — see the error text)"),
       },
     },
-    async (params) => {
-      try {
-        const { publishModel } = require("@/ipc/handlers/model_registry_handlers");
-        const result = await publishModel?.(params) ?? { error: "Model publish not available" };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async () =>
+      toolError(
+        "joycreate_model_publish is not a separate path. Publishing goes through " +
+          "joycreate_publish_asset, which encrypts the weights, pins them, and mints on " +
+          "the store's drop contract. Read the model file and call " +
+          "joycreate_publish_asset with its bytes and assetType 'model'.",
+      ),
   );
 
   server.registerTool(
     "joycreate_model_infer",
     {
-      description: "Run inference on a local model loaded in JoyCreate (Ollama or LM Studio).",
+      description:
+        "Run inference against a local model. Use the chat tools for conversational " +
+        "inference.",
       inputSchema: {
-        model: z.string().describe("Model name (e.g. mistral:7b, llama3:8b)"),
-        prompt: z.string().describe("Input prompt"),
-        system: z.string().optional().describe("System prompt"),
-        temperature: z.number().optional().describe("Temperature (default 0.7)"),
-        max_tokens: z.number().optional().describe("Max output tokens (default 1024)"),
+        model: z.string().describe("Model id"),
+        prompt: z.string().describe("Prompt"),
       },
     },
-    async (params) => {
-      try {
-        const { runInference } = require("@/ipc/handlers/local_model_handlers");
-        const result = await runInference?.(params) ?? { error: "Inference not available" };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async () =>
+      toolError(
+        "joycreate_model_infer has no dedicated IPC handler. Use the chat tools for " +
+          "conversational inference, or joycreate_compute_smart_route to dispatch a " +
+          "request to the best available provider.",
+      ),
   );
 }

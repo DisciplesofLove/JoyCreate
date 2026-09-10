@@ -802,6 +802,7 @@ const validInvokeChannels = [
   "joybridge:get-store",
   "joybridge:list-my-stores",
   "joybridge:publish-asset",
+  "joybridge:check-store",
   "joybridge:get-asset",
   "joybridge:list-my-assets",
   "joybridge:browse-marketplace",
@@ -1304,6 +1305,19 @@ const validInvokeChannels = [
   "jcn:key:verify",
   "jcn:key:rotate",
   "jcn:admin:auditLog",
+  // Backup & restore (local snapshots of the database + userData)
+  "backup:list",
+  "backup:create",
+  "backup:delete",
+  "backup:restore",
+  "backup:pending-restore",
+  "backup:cancel-restore",
+  "backup:reveal",
+  // Audit log — local read-only. The networked `jcn:admin:auditLog` keeps its
+  // permission gate; these read the same table for the machine's owner.
+  "audit:query",
+  "audit:stats",
+  "audit:export",
   // Self-Sovereign Identity (SSI)
   "ssi:identity:create",
   "ssi:identity:get",
@@ -1596,6 +1610,7 @@ const validInvokeChannels = [
   "sovereignty:get-analytics",
   "sovereignty:get-access-logs",
   // Hyper Liquid Data Pipeline (Local → Marketplace)
+  "hyper-liquid:set-window",
   "hyper-liquid:get-pipelines",
   "hyper-liquid:get-pipeline",
   "hyper-liquid:create-pipeline",

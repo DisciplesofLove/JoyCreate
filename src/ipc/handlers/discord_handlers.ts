@@ -12,6 +12,7 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { getDiscordBot } from "@/lib/discord_bot_service";
 import { getOpenClawGateway } from "@/lib/openclaw_gateway_service";
+import { assertMayStart, resolveOwner } from "@/lib/channels/channel_owner";
 import { getOpenClawAutonomous } from "@/lib/openclaw_autonomous";
 import { voiceAssistant } from "@/lib/voice_assistant";
 import {
@@ -827,6 +828,11 @@ You don't just talk about doing things — you actually do them. When someone as
   // Start / Stop / Status
   // -------------------------------------------------------------------------
   ipcMain.handle("discord:start", async () => {
+    // Refuse to become a second owner of this token. Telegram allows exactly
+    // one getUpdates poller per token, and two bots answering the same message
+    // is its own bug — so the rule is uniform across channels. Throws with the
+    // reason, which the UI shows verbatim.
+    await assertMayStart("discord", { hasLocalCredential: bot.isConfigured() });
     await bot.start();
     return bot.getStatus();
   });
@@ -837,7 +843,12 @@ You don't just talk about doing things — you actually do them. When someone as
   });
 
   ipcMain.handle("discord:status", async () => {
-    return bot.getStatus();
+    // Ownership travels with status so the UI can explain a bot that is not
+    // running *because something else owns it*, rather than just showing 'off'.
+    const ownership = await resolveOwner("discord", {
+      hasLocalCredential: bot.isConfigured(),
+    });
+    return { ...bot.getStatus(), ownership };
   });
 
   ipcMain.handle("discord:config", async () => {
@@ -873,33 +884,26 @@ You don't just talk about doing things — you actually do them. When someone as
 
 export async function tryAutoStartDiscordBot(): Promise<void> {
   try {
-    // If the daemon is running AND explicitly handling Discord, skip the local
-    // bot to avoid token conflicts from two clients on the same token.
-    const gw = getOpenClawGateway();
-    if (gw.isBridged()) {
-      // Only skip if the daemon actually has a Discord channel configured
-      try {
-        const daemonPort = (gw.getConfig() as any)?.gateway?.daemonPort ?? 18790;
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 2000);
-        const resp = await fetch(`http://127.0.0.1:${daemonPort}/health`, { signal: ctrl.signal });
-        clearTimeout(timer);
-        if (resp.ok) {
-          const health = await resp.json().catch(() => ({}));
-          // Only skip if daemon explicitly reports discord as active
-          if (health?.channels?.discord || health?.discord?.active) {
-            logger.info("Daemon is bridged and handling Discord — skipping local bot");
-            return;
-          }
-        }
-      } catch {
-        // Daemon not reachable or no channel info — start local bot
-      }
+    // Ownership is decided in one place for every channel and every caller.
+    //
+    // This used to probe the daemon here with `isBridged()` plus a guess at
+    // the shape of its /health response (`health?.channels?.discord ||
+    // health?.discord?.active`). That guess is unverifiable from this side and
+    // fails open — if the shape ever changed, JoyCreate would start a second
+    // client on a token the daemon was already using. The arbiter reads the
+    // daemon's own config instead, which is what the daemon actually acts on.
+    const ownership = await resolveOwner("discord", {
+      hasLocalCredential: true,
+    });
+    if (ownership.owner === "daemon") {
+      logger.info(`Discord auto-start skipped — ${ownership.reason}`);
+      return;
     }
 
     let token: string | undefined;
 
     // 1. Check the gateway's in-memory config (app userData path)
+    const gw = getOpenClawGateway();
     const config = gw.getConfig() as unknown as Record<string, unknown>;
     const channels = config.channels as Record<string, unknown> | undefined;
     const dcChannel = channels?.discord as Record<string, unknown> | undefined;

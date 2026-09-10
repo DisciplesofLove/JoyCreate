@@ -24,9 +24,9 @@ const LS_ADDRESS = "joywallet:address";
 const LS_KEYSTORE = "joywallet:keystore";
 const APP_PASSPHRASE = "joycreate-joywallet-v1"; // static fallback, see notes above
 
-// Default RPC — Polygon Amoy testnet (matches the rest of the app).
-const DEFAULT_RPC = "https://rpc-amoy.polygon.technology";
-const DEFAULT_CHAIN_ID = 80002;
+// Default RPC — Arbitrum Sepolia (matches the rest of the app).
+const DEFAULT_RPC = "https://sepolia-rollup.arbitrum.io/rpc";
+const DEFAULT_CHAIN_ID = 421614;
 
 interface Keystore {
   v: 1;

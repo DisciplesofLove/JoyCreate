@@ -11,23 +11,16 @@ const env = (typeof import.meta !== "undefined" ? import.meta.env : undefined) a
   | Record<string, string | undefined>
   | undefined;
 
+// Arbitrum Sepolia is the only live lane. The Polygon Amoy entries were removed
+// after all three of their endpoints returned HTTP 404 "Subgraph not found".
 export const GOLDSKY_SUBGRAPHS = {
-  polygonAmoy: {
-    drop:
-      env?.VITE_DROP_SUBGRAPH_AMOY ??
-      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-amoy/0.0.3/gn",
-    stores:
-      env?.VITE_STORES_SUBGRAPH_AMOY ??
-      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-amoy/0.0.3/gn",
-    storeDrops: "",
-  },
   arbitrumSepolia: {
     drop:
       env?.VITE_DROP_SUBGRAPH_ARB_SEPOLIA ??
       "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-arbitrum-sepolia/0.0.5/gn",
     stores:
       env?.VITE_STORES_SUBGRAPH_ARB_SEPOLIA ??
-      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.4/gn",
+      "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.5/gn",
     storeDrops:
       env?.VITE_STORE_DROPS_SUBGRAPH_ARB_SEPOLIA ??
       "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-store-drops-arbitrum-sepolia/0.0.2/gn",

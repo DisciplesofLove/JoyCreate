@@ -196,6 +196,8 @@ import { registerDatasetTrainingHandlers } from "./handlers/dataset_training_han
 import { registerOnchainAssetBridgeHandlers } from "./handlers/onchain_asset_bridge_handlers";
 import { registerNlpPipelineHandlers } from "./handlers/nlp_pipeline_handlers";
 import { registerStubHandlers } from "./handlers/stub_handlers";
+import { registerBackupHandlers } from "./handlers/backup_handlers";
+import { registerAuditHandlers } from "./handlers/audit_handlers";
 import { registerNotificationHandlers } from "./handlers/notification_handlers";
 import { registerOnchainListenerHandlers } from "./handlers/onchain_listener_handlers";
 import { registerEarningsHandlers } from "./handlers/earnings_handlers";
@@ -661,5 +663,7 @@ export function registerIpcHandlers() {
   // Stub handlers — safe no-op responders for channels whose main-side
   // service has not yet been implemented. MUST be registered LAST so real
   // handlers always win the ipcMain.handle() registration race.
+  registerBackupHandlers();
+  registerAuditHandlers();
   registerStubHandlers();
 }

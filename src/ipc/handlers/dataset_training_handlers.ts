@@ -17,6 +17,7 @@ import {
   listBaseModels,
 } from "@/lib/dataset_training_service";
 import { OPENAI_FINE_TUNE_MODELS } from "@/lib/openai_fine_tuning";
+import { detectSystemCapabilities } from "./model_factory_handlers";
 
 import type {
   DatasetTrainingParams,
@@ -85,89 +86,18 @@ async function handleListBaseModels(): Promise<ListBaseModelsResult> {
 }
 
 async function handleGetTrainingSystemInfo(): Promise<TrainingSystemInfo> {
-  // Re-use the system detection from model_factory_handlers
-  const info: TrainingSystemInfo = {
-    hasGPU: false,
-    hasPython: false,
-    hasTransformers: false,
-    hasBitsAndBytes: false,
-    hasUnsloth: false,
-    recommendedMethod: "qlora",
-    recommendedQuantization: "4bit",
-    maxBatchSize: 1,
-    hasOpenAiKey: false,
+  // One detection, shared. This used to be a second copy that probed packages
+  // with "python3" regardless of which interpreter had answered, so on Windows
+  // it reported a fully-installed toolchain as having nothing.
+  const base = await detectSystemCapabilities();
+
+  return {
+    ...base,
+    // The OpenAI path is this handler's own concern: it can fine-tune through
+    // the API on a machine with no GPU and no local Python at all.
+    hasOpenAiKey: Boolean(process.env.OPENAI_API_KEY),
     openAiModels: OPENAI_FINE_TUNE_MODELS.map((m) => m.id),
   };
-
-  // Check Python
-  try {
-    const pythonVersion = execSync("python --version", { encoding: "utf-8" }).trim();
-    info.hasPython = true;
-    info.pythonVersion = pythonVersion.replace("Python ", "");
-  } catch {
-    try {
-      const python3Version = execSync("python3 --version", { encoding: "utf-8" }).trim();
-      info.hasPython = true;
-      info.pythonVersion = python3Version.replace("Python ", "");
-    } catch {
-      // No Python found
-    }
-  }
-
-  // Check GPU (NVIDIA)
-  try {
-    const nvidiaSmi = execSync(
-      "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits",
-      { encoding: "utf-8" },
-    ).trim();
-
-    if (nvidiaSmi) {
-      const [gpuName, vramStr] = nvidiaSmi.split(",").map((s) => s.trim());
-      info.hasGPU = true;
-      info.gpuName = gpuName;
-      info.gpuVRAM = parseInt(vramStr, 10);
-    }
-  } catch {
-    // No GPU
-  }
-
-  // Check Python packages
-  if (info.hasPython) {
-    const pythonCmd = process.platform === "win32" ? "python" : "python3";
-    try {
-      execSync(`${pythonCmd} -c "import transformers"`, { encoding: "utf-8" });
-      info.hasTransformers = true;
-    } catch {}
-    try {
-      execSync(`${pythonCmd} -c "import bitsandbytes"`, { encoding: "utf-8" });
-      info.hasBitsAndBytes = true;
-    } catch {}
-    try {
-      execSync(`${pythonCmd} -c "import unsloth"`, { encoding: "utf-8" });
-      info.hasUnsloth = true;
-    } catch {}
-  }
-
-  // Recommend method based on hardware
-  if (info.hasGPU && info.gpuVRAM) {
-    if (info.gpuVRAM >= 24000) {
-      info.recommendedMethod = "full";
-      info.maxBatchSize = 4;
-    } else if (info.gpuVRAM >= 12000) {
-      info.recommendedMethod = "lora";
-      info.maxBatchSize = 4;
-    } else if (info.gpuVRAM >= 6000) {
-      info.recommendedMethod = "qlora";
-      info.maxBatchSize = 2;
-    }
-  }
-
-  // Check for OpenAI API key in environment
-  if (process.env.OPENAI_API_KEY) {
-    info.hasOpenAiKey = true;
-  }
-
-  return info;
 }
 
 // ============================================================================

@@ -741,9 +741,31 @@ export interface ModelFactorySystemInfo {
   cudaVersion?: string;
   hasPython: boolean;
   pythonVersion?: string;
+  /**
+   * The interpreter that actually answered — "python" or "python3".
+   *
+   * Detection used to try `python`, then fall back to `python3`, and then
+   * probe every package with `python3` regardless of which had worked. On
+   * Windows `python3` is usually absent, so a machine with the full toolchain
+   * installed still reported every package missing.
+   */
+  pythonCommand?: string;
+  hasTorch: boolean;
+  torchVersion?: string;
+  /** torch's own view of CUDA, which is what training actually depends on. */
+  torchCuda: boolean;
   hasTransformers: boolean;
+  hasPeft: boolean;
   hasBitsAndBytes: boolean;
+  hasDatasets: boolean;
+  hasAccelerate: boolean;
   hasUnsloth: boolean;
+  /** Packages needed for a real run that are not installed. */
+  missingPackages: string[];
+  /** Methods this machine can actually run right now. */
+  supportedMethods: string[];
+  /** Why a method is unavailable, keyed by method. */
+  blockers: Record<string, string>;
   recommendedMethod: string;
   recommendedQuantization: string;
   maxBatchSize: number;

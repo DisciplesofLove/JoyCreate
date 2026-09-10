@@ -141,6 +141,16 @@ function readConfiguredStoreSlug(): string | undefined {
   }
 }
 
+/** Read the creator's intended Seller-bucket payout address from settings. */
+function readConfiguredPayoutAddress(): string | undefined {
+  try {
+    const settings = readSettings();
+    return (settings as { marketplacePayoutAddress?: string }).marketplacePayoutAddress;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Publish an asset to the marketplace AND create an EditionController drop +
  * ERC-1144 blueprint so the listing is purchasable through the x402 rail.
@@ -191,6 +201,14 @@ export async function publishAndMonetize(
     } else {
       try {
         const wallet = await loadGlueWallet(chain);
+
+        // drop.creator (the Seller payout) is set immutably to the signer.
+        const intendedPayout = readConfiguredPayoutAddress();
+        if (intendedPayout && intendedPayout.toLowerCase() !== wallet.address.toLowerCase()) {
+          const warning = `payout-mismatch: drop will pay out to signer ${wallet.address}, not the configured payout address ${intendedPayout}`;
+          logger.warn(warning);
+          errors.push(warning);
+        }
 
         // Resolve — or auto-register — the creator's storefront.
         storeId = await resolveStoreBySlug(chain, storeSlug);

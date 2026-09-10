@@ -9,27 +9,38 @@ export const thirdwebClient = createThirdwebClient({
   clientId: THIRDWEB_CLIENT_ID,
 });
 
-// Polygon Amoy Testnet
-export const TARGET_CHAIN_ID = 80002;
-export const TARGET_CHAIN_NAME = "Polygon Amoy Testnet";
+// Arbitrum Sepolia — the only chain this app transacts on. Was Polygon Amoy
+// (80002); the marketplace moved and its Amoy subgraphs were decommissioned.
+export const TARGET_CHAIN_ID = 421614;
+export const TARGET_CHAIN_NAME = "Arbitrum Sepolia";
 
 export function getThirdwebChain(chainId?: number) {
   return defineChain(chainId ?? TARGET_CHAIN_ID);
 }
 
-// Deployed contracts
+/**
+ * Deployed contracts — Arbitrum Sepolia.
+ *
+ * `JoyLicenseToken` (0xb099296f… on Polygon Amoy) is gone with that chain. The
+ * shared-collection model went with it: the marketplace now mints into a
+ * per-store DropERC1155 clone resolved from the store's ENS label, so there is
+ * no single "nftCollection" address to hand out. `platformDrop` below is the
+ * shared drop the subgraph still indexes for pre-per-store assets; new mints
+ * should go through `resolveStoreDrop()` in
+ * `src/lib/joymarketplace/store_drop_publisher.ts`.
+ */
 export const THIRDWEB_CONTRACTS = {
   nftCollection: {
-    address: "0xb099296fe65a2185731aC8B1411A56175e6Be47a" as const,
+    address: "0x61672aa9c97342183481455834e6e944ea64e552" as const,
     chainId: TARGET_CHAIN_ID,
-    name: "JoyLicenseToken",
+    name: "JoyPlatformDrop",
     standard: "ERC-1155" as const,
   },
-  /** Alias — wizard references THIRDWEB_CONTRACTS.edition */
+  /** Alias — the legacy CreateAssetWizard references `.edition`. */
   edition: {
-    address: "0xb099296fe65a2185731aC8B1411A56175e6Be47a" as const,
+    address: "0x61672aa9c97342183481455834e6e944ea64e552" as const,
     chainId: TARGET_CHAIN_ID,
-    name: "JoyLicenseToken",
+    name: "JoyPlatformDrop",
     standard: "ERC-1155" as const,
   },
 } as const;

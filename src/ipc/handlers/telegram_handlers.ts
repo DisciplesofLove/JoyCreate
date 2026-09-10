@@ -12,6 +12,7 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { getTelegramBot } from "@/lib/telegram_bot_service";
 import { getOpenClawGateway } from "@/lib/openclaw_gateway_service";
+import { assertMayStart, resolveOwner } from "@/lib/channels/channel_owner";
 import { getOpenClawAutonomous } from "@/lib/openclaw_autonomous";
 import { voiceAssistant } from "@/lib/voice_assistant";
 import {
@@ -870,6 +871,11 @@ You don't just talk about doing things — you actually do them. When someone as
   // Start / Stop / Status
   // -------------------------------------------------------------------------
   ipcMain.handle("telegram:start", async () => {
+    // Refuse to become a second owner of this token. Telegram allows exactly
+    // one getUpdates poller per token, and two bots answering the same message
+    // is its own bug — so the rule is uniform across channels. Throws with the
+    // reason, which the UI shows verbatim.
+    await assertMayStart("telegram", { hasLocalCredential: bot.isConfigured() });
     await bot.start();
     return bot.getStatus();
   });
@@ -880,7 +886,12 @@ You don't just talk about doing things — you actually do them. When someone as
   });
 
   ipcMain.handle("telegram:status", async () => {
-    return bot.getStatus();
+    // Ownership travels with status so the UI can explain a bot that is not
+    // running *because something else owns it*, rather than just showing 'off'.
+    const ownership = await resolveOwner("telegram", {
+      hasLocalCredential: bot.isConfigured(),
+    });
+    return { ...bot.getStatus(), ownership };
   });
 
   ipcMain.handle("telegram:config", async () => {
@@ -1033,7 +1044,6 @@ export function daemonTelegramChannelEnabled(): boolean {
 
 export async function tryAutoStartTelegramBot(): Promise<void> {
   try {
-    // Resolve the token FIRST — we need it both for daemon-skip and local-start paths
     let token: string | undefined;
 
     // 0. Prefer JoyCreate's OWN independent Telegram token (from settings).

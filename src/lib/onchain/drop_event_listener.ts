@@ -32,7 +32,10 @@ import { readSettings } from "@/main/settings";
 const logger = log.scope("drop_event_listener");
 
 // Polygon Amoy (thirdweb DropERC1155) ABI surface — used when the resolved
-// chain is `polygonAmoy`. Arbitrum Stylus chains pull their ABI from
+// Single-chain (Arbitrum Sepolia): the drop emits TransferSingle and a mint
+// (from == 0x0) is the claim signal. The Polygon Amoy arm, which listened for
+// thirdweb's dedicated TokensClaimed event, was removed with that chain.
+// Chains pull their ABI from
 // chain_registry (STYLUS_DROP_ABI) and only emit TransferSingle.
 const DROP_ABI = [
   "event TokensClaimed(uint256 indexed claimConditionIndex, address indexed claimer, address indexed receiver, uint256 tokenId, uint256 quantityClaimed)",
@@ -97,46 +100,28 @@ class DropEventListener {
       }
 
       const { chain, contracts } = this.activeChain;
-      const abi = this.activeChain.id === "polygonAmoy" ? DROP_ABI : [...this.activeChain.abi];
+      const abi = [...this.activeChain.abi];
 
       this.provider = new ethers.JsonRpcProvider(chain.rpcUrl, chain.chainId);
       this.contract = new ethers.Contract(contracts.dropEdition, abi, this.provider);
 
-      if (this.activeChain.id === "polygonAmoy") {
-        // thirdweb DropERC1155 emits a dedicated TokensClaimed event.
-        this.contract.on(
-          "TokensClaimed",
-          (_idx, _claimer, receiver, tokenId, quantityClaimed, ev) => {
-            void this.handleClaimed({
-              receiver: String(receiver),
-              tokenId: tokenId.toString(),
-              quantityClaimed: quantityClaimed.toString(),
-              txHash: ev.log.transactionHash,
-              logIndex: ev.log.index,
-              blockNumber: ev.log.blockNumber,
-              eventName: "TokensClaimed",
-            });
-          },
-        );
-      } else {
         // OpenZeppelin Stylus Erc1155 only emits TransferSingle/Batch — treat
-        // mints (from == 0x0) as the claim signal.
-        this.contract.on(
-          "TransferSingle",
-          (_operator, from, to, id, value, ev) => {
-            if (String(from).toLowerCase() !== ZERO_ADDR_LC) return;
-            void this.handleClaimed({
-              receiver: String(to),
-              tokenId: id.toString(),
-              quantityClaimed: value.toString(),
-              txHash: ev.log.transactionHash,
-              logIndex: ev.log.index,
-              blockNumber: ev.log.blockNumber,
-              eventName: "TransferSingle",
-            });
-          },
-        );
-      }
+      // mints (from == 0x0) as the claim signal.
+      this.contract.on(
+        "TransferSingle",
+        (_operator, from, to, id, value, ev) => {
+          if (String(from).toLowerCase() !== ZERO_ADDR_LC) return;
+          void this.handleClaimed({
+            receiver: String(to),
+            tokenId: id.toString(),
+            quantityClaimed: value.toString(),
+            txHash: ev.log.transactionHash,
+            logIndex: ev.log.index,
+            blockNumber: ev.log.blockNumber,
+            eventName: "TransferSingle",
+          });
+        },
+      );
 
       this.provider.on("error", (err) => {
         this.lastError = (err as Error)?.message ?? String(err);
@@ -180,46 +165,29 @@ class DropEventListener {
   async replaySince(fromBlock: number): Promise<{ replayed: number }> {
     const active = resolveActiveChain();
     if (!isMarketplaceChainReady(active.id)) return { replayed: 0 };
-    const abi = active.id === "polygonAmoy" ? DROP_ABI : [...active.abi];
+    const abi = [...active.abi];
     const provider = new ethers.JsonRpcProvider(active.chain.rpcUrl, active.chain.chainId);
     const contract = new ethers.Contract(active.contracts.dropEdition, abi, provider);
     const latest = await provider.getBlockNumber();
-    const filter =
-      active.id === "polygonAmoy"
-        ? contract.filters.TokensClaimed()
-        : contract.filters.TransferSingle();
+    const filter = contract.filters.TransferSingle();
     const events = await contract.queryFilter(filter, fromBlock, latest);
     let replayed = 0;
     for (const ev of events) {
       const args = (ev as ethers.EventLog).args;
       if (!args) continue;
       let payload: Parameters<DropEventListener["handleClaimed"]>[0];
-      if (active.id === "polygonAmoy") {
-        // (idx, claimer, receiver, tokenId, quantity)
-        payload = {
-          receiver: String(args[2]),
-          tokenId: args[3].toString(),
-          quantityClaimed: args[4].toString(),
-          txHash: ev.transactionHash,
-          logIndex: ev.index,
-          blockNumber: ev.blockNumber,
-          eventName: "TokensClaimed",
-          contractOverride: active.contracts.dropEdition,
-        };
-      } else {
         // (operator, from, to, id, value)
-        if (String(args[1]).toLowerCase() !== ZERO_ADDR_LC) continue;
-        payload = {
-          receiver: String(args[2]),
-          tokenId: args[3].toString(),
-          quantityClaimed: args[4].toString(),
-          txHash: ev.transactionHash,
-          logIndex: ev.index,
-          blockNumber: ev.blockNumber,
-          eventName: "TransferSingle",
-          contractOverride: active.contracts.dropEdition,
-        };
-      }
+      if (String(args[1]).toLowerCase() !== ZERO_ADDR_LC) continue;
+      payload = {
+        receiver: String(args[2]),
+        tokenId: args[3].toString(),
+        quantityClaimed: args[4].toString(),
+        txHash: ev.transactionHash,
+        logIndex: ev.index,
+        blockNumber: ev.blockNumber,
+        eventName: "TransferSingle",
+        contractOverride: active.contracts.dropEdition,
+      };
       const ok = await this.handleClaimed(payload);
       if (ok) replayed += 1;
     }

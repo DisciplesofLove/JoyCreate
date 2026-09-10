@@ -21,6 +21,8 @@ import {
   useStoreBlueprint,
   useAgentBlueprint,
 } from "@/hooks/useBroker";
+import { useX402Status, useX402PurchaseEdition } from "@/hooks/use_x402";
+import { PurchaseBreakdown } from "@/components/marketplace/PurchaseBreakdown";
 import { useReputationScores } from "@/hooks/use_agent_provenance";
 import type {
   Erc8004ChainId,
@@ -174,7 +176,7 @@ function BlueprintField({ label, value }: { label: string; value: React.ReactNod
   );
 }
 
-function BlueprintView({ bp }: { bp: InterfaceBlueprint }) {
+function BlueprintView({ bp, chain }: { bp: InterfaceBlueprint; chain: X402ChainId }) {
   return (
     <div className="rounded-lg border p-4 space-y-4 text-sm">
       <div className="flex items-center gap-2">
@@ -250,6 +252,53 @@ function BlueprintView({ bp }: { bp: InterfaceBlueprint }) {
         />
         <BlueprintField label="USDC" value={shortHash(bp.contracts.usdc)} />
       </div>
+
+      {bp.kind === "drop" && bp.capabilities.length > 0 && (
+        <DropPurchasePanel bp={bp} chain={chain} />
+      )}
+    </div>
+  );
+}
+
+function DropPurchasePanel({ bp, chain }: { bp: InterfaceBlueprint; chain: X402ChainId }) {
+  const status = useX402Status(chain);
+  const purchase = useX402PurchaseEdition();
+  const cap = bp.capabilities[0];
+  const receipt = purchase.data;
+
+  return (
+    <div className="space-y-3">
+      <PurchaseBreakdown priceUsdc={cap.priceUsdc} status={status.data} />
+      <Button
+        disabled={!bp.ready || !status.data?.ready || purchase.isPending}
+        onClick={() => purchase.mutate({ chain, dropId: bp.resourceId })}
+      >
+        {purchase.isPending ? "Purchasing…" : `Buy — ${cap.priceUsdc} USDC`}
+      </Button>
+
+      {receipt && (
+        <div className="rounded-lg border p-3 space-y-1 text-sm">
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">minted</Badge>
+            <span>Token #{receipt.tokenId}</span>
+          </div>
+          {receipt.settlement.txHash && (
+            <BlueprintField label="Settle tx" value={shortHash(receipt.settlement.txHash, 10, 8)} />
+          )}
+          {receipt.settlement.split && (
+            <>
+              <BlueprintField label="Seller received" value={`${receipt.settlement.split.creator} (atomic)`} />
+              <BlueprintField label="Compute received" value={`${receipt.settlement.split.protocol} (atomic)`} />
+              <BlueprintField label="Platform + DAO received" value={`${receipt.settlement.split.platform} (atomic)`} />
+            </>
+          )}
+          <BlueprintField label="Mint tx" value={shortHash(receipt.mintTxHash, 10, 8)} />
+          <p className="text-xs text-muted-foreground pt-1">
+            Confirmed on Arbitrum. Hard finality settles to Ethereum — a window
+            Arbitrum's upcoming zk settlement upgrade reduces from days to hours.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -308,7 +357,7 @@ function BlueprintInspector({ chain }: { chain: X402ChainId }) {
             Failed to build blueprint for {kind} {submittedId}.
           </p>
         )}
-        {query.data && <BlueprintView bp={query.data} />}
+        {query.data && <BlueprintView bp={query.data} chain={chain} />}
       </CardContent>
     </Card>
   );

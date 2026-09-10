@@ -49,10 +49,17 @@ export function JoyMarketplaceSettings() {
   const configuredStoreSlug =
     (settings as { marketplaceStoreSlug?: string } | null)?.marketplaceStoreSlug ?? "";
   const [storeSlug, setStoreSlug] = useState("");
+  const configuredPayoutAddress =
+    (settings as { marketplacePayoutAddress?: string } | null)?.marketplacePayoutAddress ?? "";
+  const [payoutAddress, setPayoutAddress] = useState("");
 
   useEffect(() => {
     setStoreSlug(configuredStoreSlug);
   }, [configuredStoreSlug]);
+
+  useEffect(() => {
+    setPayoutAddress(configuredPayoutAddress);
+  }, [configuredPayoutAddress]);
 
   async function refresh(): Promise<void> {
     try {
@@ -228,6 +235,40 @@ export function JoyMarketplaceSettings() {
             The storefront that published assets are licensed to. Auto-registered
             on-chain on first publish. Leave blank to mint without creating a
             purchasable x402 drop.
+          </p>
+        </div>
+        <div className="pt-2">
+          <Label htmlFor="marketplace-payout-address" className="flex items-center gap-1">
+            <KeyRound className="h-3 w-3" />
+            Payout address (Seller 80%)
+          </Label>
+          <Input
+            id="marketplace-payout-address"
+            placeholder="0x…"
+            value={payoutAddress}
+            onChange={(e) => setPayoutAddress(e.target.value)}
+            onBlur={() => {
+              const next = payoutAddress.trim();
+              if (next === configuredPayoutAddress) return;
+              if (next && !/^0x[0-9a-fA-F]{40}$/.test(next)) {
+                toast.error("Payout address must be a 0x-prefixed 20-byte address");
+                return;
+              }
+              void updateSettings({ marketplacePayoutAddress: next })
+                .then(() =>
+                  toast.success(next ? `Payout address: ${next}` : "Payout address cleared"),
+                )
+                .catch((err: unknown) =>
+                  toast.error(
+                    err instanceof Error ? err.message : "Failed to save payout address",
+                  ),
+                );
+            }}
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            Where the 80% Seller share should settle. Drops pay out to the wallet
+            that creates them — publishing warns if the signing wallet differs
+            from this address.
           </p>
         </div>
       </CardContent>

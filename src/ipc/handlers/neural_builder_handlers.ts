@@ -1339,18 +1339,12 @@ export function registerNeuralBuilderHandlers(): void {
 
   // ── Agent / App list helpers (for UI dropdowns) ─────────────────────────
 
-  // If not registered elsewhere, register simple list handlers
-  // These may already be registered by app_handlers / agent creation handlers.
-  // Wrap in try/catch to avoid duplicate registration errors.
-  try {
-    ipcMain.handle("agent:list", async () => {
-      const { getDb } = await import("@/db/index");
-      const { agents: agentsTable } = await import("@/db/schema");
-      const db = getDb();
-      return db.select({ id: agentsTable.id, name: agentsTable.name, type: agentsTable.type, status: agentsTable.status }).from(agentsTable).all();
-    });
-  } catch { /* already registered */ }
-
+  // `agent:list` used to be registered here too, wrapped in a try/catch that
+  // swallowed the duplicate-registration error. agent_builder_handlers runs
+  // first in ipc_host, so this copy always lost — two implementations, one of
+  // them permanently dead. Removed; agent_builder_handlers owns that channel.
+  //
+  // `app:list` below is unique to this module, so it stays.
   try {
     ipcMain.handle("app:list", async () => {
       const { getDb } = await import("@/db/index");

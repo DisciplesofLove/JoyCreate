@@ -238,6 +238,49 @@ export default function SettingsPage() {
             className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6"
           >
             <h2 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
+              Background &amp; Agents
+            </h2>
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="background-mode"
+                    checked={settings?.backgroundMode !== false}
+                    onCheckedChange={(checked) => {
+                      updateSettings({ backgroundMode: checked });
+                    }}
+                  />
+                  <Label htmlFor="background-mode">Keep running in the background</Label>
+                </div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Closing the window hides JoyCreate to the tray instead of quitting, so
+                  scheduled agents, syncs and in-flight runs keep going. Quit from the tray
+                  menu. Turn this off and closing the last window ends every running agent.
+                  Takes effect on restart.
+                </div>
+              </div>
+              <div className="space-y-1 mt-4">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="open-at-login"
+                    checked={settings?.openAtLogin === true}
+                    onCheckedChange={(checked) => {
+                      updateSettings({ openAtLogin: checked });
+                    }}
+                  />
+                  <Label htmlFor="open-at-login">Start JoyCreate at login</Label>
+                </div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Needed for scheduled agents to run without you starting the app by hand.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6"
+          >
+            <h2 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
               Experiments
             </h2>
             <div className="space-y-4">

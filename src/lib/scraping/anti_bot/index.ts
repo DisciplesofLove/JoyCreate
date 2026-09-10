@@ -6,6 +6,8 @@ export {
   isUrlAllowed,
   randomDelay,
   adjustDelay,
+  getAdaptiveDelay,
+  getRobotsRules,
   clearPolitenessState,
 } from "./politeness_engine";
 export {

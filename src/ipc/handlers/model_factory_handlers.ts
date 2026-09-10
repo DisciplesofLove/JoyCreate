@@ -22,100 +22,185 @@ import type {
   AdapterInfo,
 } from "../ipc_types";
 
+import * as trainingStore from "@/lib/training_job_store";
+
 const logger = log.scope("model_factory_handlers");
 
 // Active training processes
 const activeTrainingJobs = new Map<string, ChildProcess>();
+/**
+ * In-process cache of live job state.
+ *
+ * It stays because progress arrives as a stream of stdout lines and writing
+ * every one to SQLite would be pointless churn — but it is now a cache in front
+ * of `training_jobs`, not the record itself. Everything that has to survive a
+ * restart goes to the table through `trainingStore`.
+ */
 const trainingJobProgress = new Map<string, TrainingJobInfo>();
 
 // =============================================================================
 // SYSTEM INFO
 // =============================================================================
 
-async function detectSystemCapabilities(): Promise<ModelFactorySystemInfo> {
+/**
+ * Detect what this machine can actually train with.
+ *
+ * Exported because dataset_training_handlers had a second copy of this - its
+ * comment even said "re-use the system detection from model_factory_handlers"
+ * — which meant the python3 probing bug had to be fixed twice and the two
+ * answers could disagree about the same machine.
+ */
+export async function detectSystemCapabilities(): Promise<ModelFactorySystemInfo> {
   const info: ModelFactorySystemInfo = {
     hasGPU: false,
     hasPython: false,
+    hasTorch: false,
+    torchCuda: false,
     hasTransformers: false,
+    hasPeft: false,
     hasBitsAndBytes: false,
+    hasDatasets: false,
+    hasAccelerate: false,
     hasUnsloth: false,
+    missingPackages: [],
+    supportedMethods: [],
+    blockers: {},
     recommendedMethod: "qlora",
     recommendedQuantization: "4bit",
     maxBatchSize: 1,
   };
 
-  // Check Python
-  try {
-    const pythonVersion = execSync("python --version", { encoding: "utf-8" }).trim();
-    info.hasPython = true;
-    info.pythonVersion = pythonVersion.replace("Python ", "");
-  } catch {
+  // Find an interpreter, and REMEMBER which one answered. Probing packages
+  // with a different command than the one that worked is how this reported a
+  // fully-installed machine as having nothing.
+  for (const cmd of ["python", "python3"]) {
     try {
-      const python3Version = execSync("python3 --version", { encoding: "utf-8" }).trim();
+      const version = execSync(`${cmd} --version`, {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (!/^Python 3/.test(version)) continue;
       info.hasPython = true;
-      info.pythonVersion = python3Version.replace("Python ", "");
+      info.pythonCommand = cmd;
+      info.pythonVersion = version.replace("Python ", "");
+      break;
     } catch {
-      logger.warn("Python not found");
+      // try the next name
     }
   }
+  if (!info.hasPython) logger.warn("No Python 3 interpreter found");
 
   // Check GPU (NVIDIA)
   try {
     const nvidiaSmi = execSync("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits", {
       encoding: "utf-8",
     }).trim();
-    
+
     if (nvidiaSmi) {
-      const [gpuName, vramStr] = nvidiaSmi.split(",").map(s => s.trim());
+      const [gpuName, vramStr] = nvidiaSmi.split(",").map((s) => s.trim());
       info.hasGPU = true;
       info.gpuName = gpuName;
       info.gpuVRAM = parseInt(vramStr, 10);
-      
-      // Check CUDA version
+
       try {
         const cudaVersion = execSync("nvcc --version", { encoding: "utf-8" });
         const match = cudaVersion.match(/release (\d+\.\d+)/);
-        if (match) {
-          info.cudaVersion = match[1];
-        }
+        if (match) info.cudaVersion = match[1];
       } catch {
-        // CUDA toolkit not installed, but GPU may still work
+        // CUDA toolkit absent; the driver may still expose a usable GPU.
       }
     }
   } catch {
-    // No NVIDIA GPU or nvidia-smi not available
+    // No NVIDIA GPU, or nvidia-smi not on PATH.
   }
 
-  // Check Python packages
-  if (info.hasPython) {
-    const pythonCmd = info.pythonVersion?.startsWith("3") ? "python3" : "python";
-    
-    // Check transformers
-    try {
-      execSync(`${pythonCmd} -c "import transformers; print(transformers.__version__)"`, {
-        encoding: "utf-8",
-      });
-      info.hasTransformers = true;
-    } catch {
-      // transformers not installed
-    }
+  // Check Python packages, using the interpreter that actually answered.
+  if (info.hasPython && info.pythonCommand) {
+    const py = info.pythonCommand;
 
-    // Check bitsandbytes
-    try {
-      execSync(`${pythonCmd} -c "import bitsandbytes"`, { encoding: "utf-8" });
-      info.hasBitsAndBytes = true;
-    } catch {
-      // bitsandbytes not installed
-    }
+    const probe = (mod: string): boolean => {
+      try {
+        execSync(py + ' -c "import ' + mod + '"', {
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
 
-    // Check unsloth
+    info.hasTransformers = probe("transformers");
+    info.hasPeft = probe("peft");
+    info.hasBitsAndBytes = probe("bitsandbytes");
+    info.hasDatasets = probe("datasets");
+    info.hasAccelerate = probe("accelerate");
+    info.hasUnsloth = probe("unsloth");
+
+    // torch is asked directly whether it can see a GPU. nvidia-smi finding a
+    // card proves nothing about the wheel that is installed: a CPU-only torch
+    // on a machine with a 4090 still cannot run 4-bit QLoRA.
     try {
-      execSync(`${pythonCmd} -c "import unsloth"`, { encoding: "utf-8" });
-      info.hasUnsloth = true;
+      const out = execSync(
+        py +
+          ' -c "import torch,json;print(json.dumps({\'v\':torch.__version__,\'cuda\':torch.cuda.is_available()}))"',
+        { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
+      ).trim();
+      const parsed = JSON.parse(out);
+      info.hasTorch = true;
+      info.torchVersion = parsed.v;
+      info.torchCuda = Boolean(parsed.cuda);
     } catch {
-      // unsloth not installed
+      // torch missing or unimportable
     }
   }
+
+  // Name what is missing, so the UI can say what to install rather than
+  // letting a job fail two minutes in with a Python traceback.
+  if (!info.hasTorch) info.missingPackages.push("torch");
+  if (!info.hasTransformers) info.missingPackages.push("transformers");
+  if (!info.hasPeft) info.missingPackages.push("peft");
+  if (!info.hasDatasets) info.missingPackages.push("datasets");
+  if (!info.hasAccelerate) info.missingPackages.push("accelerate");
+  if (!info.hasBitsAndBytes) info.missingPackages.push("bitsandbytes");
+
+  const baseReady =
+    info.hasPython &&
+    info.hasTorch &&
+    info.hasTransformers &&
+    info.hasPeft &&
+    info.hasDatasets &&
+    info.hasAccelerate;
+
+  if (!info.hasPython) {
+    const msg = "Python 3 was not found on PATH";
+    info.blockers.lora = msg;
+    info.blockers.qlora = msg;
+    info.blockers.full = msg;
+  } else if (!baseReady) {
+    const missing = info.missingPackages
+      .filter((m) => m !== "bitsandbytes")
+      .join(", ");
+    const msg = "Missing Python packages: " + (missing || "none");
+    info.blockers.lora = msg;
+    info.blockers.qlora = msg;
+    info.blockers.full = msg;
+  } else if (!info.torchCuda) {
+    // LoRA on CPU is legal but glacial; QLoRA is impossible, because 4-bit
+    // quantisation is a bitsandbytes CUDA kernel.
+    info.supportedMethods.push("lora");
+    info.blockers.lora =
+      "torch has no CUDA — LoRA will run on CPU and be extremely slow";
+    info.blockers.qlora =
+      "QLoRA needs a CUDA GPU: 4-bit quantisation is a bitsandbytes CUDA kernel";
+    info.blockers.full = "Full fine-tuning needs a CUDA GPU";
+  } else if (!info.hasBitsAndBytes) {
+    info.supportedMethods.push("lora", "full");
+    info.blockers.qlora = "bitsandbytes is not installed";
+  } else {
+    info.supportedMethods.push("lora", "qlora", "full");
+  }
+
 
   // Determine recommended settings based on GPU VRAM
   if (info.hasGPU && info.gpuVRAM) {
@@ -521,7 +606,28 @@ export async function handleCreateTrainingJob(
   };
   
   trainingJobProgress.set(jobId, job);
-  
+
+  // Write through. A fine-tune runs for hours; a record that exists only in
+  // this process is erased — not failed — the moment the app closes.
+  try {
+    trainingStore.createJob({
+      id: jobId,
+      name: params.name,
+      description: params.description,
+      baseModelId: params.baseModelId,
+      method: params.method as trainingStore.TrainingMethod,
+      datasetId: params.datasetPath,
+      datasetPath: params.datasetPath,
+      outputPath,
+      totalEpochs: params.hyperparameters.epochs,
+      hyperparameters: params.hyperparameters as Record<string, unknown>,
+    });
+  } catch (err) {
+    // Losing the durable record is bad; refusing to train because of it is
+    // worse — the user still gets their run, and the failure is on the record.
+    logger.error("failed to persist training job:", err);
+  }
+
   return job;
 }
 
@@ -535,6 +641,35 @@ export async function handleStartTraining(
   }
   
   logger.info("Starting training job:", jobId);
+
+  // Refuse to start a run this machine cannot finish.
+  //
+  // Without this the app spawned python, the import of `peft` or
+  // `bitsandbytes` failed, and the user got a Python traceback minutes later —
+  // for a job they had been told was training. QLoRA is the sharp case: 4-bit
+  // quantisation is a CUDA kernel, so on a CPU-only torch it can never work no
+  // matter how long it is left running.
+  const capabilities = await detectSystemCapabilities();
+  const blocker = capabilities.blockers[job.method];
+  const supported = capabilities.supportedMethods.includes(job.method);
+
+  if (!supported) {
+    const reason =
+      blocker ?? `${job.method} is not available on this machine`;
+    const install = capabilities.missingPackages.length
+      ? ` Install: pip install ${capabilities.missingPackages.join(" ")}`
+      : "";
+    trainingStore.markFailed(jobId, `${reason}.${install}`);
+    job.status = "failed";
+    job.error = `${reason}.${install}`;
+    throw new Error(`Cannot start ${job.method} training: ${reason}.${install}`);
+  }
+
+  if (blocker) {
+    // Supported but degraded — CPU LoRA is the case. Worth saying out loud
+    // rather than letting someone wonder why an epoch is taking all day.
+    logger.warn(`Training job ${jobId} starting with a caveat: ${blocker}`);
+  }
   
   // Create params from job info
   const params: CreateTrainingJobParams = {
@@ -568,11 +703,13 @@ export async function handleStartTraining(
     },
   });
   
+  let lastPersistedEpoch = -1;
   activeTrainingJobs.set(jobId, proc);
   
   // Update status
   job.status = "training";
   job.startedAt = Date.now();
+  trainingStore.markStarted(jobId, proc.pid);
   
   // Handle output
   proc.stdout?.on("data", (data: Buffer) => {
@@ -592,6 +729,26 @@ export async function handleStartTraining(
           job.currentStep = progress.current_step || job.currentStep;
           job.totalSteps = progress.total_steps || job.totalSteps;
           job.currentLoss = progress.loss || job.currentLoss;
+
+          // Persisted on epoch boundaries rather than per stdout line: a run
+          // emits thousands of progress lines, and the resolution that matters
+          // after a crash is "which epoch", not "which step".
+          if (
+            progress.current_epoch !== undefined &&
+            progress.current_epoch !== lastPersistedEpoch
+          ) {
+            lastPersistedEpoch = progress.current_epoch;
+            trainingStore.recordProgress(jobId, {
+              progress: job.progress,
+              currentEpoch: job.currentEpoch,
+              currentStep: job.currentStep,
+              totalSteps: job.totalSteps,
+              currentLoss:
+                typeof job.currentLoss === "number"
+                  ? Math.round(job.currentLoss * 10000)
+                  : undefined,
+            });
+          }
           
           // Send event to renderer
           const windows = BrowserWindow.getAllWindows();
@@ -621,11 +778,19 @@ export async function handleStartTraining(
     if (code === 0) {
       job.status = "completed";
       job.progress = 100;
+      // Registers the adapter in `model_registry_entries`. Without this the
+      // finished weights sat in a directory nothing referenced — "trained
+      // models" reads that table, so hours of training produced something the
+      // app could not see, use or publish.
+      trainingStore.markCompleted(jobId);
     } else if (job.status !== "cancelled") {
       job.status = "failed";
       job.error = job.error || `Process exited with code ${code}`;
+      trainingStore.markFailed(jobId, job.error);
+    } else {
+      trainingStore.markCancelled(jobId);
     }
-    
+
     job.completedAt = Date.now();
     
     // Send completion event
@@ -667,11 +832,21 @@ export async function handleGetTrainingJob(
   _event: IpcMainInvokeEvent,
   jobId: string
 ): Promise<TrainingJobInfo | null> {
-  return trainingJobProgress.get(jobId) || null;
+  const live = trainingJobProgress.get(jobId);
+  if (live) return live;
+  // Not in this process — it may be from a previous session.
+  const row = trainingStore.getJob(jobId);
+  return row ? rowToJobInfo(row) : null;
 }
 
 export async function handleListTrainingJobs(): Promise<TrainingJobInfo[]> {
-  return Array.from(trainingJobProgress.values()).sort(
+  // The table is the full history; the map holds only what this process
+  // started. Listing just the map made every job from a previous session
+  // disappear, which for multi-hour runs is most of them.
+  const merged = new Map<string, TrainingJobInfo>();
+  for (const row of trainingStore.listJobs()) merged.set(row.id, rowToJobInfo(row));
+  for (const [id, live] of trainingJobProgress) merged.set(id, live);
+  return Array.from(merged.values()).sort(
     (a, b) => b.createdAt - a.createdAt
   );
 }
@@ -839,4 +1014,35 @@ export function registerModelFactoryHandlers() {
   ipcMain.handle("model-factory:delete-adapter", handleDeleteAdapter);
   
   logger.info("Model factory handlers registered");
+}
+
+
+/**
+ * Adapt a persisted row to `TrainingJobInfo`, the shape every one of these
+ * handlers already returns, so a job recovered from the table is
+ * indistinguishable from a live one to every existing caller.
+ */
+function rowToJobInfo(row: trainingStore.TrainingJobRowLike): TrainingJobInfo {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? undefined,
+    baseModelId: row.baseModelId,
+    method: row.method,
+    status: row.status,
+    progress: row.progress ?? 0,
+    currentEpoch: row.currentEpoch ?? undefined,
+    totalEpochs: row.totalEpochs ?? undefined,
+    currentStep: row.currentStep ?? undefined,
+    totalSteps: row.totalSteps ?? undefined,
+    // Stored as loss × 10000 to keep the column integral.
+    currentLoss:
+      typeof row.currentLoss === "number" ? row.currentLoss / 10000 : undefined,
+    error: row.error ?? undefined,
+    outputPath: row.outputPath ?? undefined,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now(),
+    startedAt: row.startedAt instanceof Date ? row.startedAt.getTime() : undefined,
+    completedAt:
+      row.completedAt instanceof Date ? row.completedAt.getTime() : undefined,
+  };
 }

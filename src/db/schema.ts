@@ -1801,8 +1801,18 @@ export const jcnChainTransactions = sqliteTable("jcn_chain_transactions", {
   
   // Transaction identity
   txHash: text("tx_hash").notNull().unique(),
+  // Arbitrum is the only chain this app transacts on. The legacy Polygon values
+  // are kept so rows written before the migration still read back — the column
+  // is plain TEXT, so this list is a compile-time constraint only.
   network: text("network", {
-    enum: ["polygon", "polygon_mumbai", "ethereum", "base"]
+    enum: [
+      "arbitrumSepolia",
+      "arbitrumOne",
+      "polygon",
+      "polygon_mumbai",
+      "ethereum",
+      "base",
+    ]
   }).notNull(),
   
   // Status
@@ -2522,6 +2532,10 @@ export * from "./a2a_schema";
 
 // ── Agent OS — Tier 1 (OS Shell) ──────────────────────────────
 export * from "./agent_os_schema";
+
+// Fine-tuning job records — LoRA / QLoRA runs, which last hours and must
+// survive a restart.
+export * from "./training_schema";
 
 // ── Agent Wallet & Policy — Tier 2 ────────────────────────────
 export * from "./agent_wallet_schema";

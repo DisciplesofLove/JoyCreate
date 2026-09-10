@@ -5,6 +5,11 @@
  * contract addresses, ABI, and currency descriptor used by the publisher,
  * orchestrator, and on-chain listener.
  *
+ * Single-chain: Arbitrum Sepolia. The Polygon Amoy lane was removed — its
+ * subgraphs were decommissioned (HTTP 404) and the marketplace publishes only
+ * to Arbitrum. `arbitrumOne` is retained as the declared mainnet target and is
+ * still all-zero addresses until that stack is deployed.
+ *
  * Default is "arbitrumSepolia" — the Web 4.0 stack (StoreRegistry +
  * EditionController + ERC-1144 broker + x402 USDC rail) is deployed there.
  * Switching to another value via Settings → Marketplace network is additive:
@@ -12,7 +17,6 @@
  */
 
 import {
-  AMOY_ENS_CONTRACTS,
   ARB_SEPOLIA_ENS_CONTRACTS,
   ARB_SEPOLIA_PARENT_DOMAIN,
   ARBITRUM_ONE,
@@ -20,12 +24,11 @@ import {
   ARBITRUM_SEPOLIA,
   CONTRACT_ADDRESSES,
   NATIVE_TOKEN_SENTINEL,
-  POLYGON_AMOY,
   STYLUS_DROP_ABI,
 } from "@/config/joymarketplace";
 import { GOLDSKY_SUBGRAPHS } from "@/config/subgraphs";
 
-export type MarketplaceChainId = "polygonAmoy" | "arbitrumSepolia" | "arbitrumOne";
+export type MarketplaceChainId = "arbitrumSepolia" | "arbitrumOne";
 
 export const DEFAULT_MARKETPLACE_CHAIN: MarketplaceChainId = "arbitrumSepolia";
 
@@ -87,27 +90,6 @@ export function isMarketplaceChainId(value: unknown): value is MarketplaceChainI
 
 export function getMarketplaceChain(id: MarketplaceChainId): MarketplaceChainConfig {
   switch (id) {
-    case "polygonAmoy":
-      return {
-        id: "polygonAmoy",
-        chain: POLYGON_AMOY,
-        contracts: {
-          dropEdition: AMOY_ENS_CONTRACTS.platformDrop,
-          creatorGate: AMOY_ENS_CONTRACTS.JoyCreatorGate,
-          ensParentDomain: "joy",
-          ensBaseRegistrar: AMOY_ENS_CONTRACTS.BaseRegistrar,
-        },
-        abi: DROP_ERC1155_EVENT_ABI,
-        subgraph: {
-          drop: GOLDSKY_SUBGRAPHS.polygonAmoy.drop,
-          stores: GOLDSKY_SUBGRAPHS.polygonAmoy.stores,
-        },
-        currency: "USDC",
-        currencyAddress: CONTRACT_ADDRESSES.USDC_POLYGON,
-        currencyDecimals: 6,
-        enforceJoyCreatorGate: true,
-        isTestnet: true,
-      };
     case "arbitrumSepolia":
       return {
         id: "arbitrumSepolia",

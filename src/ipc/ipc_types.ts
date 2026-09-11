@@ -1308,3 +1308,33 @@ export interface VideoProject {
   createdAt: Date;
   updatedAt: Date;
 }
+
+/**
+ * A subscription-backed agent CLI (Claude Code, Codex, Gemini CLI, Copilot CLI).
+ * The static catalog entry — what exists, independent of this machine.
+ */
+export interface SubscriptionCliInfo {
+  id: string;
+  label: string;
+  vendor: string;
+  /** The plan this uses, in the vendor's own words. */
+  subscription: string;
+  loginCommand: string;
+  installCommand: string;
+  docsUrl: string;
+  models: { id: string; label: string; description: string }[];
+}
+
+/** What was actually found on this machine. */
+export interface SubscriptionCliDetection extends SubscriptionCliInfo {
+  binaryPath: string | null;
+  version: string | null;
+  installed: boolean;
+  /**
+   * The login-created credential path exists. A hint, not proof — only running
+   * a prompt shows whether the session is still valid.
+   */
+  signedIn: boolean;
+  /** One line ready to show in the UI. */
+  status: string;
+}

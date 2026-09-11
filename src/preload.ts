@@ -1306,6 +1306,13 @@ const validInvokeChannels = [
   "jcn:key:rotate",
   "jcn:admin:auditLog",
   // Backup & restore (local snapshots of the database + userData)
+  // Subscription CLIs — Claude Pro/Max, ChatGPT Plus, Google AI Pro, Copilot.
+  "subscription-cli:list",
+  "subscription-cli:detect",
+  "subscription-cli:status",
+  "subscription-cli:test",
+  "subscription-cli:refresh",
+  "subscription-cli:open-docs",
   "backup:list",
   "backup:create",
   "backup:delete",

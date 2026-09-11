@@ -19,6 +19,10 @@ where the splitter is deployed. On chains where it is not deployed
 
 Machine-readable source of truth: [split-config.json](split-config.json).
 Deployment records: [deployments.json](deployments.json).
+Phase tracker: [roadmap.json](roadmap.json).
+
+**Launching the MVP?** See [LAUNCH.md](LAUNCH.md) — what ships now, what is
+deferred post-launch, and the pre-launch checklist.
 
 ## Settlement rail (already live on Arbitrum Sepolia)
 

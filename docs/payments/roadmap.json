@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "description": "Machine-readable phase tracker for the payments program. Human context: LAUNCH.md and per-phase docs.",
+  "mvpLaunchReady": true,
+  "phases": [
+    {
+      "id": 1,
+      "name": "Wallet & config hardening",
+      "doc": "phase-1-wallet-hardening.md",
+      "status": "code-ready",
+      "codeComplete": true,
+      "remainingActions": [
+        "provision computeWallet (Compute / Lit fee bucket)",
+        "provision Platform+DAO treasury Safe",
+        "run contracts/revenue_splitter_stylus/set_wallets.cjs with owner key",
+        "update deployments.json (walletsHardened: true) and split-config.json"
+      ],
+      "postMvp": true
+    },
+    {
+      "id": 2,
+      "name": "Per-store payout address",
+      "doc": "phase-2-payout-address.md",
+      "status": "done",
+      "codeComplete": true,
+      "remainingActions": [],
+      "postMvp": false
+    },
+    {
+      "id": 3,
+      "name": "Checkout UI — Where the price goes",
+      "doc": "phase-3-checkout-ui.md",
+      "status": "done",
+      "codeComplete": true,
+      "remainingActions": ["run the manual Sepolia verification checklist before launch"],
+      "postMvp": false
+    },
+    {
+      "id": 4,
+      "name": "Audit readiness",
+      "doc": "phase-4-audit-readiness.md",
+      "status": "scope-ready",
+      "codeComplete": true,
+      "remainingActions": [
+        "tag revenue-splitter-audit-v1",
+        "commission auditor with Stylus/WASM experience",
+        "track findings in audit/findings.md; fix + re-review High/Critical"
+      ],
+      "postMvp": true
+    },
+    {
+      "id": 5,
+      "name": "Mainnet gate (Arbitrum One)",
+      "doc": "phase-5-mainnet-gate.md",
+      "status": "blocked",
+      "blockedOn": "phase 4 audit sign-off",
+      "codeComplete": true,
+      "remainingActions": [
+        "deploy RevenueSplitter + glue contracts to Arbitrum One",
+        "initialize with mainnet Safe + compute wallet",
+        "update src/config/x402.ts + src/config/glue.ts addresses",
+        "flip split-config.json arbitrumOne.status to live",
+        "tiny-amount mainnet smoke purchase"
+      ],
+      "postMvp": true
+    },
+    {
+      "id": 6,
+      "name": "zk settlement awareness",
+      "doc": "phase-6-zk-settlement.md",
+      "status": "done",
+      "codeComplete": true,
+      "remainingActions": [
+        "when Arbitrum ships zk settlement: update receipt finality copy (remove 'coming')"
+      ],
+      "postMvp": true
+    }
+  ]
+}

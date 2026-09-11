@@ -88,6 +88,8 @@ import type {
   VideoStudioVideo,
   VideoStudioProvider,
   VideoProject,
+  SubscriptionCliInfo,
+  SubscriptionCliDetection,
 } from "./ipc_types";
 import type { VideoTimeline } from "@/lib/video/timeline_types";
 import type { ConsoleEntry } from "../atoms/appAtoms";
@@ -792,6 +794,47 @@ export class IpcClient {
   }
 
   // ─── Backup & restore ────────────────────────────────────────────────
+
+  // ── Subscription CLIs ─────────────────────────────────────────────────────
+  // Claude Pro/Max, ChatGPT Plus/Pro, Google AI Pro and GitHub Copilot, used
+  // through the vendor's own signed-in CLI rather than a metered API key.
+
+  public async listSubscriptionClis(): Promise<SubscriptionCliInfo[]> {
+    return this.ipcRenderer.invoke("subscription-cli:list");
+  }
+
+  public async detectSubscriptionClis(
+    force = false,
+  ): Promise<SubscriptionCliDetection[]> {
+    return this.ipcRenderer.invoke("subscription-cli:detect", { force });
+  }
+
+  public async getSubscriptionCliStatus(
+    id: string,
+  ): Promise<SubscriptionCliDetection> {
+    return this.ipcRenderer.invoke("subscription-cli:status", { id });
+  }
+
+  /** Runs a real prompt — the only check that proves the plan works. */
+  public async testSubscriptionCli(
+    id: string,
+    model?: string,
+  ): Promise<{
+    ok: true;
+    reply: string;
+    costUsd: number;
+    durationMs: number;
+  }> {
+    return this.ipcRenderer.invoke("subscription-cli:test", { id, model });
+  }
+
+  public async refreshSubscriptionClis(): Promise<SubscriptionCliDetection[]> {
+    return this.ipcRenderer.invoke("subscription-cli:refresh");
+  }
+
+  public async openSubscriptionCliDocs(id: string): Promise<{ opened: string }> {
+    return this.ipcRenderer.invoke("subscription-cli:open-docs", { id });
+  }
 
   public async listBackups(): Promise<BackupEntry[]> {
     return this.ipcRenderer.invoke("backup:list");

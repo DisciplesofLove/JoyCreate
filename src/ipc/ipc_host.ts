@@ -197,6 +197,7 @@ import { registerOnchainAssetBridgeHandlers } from "./handlers/onchain_asset_bri
 import { registerNlpPipelineHandlers } from "./handlers/nlp_pipeline_handlers";
 import { registerStubHandlers } from "./handlers/stub_handlers";
 import { registerBackupHandlers } from "./handlers/backup_handlers";
+import { registerSubscriptionCliHandlers } from "./handlers/subscription_cli_handlers";
 import { registerAuditHandlers } from "./handlers/audit_handlers";
 import { registerNotificationHandlers } from "./handlers/notification_handlers";
 import { registerOnchainListenerHandlers } from "./handlers/onchain_listener_handlers";
@@ -664,6 +665,7 @@ export function registerIpcHandlers() {
   // service has not yet been implemented. MUST be registered LAST so real
   // handlers always win the ipcMain.handle() registration race.
   registerBackupHandlers();
+  registerSubscriptionCliHandlers();
   registerAuditHandlers();
   registerStubHandlers();
 }

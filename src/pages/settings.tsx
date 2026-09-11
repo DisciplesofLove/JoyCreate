@@ -32,6 +32,7 @@ import { SidebarCustomizationPanel } from "@/components/settings/SidebarCustomiz
 import { JoyMarketplaceSettings } from "@/components/settings/JoyMarketplaceSettings";
 import { CNSSettings } from "@/components/settings/CNSSettings";
 import { ExternalServicesSettings } from "@/components/settings/ExternalServicesSettings";
+import { SubscriptionCliSettings } from "@/components/settings/SubscriptionCliSettings";
 import { CelestiaBlobExplorer } from "@/components/settings/CelestiaBlobExplorer";
 import { CreatorLifecycleDashboard } from "@/components/settings/CreatorLifecycleDashboard";
 import { DocumentAiSettings } from "@/components/settings/DocumentAiSettings";
@@ -151,6 +152,12 @@ export default function SettingsPage() {
               <SupabaseIntegration />
               <NeonIntegration />
             </div>
+          </div>
+
+          {/* Subscription plans — Claude Pro/Max, ChatGPT Plus, Google AI Pro,
+              Copilot — used through the vendor CLI instead of an API key. */}
+          <div id="subscription-clis">
+            <SubscriptionCliSettings />
           </div>
 
           {/* External Services */}

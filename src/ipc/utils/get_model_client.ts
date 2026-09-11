@@ -29,6 +29,8 @@ import {
 } from "../handlers/local_model_ollama_handler";
 import { createFallback } from "./fallback_ai_model";
 import { createGeniusCoreLanguageModel } from "./genius_core_provider";
+import { createSubscriptionCliLanguageModel } from "./subscription_cli_provider";
+import { isSubscriptionCliProvider } from "../../lib/subscription_cli/cli_registry";
 
 const joyEngineUrl = process.env.JOY_ENGINE_URL;
 
@@ -77,8 +79,10 @@ export async function getModelClient(
     throw new Error(`Configuration not found for provider: ${model.provider}`);
   }
 
-  // Route through JoyCreate engine if API key is available
-  if (joyApiKey) {
+  // Route through JoyCreate engine if API key is available.
+  // Never for a subscription CLI: those run as a local process against the
+  // user's own plan, and there is nothing for a remote gateway to proxy.
+  if (joyApiKey && !isSubscriptionCliProvider(model.provider)) {
     // Check if the selected provider supports the engine gateway (has a gateway prefix) OR
     // we're using local engine.
     // IMPORTANT: some providers like OpenAI have an empty string gateway prefix,
@@ -203,6 +207,21 @@ async function getRegularModelClient(
       : undefined);
 
   const providerId = providerConfig.id;
+
+  // Subscription CLIs are spawned, not called over HTTP, and deliberately have
+  // no API key: the whole point is to bill the user's Claude Pro / ChatGPT Plus
+  // / Google AI Pro / Copilot plan instead of metered credit. Checked before the
+  // switch so the key lookup above can never divert one onto paid billing.
+  if (isSubscriptionCliProvider(providerId)) {
+    return {
+      modelClient: {
+        model: createSubscriptionCliLanguageModel(providerId, model.name),
+        builtinProviderId: providerId,
+      },
+      backupModelClients: [],
+    };
+  }
+
   // Create client based on provider ID or type
   switch (providerId) {
     case "openai": {

@@ -1,4 +1,5 @@
 ﻿import { LanguageModel } from "../ipc_types";
+import { SUBSCRIPTION_CLIS } from "../../lib/subscription_cli/cli_registry";
 
 export const PROVIDERS_THAT_SUPPORT_THINKING: (keyof typeof MODEL_OPTIONS)[] = [
   "google",
@@ -643,3 +644,50 @@ export const CLAUDE_CODE_PROVIDER = {
   requiresAnthropicKey: true,
   gatewayUrl: "ws://127.0.0.1:18792",
 };
+
+// ─── Subscription-backed CLI providers ──────────────────────────────────────
+//
+// Claude Pro/Max, ChatGPT Plus/Pro, Google AI Pro and GitHub Copilot are flat
+// monthly plans, not metered API credit. Each vendor ships a command-line agent
+// that signs in with the subscription and refreshes its own token — the same
+// mechanism the editors use. JoyCreate spawns those, so a subscriber can use
+// the plan they already pay for instead of buying API keys twice.
+//
+// They register as `local` providers because that is what they are: a process on
+// this machine. There is no API key to enter, so the usual key-configuration UI
+// does not apply to them; SubscriptionCliSettings handles them instead.
+
+export const SUBSCRIPTION_PROVIDERS: Record<
+  string,
+  { displayName: string; hasFreeTier: boolean; websiteUrl: string }
+> = Object.fromEntries(
+  SUBSCRIPTION_CLIS.map((cli) => [
+    cli.id,
+    {
+      displayName: cli.label,
+      // Free only in the sense that no per-token charge lands: the plan is paid
+      // for separately, and a request still consumes its quota.
+      hasFreeTier: false,
+      websiteUrl: cli.docsUrl,
+    },
+  ]),
+);
+
+/** Model picker entries for each subscription CLI. */
+export const SUBSCRIPTION_MODEL_OPTIONS: Record<string, ModelOption[]> =
+  Object.fromEntries(
+    SUBSCRIPTION_CLIS.map((cli) => [
+      cli.id,
+      cli.models.map((model) => ({
+        name: model.id,
+        displayName: model.label,
+        description: model.description,
+        tag: "Subscription",
+        tagColor: "emerald",
+      })),
+    ]),
+  );
+
+for (const [providerId, options] of Object.entries(SUBSCRIPTION_MODEL_OPTIONS)) {
+  MODEL_OPTIONS[providerId] = options;
+}

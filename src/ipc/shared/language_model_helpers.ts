@@ -10,6 +10,7 @@ import {
   CLOUD_PROVIDERS,
   MODEL_OPTIONS,
   PROVIDER_TO_ENV_VAR,
+  SUBSCRIPTION_PROVIDERS,
 } from "./language_model_constants";
 /**
  * Fetches language model providers from both the database (custom) and hardcoded constants (cloud),
@@ -72,6 +73,20 @@ export async function getLanguageModelProviders(): Promise<
         type: "local",
       });
     }
+  }
+
+  // Subscription CLIs. They are local processes, so they carry no API key and
+  // no env var — what makes one usable is whether the vendor's CLI is installed
+  // and signed in, which `subscription-cli:detect` reports.
+  for (const providerKey in SUBSCRIPTION_PROVIDERS) {
+    const details = SUBSCRIPTION_PROVIDERS[providerKey];
+    hardcodedProviders.push({
+      id: providerKey,
+      name: details.displayName,
+      hasFreeTier: details.hasFreeTier,
+      websiteUrl: details.websiteUrl,
+      type: "local",
+    });
   }
 
   return [...hardcodedProviders, ...customProvidersMap.values()];

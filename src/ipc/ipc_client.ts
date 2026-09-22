@@ -418,6 +418,41 @@ export interface PublishAssetResult {
   outcome?: PublishOutcomeSummary;
 }
 
+export type StudioJobKind = "generate-video" | "render" | "voiceover";
+export type StudioJobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "canceled";
+
+/** Lifecycle event pushed over `studio:job-progress`. */
+export interface StudioJobEvent {
+  id: string;
+  kind: StudioJobKind;
+  provider?: string | null;
+  status: StudioJobStatus;
+  progress: number;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+}
+
+/** Persisted studio job row returned by the query handlers. */
+export interface StudioJobDto {
+  id: string;
+  kind: StudioJobKind;
+  provider: string | null;
+  status: StudioJobStatus;
+  progress: number;
+  params: Record<string, unknown> | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+}
+
 export class IpcClient {
   private static instance: IpcClient;
   private ipcRenderer: IpcRenderer;

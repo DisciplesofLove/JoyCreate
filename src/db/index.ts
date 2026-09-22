@@ -290,6 +290,69 @@ export function initializeDatabase(): BetterSQLite3Database<typeof schema> & {
     logger.error("Failed to ensure scraping tables:", fallbackError);
   }
 
+  // Self-healing: repair the schema split left by the PR #29 merge.
+  //
+  // Both lineages numbered migrations 0077/0078, so each one's pair is skipped
+  // on a database that already ran the other's: drizzle applies migrations by
+  // `when` timestamp, and main's 0077/0078 are older than the branch's. A
+  // database built from the branch is therefore missing `studio_jobs` and the
+  // `agents` ERC-8004 columns; the `os_activities` columns are missing wherever
+  // 0078_workable_puck never ran. All of this is idempotent.
+  try {
+    const columnNames = (table: string): Set<string> =>
+      new Set(
+        (
+          sqlite.prepare(`PRAGMA table_info(\`${table}\`)`).all() as {
+            name: string;
+          }[]
+        ).map((c) => c.name),
+      );
+    const addMissingColumns = (
+      table: string,
+      columns: Record<string, string>,
+    ) => {
+      const existing = columnNames(table);
+      if (existing.size === 0) return; // table itself not created yet
+      for (const [name, definition] of Object.entries(columns)) {
+        if (existing.has(name)) continue;
+        sqlite.exec(
+          `ALTER TABLE \`${table}\` ADD \`${name}\` ${definition}`,
+        );
+        logger.log(`Self-heal: added ${table}.${name}`);
+      }
+    };
+
+    addMissingColumns("os_activities", {
+      current_step_id: "text",
+      step_state_json: "text",
+      input_json: "text",
+      attempt: "integer DEFAULT 0 NOT NULL",
+    });
+    addMissingColumns("agents", {
+      erc8004_agent_id: "text",
+      erc8004_chain: "text",
+    });
+
+    sqlite.exec(`
+      CREATE TABLE IF NOT EXISTS \`studio_jobs\` (
+        \`id\` text PRIMARY KEY NOT NULL,
+        \`kind\` text NOT NULL,
+        \`provider\` text,
+        \`status\` text DEFAULT 'queued' NOT NULL,
+        \`progress\` real DEFAULT 0 NOT NULL,
+        \`params_json\` text,
+        \`result_json\` text,
+        \`error\` text,
+        \`created_at\` integer DEFAULT (unixepoch()) NOT NULL,
+        \`updated_at\` integer DEFAULT (unixepoch()) NOT NULL,
+        \`started_at\` integer,
+        \`finished_at\` integer
+      )
+    `);
+  } catch (fallbackError) {
+    logger.error("Failed to reconcile merged migration lineages:", fallbackError);
+  }
+
   return _db as any;
 }
 

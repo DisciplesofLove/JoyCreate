@@ -20,6 +20,7 @@ import { deployAllSupabaseFunctions } from "../../supabase_admin/supabase_utils"
 import {
   gitCheckout,
   gitCommit,
+  gitDiffNative,
   gitStageToRevert,
   getCurrentCommitHash,
   gitCurrentBranch,

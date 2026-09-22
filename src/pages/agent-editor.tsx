@@ -1027,11 +1027,6 @@ export default function AgentEditorPage() {
                           </SelectItem>
                           <SelectItem value="claude-opus-5">
                             Claude Opus 5
-                          <SelectItem value="claude-opus-4-8">
-                            Claude Opus 4.8 (Latest)
-                          </SelectItem>
-                          <SelectItem value="claude-opus-4-7">
-                            Claude Opus 4.7
                           </SelectItem>
                           <SelectItem value="claude-sonnet-5">
                             Claude Sonnet 5

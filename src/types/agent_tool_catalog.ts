@@ -192,8 +192,6 @@ export const AGENT_TOOL_CATALOG: CatalogTool[] = [
           description: "Model to use",
           enum: ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5", "gemini-3.1-pro-preview", "gemini-3.8-flash", "llama3.2"],
           default: "gpt-5.6-luna",
-          enum: ["gpt-5.1", "gpt-5-mini", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6", "claude-sonnet-4-5", "gemini-3-flash-preview", "llama3.2"],
-          default: "gpt-5-mini",
         },
         temperature: { type: "number", description: "Sampling temperature (0-2)", default: 0.7 },
         maxTokens: { type: "number", description: "Maximum tokens to generate", default: 2048 },

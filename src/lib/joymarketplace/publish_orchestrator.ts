@@ -689,7 +689,6 @@ export class PublishOrchestrator {
         storeSlug: input.storeSlug,
         license,
       },
-      license,
       // Human-readable SPDX string kept for backward-compatible consumers.
       license: licenseTerms.spdx ?? licenseTerms.id,
       // Structured terms (LR2) + tamper-evident hash of the pinned terms.

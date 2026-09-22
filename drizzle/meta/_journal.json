@@ -554,6 +554,13 @@
       "when": 1781271735699,
       "tag": "0078_right_frog_thor",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "6",
+      "when": 1790101604826,
+      "tag": "0079_real_maximus",
+      "breakpoints": true
     }
   ]
 }

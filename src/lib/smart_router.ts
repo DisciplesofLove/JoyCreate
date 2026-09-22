@@ -523,12 +523,10 @@ export class SmartRouter extends EventEmitter {
         {
           id: "claude-fable-5-1",
           name: "Claude Fable 5.1",
-          id: "claude-opus-4-8",
-          name: "Claude Opus 4.8",
           contextLength: 200000,
           capabilities: { reasoning: 99, coding: 99, creativity: 98, math: 97, multilingual: 97, factuality: 99, instruction_following: 99 },
           performance: { avgLatencyMs: 2500, tokensPerSecond: 60, reliability: 99, uptime: 99 },
-          pricing: { inputPer1kTokens: 1.5, outputPer1kTokens: 7.5 },
+          pricing: { inputPer1kTokens: 1.0, outputPer1kTokens: 5.0 },
         },
         {
           id: "claude-opus-4-7",

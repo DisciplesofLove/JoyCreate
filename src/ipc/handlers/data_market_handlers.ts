@@ -21,6 +21,7 @@ import {
   dataLeaseGrants,
 } from "@/db/schema";
 import { jcnKeyManager } from "@/lib/jcn_key_manager";
+import { recordContentEarning } from "@/lib/onchain/content_earnings";
 import {
   DATA_MARKET_RPC,
   type DataMarketChainId,
@@ -164,6 +165,18 @@ async function mirrorLeaseGrant(args: {
   } catch (err) {
     logger.warn("mirrorLeaseGrant insert failed", err);
   }
+
+  // Bridge the lease income into the shared earnings ledger so dataset sales
+  // surface on the Earnings dashboard alongside runtime / agent income.
+  // Idempotent by txHash; never throws.
+  await recordContentEarning({
+    kind: "dataset",
+    entityRef: args.tokenId,
+    name: `Dataset lease (token ${args.tokenId})`,
+    amount: args.paidWei,
+    buyerAddress: args.lessee,
+    txHash: args.txHash,
+  });
 }
 
 // ---------------------------------------------------------------------------

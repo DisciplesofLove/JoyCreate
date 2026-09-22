@@ -540,6 +540,20 @@
       "when": 1780873882366,
       "tag": "0076_dry_magneto",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "6",
+      "when": 1781216969153,
+      "tag": "0077_mature_exiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "6",
+      "when": 1781271735699,
+      "tag": "0078_right_frog_thor",
+      "breakpoints": true
     }
   ]
 }

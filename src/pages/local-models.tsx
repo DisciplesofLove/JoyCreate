@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Cpu,
   Server,
@@ -456,13 +458,23 @@ function ChatBubble({
       )}
       <div className={`max-w-[75%] space-y-1 ${isUser ? "items-end" : "items-start"}`}>
         <div
-          className={`px-4 py-3 rounded-2xl text-sm whitespace-pre-wrap ${
+          className={`px-4 py-3 rounded-2xl text-sm ${
             isUser
-              ? "bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-br-md shadow-lg shadow-violet-500/20"
+              ? "bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-br-md shadow-lg shadow-violet-500/20 whitespace-pre-wrap"
               : "bg-muted/70 border rounded-bl-md"
           } ${isStreaming ? "animate-pulse" : ""}`}
         >
-          {message.content || (isStreaming ? "Thinking..." : "")}
+          {isUser ? (
+            message.content || (isStreaming ? "Thinking..." : "")
+          ) : message.content ? (
+            <div className="prose prose-sm dark:prose-invert max-w-none break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_pre]:text-xs [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {message.content}
+              </ReactMarkdown>
+            </div>
+          ) : (
+            isStreaming ? "Thinking..." : ""
+          )}
         </div>
         <div className="flex items-center gap-1.5 px-1 flex-wrap">
           {recordId && !isUser && (
@@ -674,6 +686,15 @@ function InferencePlayground() {
   const [numCtx, setNumCtx] = useState(4096);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [enableVerification, setEnableVerification] = useState(true);
+  // Live-streaming flag for the active assistant turn
+  const [isStreaming, setIsStreaming] = useState(false);
+  // Live assistant text for the in-flight turn. Kept in dedicated state (NOT the
+  // query cache) so background conversation refetches can't clobber the streamed
+  // tokens and every token reliably triggers a re-render. rAF-batched so even
+  // fast models stay smooth without flooding React with per-token renders.
+  const [streamingText, setStreamingText] = useState("");
+  const streamBufferRef = useRef("");
+  const streamRafRef = useRef<number | null>(null);
   // Model pull state
   const [showPullDialog, setShowPullDialog] = useState(false);
   const [pullModelName, setPullModelName] = useState("");
@@ -693,18 +714,118 @@ function InferencePlayground() {
         ? trustlessInferenceClient.getConversation(activeConversationId)
         : null,
     enabled: !!activeConversationId,
-    refetchInterval: 2000,
+    // Pause polling while a response streams so refetches don't clobber the
+    // optimistic, token-by-token assistant bubble.
+    refetchInterval: isStreaming ? false : 2000,
   });
 
-  // Send message mutation
+  // Stream a single conversation turn: persists server-side while rendering
+  // the assistant response token-by-token by patching the cached conversation.
+  // Resolves when the stream completes, rejects on error.
+  const runStreamingTurn = (convId: string, message: string): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const config = { temperature, maxTokens, topP, topK, repeatPenalty, numCtx };
+      type ConvCache = {
+        messages: { role: string; content: string }[];
+        recordIds?: string[];
+      } & Record<string, unknown>;
+      const convKey = ["trustless-conversation", convId];
+
+      setIsStreaming(true);
+      setStreamingText("");
+      streamBufferRef.current = "";
+
+      // Optimistically show the user's turn immediately. The assistant response
+      // is rendered from `streamingText` (a separate live bubble) until it
+      // completes, so a background refetch can never clobber the streamed tokens.
+      queryClient.setQueryData(convKey, (prev: unknown) => {
+        const conv = prev as ConvCache | null | undefined;
+        if (!conv) return prev;
+        return {
+          ...conv,
+          messages: [...conv.messages, { role: "user", content: message }],
+        };
+      });
+
+      // rAF-batched flush: accumulate tokens in a ref and paint at most once per
+      // frame so even fast models stream smoothly without flooding React.
+      const flush = () => {
+        streamRafRef.current = null;
+        setStreamingText(streamBufferRef.current);
+      };
+      const scheduleFlush = () => {
+        if (streamRafRef.current === null) {
+          streamRafRef.current = requestAnimationFrame(flush);
+        }
+      };
+      const cancelFlush = () => {
+        if (streamRafRef.current !== null) {
+          cancelAnimationFrame(streamRafRef.current);
+          streamRafRef.current = null;
+        }
+      };
+
+      void trustlessInferenceClient
+        .streamMessage(
+          { conversationId: convId, message, config },
+          {
+            onToken: (content) => {
+              streamBufferRef.current += content;
+              scheduleFlush();
+            },
+            onDone: ({ recordId }) => {
+              cancelFlush();
+              const finalText = streamBufferRef.current;
+              // Commit the streamed text into the cache as a finished assistant
+              // message in the same render the live bubble disappears — no flash,
+              // no gap. The invalidate below reconciles with persisted truth.
+              queryClient.setQueryData(convKey, (prev: unknown) => {
+                const conv = prev as ConvCache | null | undefined;
+                if (!conv) return prev;
+                return {
+                  ...conv,
+                  messages: [
+                    ...conv.messages,
+                    { role: "assistant", content: finalText },
+                  ],
+                  recordIds: recordId
+                    ? [...(conv.recordIds ?? []), recordId]
+                    : conv.recordIds,
+                };
+              });
+              setStreamingText("");
+              streamBufferRef.current = "";
+              setIsStreaming(false);
+              // Sync with persisted truth so recordIds / Verified badges and the
+              // canonical assistant text are confirmed against the server.
+              queryClient.invalidateQueries({ queryKey: convKey });
+              queryClient.invalidateQueries({ queryKey: ["trustless-conversations"] });
+              queryClient.invalidateQueries({ queryKey: ["inference-records"] });
+              resolve();
+            },
+            onError: (error) => {
+              cancelFlush();
+              setStreamingText("");
+              streamBufferRef.current = "";
+              setIsStreaming(false);
+              // Re-sync so the optimistic user bubble matches persisted state.
+              queryClient.invalidateQueries({ queryKey: convKey });
+              reject(new Error(error));
+            },
+          }
+        )
+        .catch((err: unknown) => {
+          cancelFlush();
+          setStreamingText("");
+          streamBufferRef.current = "";
+          setIsStreaming(false);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        });
+    });
+
+  // Send message mutation (streams the assistant response live)
   const sendMutation = useMutation({
-    mutationFn: (message: string) =>
-      trustlessInferenceClient.sendMessage({
-        conversationId: activeConversationId!,
-        message,
-        config: { temperature, maxTokens, topP, topK, repeatPenalty, numCtx },
-        skipVerification: !enableVerification,
-      }),
+    mutationFn: (message: string) => runStreamingTurn(activeConversationId!, message),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["trustless-conversation", activeConversationId],
@@ -715,10 +836,12 @@ function InferencePlayground() {
     onError: (err) => toast.error(`Inference failed: ${err.message}`),
   });
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages and as tokens stream in
+  const lastMessageContent =
+    activeConversation?.messages[activeConversation.messages.length - 1]?.content ?? "";
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeConversation?.messages.length, sendMutation.isPending]);
+  }, [activeConversation?.messages.length, lastMessageContent, streamingText, sendMutation.isPending]);
 
   // Sync settings when switching conversations
   useEffect(() => {
@@ -748,15 +871,12 @@ function InferencePlayground() {
           systemPrompt: systemPrompt || undefined,
         });
         setActiveConversationId(conv.id);
+        // Seed the cache so optimistic streaming updates have a base to patch.
+        queryClient.setQueryData(["trustless-conversation", conv.id], conv);
         queryClient.invalidateQueries({ queryKey: ["trustless-conversations"] });
 
-        // Now send the message to the new conversation
-        await trustlessInferenceClient.sendMessage({
-          conversationId: conv.id,
-          message: msg,
-          config: { temperature, maxTokens, topP, topK, repeatPenalty, numCtx },
-          skipVerification: !enableVerification,
-        });
+        // Stream the first turn live.
+        await runStreamingTurn(conv.id, msg);
         queryClient.invalidateQueries({
           queryKey: ["trustless-conversation", conv.id],
         });
@@ -1067,9 +1187,9 @@ function InferencePlayground() {
                 }
               />
             ))}
-            {sendMutation.isPending && (
+            {isStreaming && (
               <ChatBubble
-                message={{ role: "assistant", content: "" }}
+                message={{ role: "assistant", content: streamingText }}
                 isStreaming
               />
             )}
@@ -1189,6 +1309,9 @@ function InferenceRecordsList() {
   const { data: records, isLoading } = useQuery({
     queryKey: ["inference-records"],
     queryFn: () => trustlessInferenceClient.listRecords(50),
+    // Poll so newly streamed + verified records appear here even if this panel
+    // was mounted on a different tab when the stream finished invalidating.
+    refetchInterval: 5000,
   });
 
   const verifyMutation = useMutation({

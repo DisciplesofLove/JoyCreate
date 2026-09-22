@@ -40,6 +40,11 @@ import {
   type MarketplaceChainId,
 } from "@/lib/onchain/chain_registry";
 import { readSettings } from "@/main/settings";
+import {
+  hashLicenseTerms,
+  normalizeLicense,
+  type LicenseTerms,
+} from "@/lib/onchain/license";
 
 import { IpfsPinner, loadPinnerKeysFromSettings } from "./ipfs_pinner";
 import { OnchainPublisher, buildWallet } from "./onchain_publisher";
@@ -88,6 +93,12 @@ export interface PublishInput {
   dryRun?: boolean;
   /** License string; default "CC-BY-4.0". */
   license?: string;
+  /**
+   * Structured license terms (LR2). When provided, these win over `license` and
+   * are pinned + hash-committed into the drop metadata. A plain `license` string
+   * is normalized into terms when this is omitted.
+   */
+  licenseTerms?: LicenseTerms;
 }
 
 export type BlockedReason =
@@ -545,6 +556,7 @@ export class PublishOrchestrator {
   }
 
   private buildMetadata(input: PublishInput, contentCid?: string): Record<string, unknown> {
+    const licenseTerms = normalizeLicense(input.licenseTerms ?? input.license);
     return {
       name: input.name,
       description: input.description ?? "",
@@ -557,7 +569,11 @@ export class PublishOrchestrator {
         royaltyBps: input.royaltyBps ?? 250,
         storeSlug: input.storeSlug,
       },
-      license: input.license ?? "CC-BY-4.0",
+      // Human-readable SPDX string kept for backward-compatible consumers.
+      license: licenseTerms.spdx ?? licenseTerms.id,
+      // Structured terms (LR2) + tamper-evident hash of the pinned terms.
+      licenseTerms,
+      licenseHash: hashLicenseTerms(licenseTerms),
       contentMimeType: input.contentMimeType,
       version: "1.0.0",
     };

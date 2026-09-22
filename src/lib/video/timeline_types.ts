@@ -4,7 +4,7 @@
  * Used by both the renderer (VideoEditor UI) and the main process
  * (ffmpeg render engine). Overlays are pre-rasterized to full-canvas RGBA PNGs
  * by the renderer (via Konva/canvas) so the main process only needs ffmpeg's
- * `overlay` filter with time gating — this avoids all font/drawtext portability
+ * `overlay` filter with time gating â€” this avoids all font/drawtext portability
  * issues and gives Canva-quality text/shape styling.
  */
 

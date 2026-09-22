@@ -110,8 +110,8 @@ export const MODEL_OPTIONS: Record<string, ModelOption[]> = {
   // https://docs.anthropic.com/en/docs/about-claude/models/all-models#model-comparison-table
   anthropic: [
     {
-      name: "claude-opus-4-7",
-      displayName: "Claude Opus 4.7",
+      name: "claude-opus-4-8",
+      displayName: "Claude Opus 4.8",
       description:
         "Anthropic's most capable model — best for complex coding & reasoning (very expensive!)",
       maxOutputTokens: 32_000,
@@ -120,6 +120,16 @@ export const MODEL_OPTIONS: Record<string, ModelOption[]> = {
       dollarSigns: 5,
       tag: "Latest",
       tagColor: "green",
+    },
+    {
+      name: "claude-opus-4-7",
+      displayName: "Claude Opus 4.7",
+      description:
+        "Previous flagship Opus — complex coding & reasoning (very expensive!)",
+      maxOutputTokens: 32_000,
+      contextWindow: 200_000,
+      temperature: 0,
+      dollarSigns: 5,
     },
     {
       name: "claude-sonnet-4-6",
@@ -452,8 +462,8 @@ export const MODEL_OPTIONS: Record<string, ModelOption[]> = {
   ],
   bedrock: [
     {
-      name: "us.anthropic.claude-opus-4-7-v1:0",
-      displayName: "Claude Opus 4.7",
+      name: "us.anthropic.claude-opus-4-8-v1:0",
+      displayName: "Claude Opus 4.8",
       description:
         "Anthropic's most capable model — best for complex coding & reasoning (very expensive!)",
       maxOutputTokens: 32_000,
@@ -461,6 +471,15 @@ export const MODEL_OPTIONS: Record<string, ModelOption[]> = {
       temperature: 0,
       tag: "Latest",
       tagColor: "green",
+    },
+    {
+      name: "us.anthropic.claude-opus-4-7-v1:0",
+      displayName: "Claude Opus 4.7",
+      description:
+        "Previous flagship Opus — complex coding & reasoning (very expensive!)",
+      maxOutputTokens: 32_000,
+      contextWindow: 200_000,
+      temperature: 0,
     },
     {
       name: "us.anthropic.claude-sonnet-4-6-v1:0",

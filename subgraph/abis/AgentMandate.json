@@ -1,0 +1,35 @@
+[
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "MandateCreated",
+    "inputs": [
+      { "indexed": true, "name": "mandateId", "type": "uint256" },
+      { "indexed": true, "name": "principal", "type": "address" },
+      { "indexed": true, "name": "agent", "type": "address" },
+      { "indexed": false, "name": "spendLimit", "type": "uint256" },
+      { "indexed": false, "name": "expiry", "type": "uint256" },
+      { "indexed": false, "name": "actionScope", "type": "bytes32" }
+    ]
+  },
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "MandateSpent",
+    "inputs": [
+      { "indexed": true, "name": "mandateId", "type": "uint256" },
+      { "indexed": true, "name": "agent", "type": "address" },
+      { "indexed": false, "name": "amount", "type": "uint256" },
+      { "indexed": false, "name": "totalSpent", "type": "uint256" }
+    ]
+  },
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "MandateRevoked",
+    "inputs": [
+      { "indexed": true, "name": "mandateId", "type": "uint256" },
+      { "indexed": true, "name": "principal", "type": "address" }
+    ]
+  }
+]

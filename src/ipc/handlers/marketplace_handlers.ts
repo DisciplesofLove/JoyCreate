@@ -12,8 +12,9 @@
  */
 
 import { ipcMain, app } from "electron";
+import { ethers } from "ethers";
 import { db } from "@/db";
-import { apps } from "@/db/schema";
+import { apps, skills, agents } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import * as fs from "fs-extra";
 import * as path from "path";
@@ -27,6 +28,25 @@ import {
   getMarketplaceStats,
   getUserDomains,
 } from "@/lib/subgraph_client";
+import { jcnKeyManager } from "@/lib/jcn_key_manager";
+import { ERC8004_RPC, DEFAULT_ERC8004_CHAIN, type Erc8004ChainId } from "@/config/erc8004";
+import type { GlueChainId } from "@/config/glue";
+import { getAgent } from "@/lib/onchain/erc8004_client";
+import {
+  publishSkillToAgent,
+  type PublishSkillResult,
+  type AuthorSkillInput,
+} from "@/lib/onchain/skill_authoring";
+import { skillRowToAuthorInput, type SkillListingOptions } from "@/lib/onchain/skill_listing";
+import {
+  agentRowToAuthorInput,
+  type AgentListingOptions,
+  type AgentRow,
+  type RuntimeEntityKind,
+} from "@/lib/onchain/entity_listing";
+import { bridgeIdentityToA2a, type BridgeResult } from "@/lib/onchain/lra_a2a_bridge";
+import type { A2ACurrency } from "@/db/a2a_schema";
+import type { CreateListingInput } from "@/lib/a2a_economy";
 import type {
   PublishAppRequest,
   PublishAppResponse,
@@ -41,6 +61,139 @@ import type {
 const logger = log.scope("marketplace_handlers");
 
 const MARKETPLACE_WEB_URL = JOYMARKETPLACE_API.webUrl;
+
+const LRA_SUPPORTED_CHAINS: readonly Erc8004ChainId[] = ["arbitrumSepolia", "arbitrumOne"];
+
+function resolveLraChain(value: unknown): Erc8004ChainId {
+  if (typeof value === "string" && (LRA_SUPPORTED_CHAINS as readonly string[]).includes(value)) {
+    return value as Erc8004ChainId;
+  }
+  if (value == null) return DEFAULT_ERC8004_CHAIN;
+  throw new Error(`chain must be one of ${LRA_SUPPORTED_CHAINS.join(", ")}, got ${String(value)}`);
+}
+
+async function loadLraWallet(chain: Erc8004ChainId): Promise<ethers.Wallet> {
+  await jcnKeyManager.initialize();
+  const keys = await jcnKeyManager.listKeys("chain");
+  const active = keys.find((k) => k.active && k.algorithm === "secp256k1");
+  if (!active) {
+    throw new Error("no active chain (secp256k1) key in jcnKeyManager — import one in Settings");
+  }
+  const pk = await jcnKeyManager.getPrivateKey(active.keyId);
+  if (!pk) throw new Error("active chain key has no private material");
+  const provider = new ethers.JsonRpcProvider(ERC8004_RPC[chain]);
+  const hex = pk.toString("hex");
+  return new ethers.Wallet(hex.startsWith("0x") ? hex : `0x${hex}`, provider);
+}
+
+export interface ListSkillParams {
+  /** Local `skills.id` to list. */
+  skillId: number;
+  chain?: string;
+  /**
+   * On-chain ERC-8004 agentId whose card the skill is attached to. Optional
+   * when `localAgentId` resolves to an agent already linked on-chain.
+   */
+  erc8004AgentId?: string;
+  /**
+   * Local `agents.id`. When provided, the agent's `erc8004AgentId`/`modelId`
+   * are used as fallbacks and the agent is bridged into the A2A economy.
+   */
+  localAgentId?: number;
+  /** Name for a freshly-built agent card when the agent has none yet. */
+  cardName?: string;
+  /** Adapter options (modelId / MCP tool allow-list / sandbox limits). */
+  options?: SkillListingOptions;
+  /** Create an A2A listing too (defaults to true when `localAgentId` is set). */
+  bridgeToA2a?: boolean;
+  pricing?: {
+    pricingModel?: CreateListingInput["pricingModel"];
+    priceAmount?: string;
+    currency?: A2ACurrency;
+  };
+}
+
+export interface ListSkillResult {
+  skill: PublishSkillResult;
+  bridge?: BridgeResult;
+}
+
+export interface ListEntityParams {
+  /** Which runtime-bearing local entity is being listed. */
+  kind: Extract<RuntimeEntityKind, "agent" | "app">;
+  /** `agents.id` (kind="agent") or `apps.id` (kind="app"). */
+  entityId: number;
+  chain?: string;
+  /**
+   * On-chain ERC-8004 agentId. Optional when the resolved local agent is
+   * already linked on-chain (its `erc8004AgentId`).
+   */
+  erc8004AgentId?: string;
+  /** Card name override (defaults to the agent/app name). */
+  cardName?: string;
+  /** Prompt-agent adapter overrides (model / prompt / limits). */
+  agentOptions?: AgentListingOptions;
+  /** Mirror into the A2A economy (defaults to true). */
+  bridgeToA2a?: boolean;
+  pricing?: ListSkillParams["pricing"];
+}
+
+export interface ListEntityResult {
+  kind: RuntimeEntityKind;
+  /** The local `agents.id` that was actually published. */
+  resolvedAgentId: number;
+  skill: PublishSkillResult;
+  bridge?: BridgeResult;
+}
+
+/**
+ * Shared LRA publish core used by `marketplace:list-skill` and
+ * `marketplace:list-entity`: author + pin the runtime, attach it to the
+ * ERC-8004 agent card, backfill the local identity link, and (optionally)
+ * mirror the agent into the A2A economy.
+ */
+async function publishRuntimeAsset(args: {
+  chain: Erc8004ChainId;
+  erc8004AgentId: string;
+  agentRow?: AgentRow;
+  skillInput: AuthorSkillInput;
+  cardName: string;
+  description?: string | null;
+  bridgeToA2a: boolean;
+  pricing?: ListSkillParams["pricing"];
+}): Promise<{ skill: PublishSkillResult; bridge?: BridgeResult }> {
+  const wallet = await loadLraWallet(args.chain);
+  const published = await publishSkillToAgent(wallet, {
+    chain: args.chain,
+    agentId: args.erc8004AgentId,
+    skill: args.skillInput,
+    cardName: args.cardName,
+  });
+
+  // Backfill the identity link on the owning agent.
+  if (args.agentRow && !args.agentRow.erc8004AgentId) {
+    await db
+      .update(agents)
+      .set({ erc8004AgentId: args.erc8004AgentId, erc8004Chain: args.chain, updatedAt: new Date() })
+      .where(eq(agents.id, args.agentRow.id));
+  }
+
+  let bridge: BridgeResult | undefined;
+  if (args.agentRow && args.bridgeToA2a) {
+    const agent = await getAgent(args.chain, args.erc8004AgentId);
+    bridge = await bridgeIdentityToA2a({
+      localAgentId: args.agentRow.id,
+      erc8004AgentId: args.erc8004AgentId,
+      chain: args.chain as GlueChainId,
+      agentAddress: agent.agentAddress,
+      skillCid: published.skillCid,
+      listingName: args.cardName,
+      description: args.description ?? undefined,
+      pricing: args.pricing,
+    });
+  }
+  return { skill: published, bridge };
+}
 
 // Store credentials in memory (should be persisted in settings)
 let marketplaceCredentials: MarketplaceCredentials | null = null;
@@ -623,6 +776,151 @@ export function registerMarketplaceHandlers() {
       webUrl: MARKETPLACE_WEB_URL,
     };
   });
+
+  // List a local skill as a Licensed Runtime Asset (author + pin + attach to an
+  // ERC-8004 agent card) and optionally mirror its owning agent into the A2A
+  // economy so other agents can discover → quote → escrow → invoke it.
+  ipcMain.handle(
+    "marketplace:list-skill",
+    async (_e, params: ListSkillParams): Promise<ListSkillResult> => {
+      if (!Number.isInteger(params?.skillId) || params.skillId <= 0) {
+        throw new Error("skillId must be a positive integer");
+      }
+      const chain = resolveLraChain(params.chain);
+
+      const [skillRow] = await db.select().from(skills).where(eq(skills.id, params.skillId)).limit(1);
+      if (!skillRow) throw new Error(`skill ${params.skillId} not found`);
+
+      // Resolve the owning local agent (for identity link + model fallback).
+      let agentRow: typeof agents.$inferSelect | undefined;
+      if (params.localAgentId != null) {
+        if (!Number.isInteger(params.localAgentId) || params.localAgentId <= 0) {
+          throw new Error("localAgentId must be a positive integer");
+        }
+        [agentRow] = await db
+          .select()
+          .from(agents)
+          .where(eq(agents.id, params.localAgentId))
+          .limit(1);
+        if (!agentRow) throw new Error(`agent ${params.localAgentId} not found`);
+      }
+
+      const erc8004AgentId = params.erc8004AgentId ?? agentRow?.erc8004AgentId ?? undefined;
+      if (!erc8004AgentId) {
+        throw new Error(
+          "erc8004AgentId is required (pass it directly or via a localAgentId already linked on-chain)",
+        );
+      }
+
+      // Adapter options — fall back to the owning agent's model for prompt/tool skills.
+      const options: SkillListingOptions = {
+        ...params.options,
+        modelId: params.options?.modelId ?? agentRow?.modelId ?? undefined,
+      };
+      const skillInput = skillRowToAuthorInput(skillRow, options);
+
+      const { skill: published, bridge } = await publishRuntimeAsset({
+        chain,
+        erc8004AgentId,
+        agentRow,
+        skillInput,
+        cardName: params.cardName ?? skillRow.name,
+        description: skillRow.description,
+        bridgeToA2a: agentRow != null && params.bridgeToA2a !== false,
+        pricing: params.pricing,
+      });
+
+      // Persist the local publish state.
+      await db
+        .update(skills)
+        .set({
+          publishStatus: "published",
+          marketplaceId: published.skillCid,
+          updatedAt: new Date(),
+        })
+        .where(eq(skills.id, params.skillId));
+
+      logger.info(
+        `marketplace:list-skill skill=${params.skillId} → agent ${erc8004AgentId} ` +
+          `(skillCid=${published.skillCid}, bridged=${bridge ? bridge.listingId : "no"})`,
+      );
+      return { skill: published, bridge };
+    },
+  );
+
+  // List a runtime-bearing entity (an agent, or an app via its owning agent) as
+  // a Licensed Runtime Asset. Agents are declarative model + system-prompt
+  // runtimes, so they map onto the prompt-agent bundle kind.
+  ipcMain.handle(
+    "marketplace:list-entity",
+    async (_e, params: ListEntityParams): Promise<ListEntityResult> => {
+      if (params?.kind !== "agent" && params?.kind !== "app") {
+        throw new Error('kind must be "agent" or "app"');
+      }
+      if (!Number.isInteger(params?.entityId) || params.entityId <= 0) {
+        throw new Error("entityId must be a positive integer");
+      }
+      const chain = resolveLraChain(params.chain);
+
+      // Resolve the local agent to publish.
+      let agentRow: AgentRow | undefined;
+      if (params.kind === "agent") {
+        [agentRow] = await db.select().from(agents).where(eq(agents.id, params.entityId)).limit(1);
+        if (!agentRow) throw new Error(`agent ${params.entityId} not found`);
+      } else {
+        const [appRow] = await db.select().from(apps).where(eq(apps.id, params.entityId)).limit(1);
+        if (!appRow) throw new Error(`app ${params.entityId} not found`);
+        [agentRow] = await db
+          .select()
+          .from(agents)
+          .where(eq(agents.appId, appRow.id))
+          .limit(1);
+        if (!agentRow) {
+          throw new Error(
+            `app ${params.entityId} (${appRow.name}) has no agent to list — create an agent for it first`,
+          );
+        }
+      }
+
+      const erc8004AgentId = params.erc8004AgentId ?? agentRow.erc8004AgentId ?? undefined;
+      if (!erc8004AgentId) {
+        throw new Error(
+          "erc8004AgentId is required (pass it directly or link the agent on-chain first)",
+        );
+      }
+
+      const skillInput = agentRowToAuthorInput(agentRow, params.agentOptions);
+      const cardName = params.cardName ?? agentRow.name;
+
+      const { skill: published, bridge } = await publishRuntimeAsset({
+        chain,
+        erc8004AgentId,
+        agentRow,
+        skillInput,
+        cardName,
+        description: agentRow.description,
+        bridgeToA2a: params.bridgeToA2a !== false,
+        pricing: params.pricing,
+      });
+
+      // Persist the local publish state on the agent.
+      await db
+        .update(agents)
+        .set({
+          publishStatus: "published",
+          marketplaceId: published.skillCid,
+          publishedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(agents.id, agentRow.id));
+
+      logger.info(
+        `marketplace:list-entity ${params.kind}=${params.entityId} → agent ${erc8004AgentId} ` +
+          `(localAgent=${agentRow.id}, skillCid=${published.skillCid}, bridged=${bridge ? bridge.listingId : "no"})`,
+      );
+      return { kind: params.kind, resolvedAgentId: agentRow.id, skill: published, bridge };
+    },
+  );
 
   logger.info("Marketplace IPC handlers registered");
 }

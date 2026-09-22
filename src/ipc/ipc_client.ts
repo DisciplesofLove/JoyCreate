@@ -289,6 +289,41 @@ interface DeleteCustomModelParams {
   modelApiName: string;
 }
 
+export type StudioJobKind = "generate-video" | "render" | "voiceover";
+export type StudioJobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "canceled";
+
+/** Lifecycle event pushed over `studio:job-progress`. */
+export interface StudioJobEvent {
+  id: string;
+  kind: StudioJobKind;
+  provider?: string | null;
+  status: StudioJobStatus;
+  progress: number;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+}
+
+/** Persisted studio job row returned by the query handlers. */
+export interface StudioJobDto {
+  id: string;
+  kind: StudioJobKind;
+  provider: string | null;
+  status: StudioJobStatus;
+  progress: number;
+  params: Record<string, unknown> | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+}
+
 export class IpcClient {
   private static instance: IpcClient;
   private ipcRenderer: IpcRenderer;
@@ -329,6 +364,7 @@ export class IpcClient {
   private videoRenderProgressHandlers: Set<
     (evt: { fraction: number; stage: string }) => void
   >;
+  private studioJobProgressHandlers: Set<(evt: StudioJobEvent) => void>;
   private constructor() {
     this.ipcRenderer = ((window as any).electron?.ipcRenderer ?? {
       invoke: async (..._args: any[]) => null,
@@ -352,6 +388,7 @@ export class IpcClient {
     this.whitehatMcpPendingHandlers = new Set();
     this.gauntletProgressHandlers = new Set();
     this.videoRenderProgressHandlers = new Set();
+    this.studioJobProgressHandlers = new Set();
     // Set up listeners for stream events
     this.ipcRenderer.on("chat:response:chunk", (data) => {
       if (
@@ -496,6 +533,15 @@ export class IpcClient {
       if (data && typeof data === "object" && "fraction" in data) {
         for (const handler of this.videoRenderProgressHandlers) {
           handler(data as unknown as { fraction: number; stage: string });
+        }
+      }
+    });
+
+    // Studio job queue — async job lifecycle events
+    this.ipcRenderer.on("studio:job-progress", (data) => {
+      if (data && typeof data === "object" && "id" in data && "status" in data) {
+        for (const handler of this.studioJobProgressHandlers) {
+          handler(data as unknown as StudioJobEvent);
         }
       }
     });
@@ -5823,12 +5869,67 @@ export class IpcClient {
     return this.ipcRenderer.invoke("video-studio:render", params);
   }
 
+  public async generateVoiceover(params: {
+    text: string;
+    voice?: string;
+    speed?: number;
+    engine?: "piper" | "bark" | "coqui" | "elevenlabs";
+  }): Promise<{ filePath: string; duration: number; text: string }> {
+    return this.ipcRenderer.invoke("video-studio:generate-voiceover", params);
+  }
+
   public onVideoRenderProgress(
     handler: (evt: { fraction: number; stage: string }) => void,
   ): () => void {
     this.videoRenderProgressHandlers.add(handler);
     return () => {
       this.videoRenderProgressHandlers.delete(handler);
+    };
+  }
+
+  // ── Studio Jobs (async queue) ─────────────────────────────────────────────
+
+  /** Start a video generation as a background job; returns the job id. */
+  public async generateVideoAsync(params: {
+    prompt: string;
+    negativePrompt?: string;
+    provider: string;
+    model?: string;
+    width: number;
+    height: number;
+    duration?: number;
+    fps?: number;
+    seed?: string;
+    style?: string;
+    sourceType?: string;
+    referenceImageBase64?: string;
+    referenceVideoId?: number;
+    strength?: number;
+    motionAmount?: number;
+  }): Promise<{ jobId: string }> {
+    return this.ipcRenderer.invoke("video-studio:generate-async", params);
+  }
+
+  public async listStudioJobs(params?: {
+    limit?: number;
+    status?: StudioJobStatus;
+  }): Promise<StudioJobDto[]> {
+    return this.ipcRenderer.invoke("studio-jobs:list", params);
+  }
+
+  public async getStudioJob(id: string): Promise<StudioJobDto> {
+    return this.ipcRenderer.invoke("studio-jobs:get", id);
+  }
+
+  public async cancelStudioJob(id: string): Promise<StudioJobDto> {
+    return this.ipcRenderer.invoke("studio-jobs:cancel", id);
+  }
+
+  /** Subscribe to studio job lifecycle events. Returns an unsubscribe fn. */
+  public onStudioJobProgress(handler: (evt: StudioJobEvent) => void): () => void {
+    this.studioJobProgressHandlers.add(handler);
+    return () => {
+      this.studioJobProgressHandlers.delete(handler);
     };
   }
 
@@ -6524,6 +6625,16 @@ export class IpcClient {
   ): Promise<Erc8004AgentRecord> {
     return this.ipcRenderer.invoke("erc8004:get-agent", args);
   }
+  public async erc8004PublishSkill(
+    args: {
+      chain?: Erc8004ChainId;
+      agentId: string;
+      skill: Erc8004AuthorSkillInput;
+      cardName?: string;
+    },
+  ): Promise<Erc8004PublishSkillResult> {
+    return this.ipcRenderer.invoke("erc8004:publish-skill", args);
+  }
   public async erc8004ResolveByAddress(
     args: { chain?: Erc8004ChainId; agentAddress: string },
   ): Promise<{ agentId: string }> {
@@ -6538,6 +6649,91 @@ export class IpcClient {
     args?: { chain?: Erc8004ChainId },
   ): Promise<{ total: string }> {
     return this.ipcRenderer.invoke("erc8004:agent-count", args ?? {});
+  }
+  public async runtimeInvoke(
+    args: {
+      chain?: Erc8004ChainId;
+      agentId: string;
+      input: string;
+      license?: unknown;
+      dropId?: string;
+      buyer?: string;
+      submitFeedback?: boolean;
+      clientId?: string;
+      feedbackScore?: number;
+      feedbackUri?: string;
+    },
+  ): Promise<RuntimeInvokeReceipt> {
+    return this.ipcRenderer.invoke("runtime:invoke", args);
+  }
+  public async runtimeBridgeA2a(
+    args: {
+      chain?: Erc8004ChainId;
+      localAgentId: number;
+      erc8004AgentId: string;
+      listingName?: string;
+      description?: string;
+      pricing?: {
+        pricingModel?: "free" | "fixed" | "per_token" | "per_call" | "subscription";
+        priceAmount?: string;
+        currency?: "JOY" | "TIA" | "USDC" | "MATIC" | "points";
+      };
+    },
+  ): Promise<RuntimeBridgeA2aResult> {
+    return this.ipcRenderer.invoke("runtime:bridge-a2a", args);
+  }
+  public async marketplaceListSkill(
+    args: {
+      skillId: number;
+      chain?: Erc8004ChainId;
+      erc8004AgentId?: string;
+      localAgentId?: number;
+      cardName?: string;
+      options?: {
+        modelId?: string;
+        systemPrompt?: string;
+        promptTemplate?: string;
+        maxTokens?: number;
+        temperature?: number;
+        tools?: string[];
+        maxSteps?: number;
+        allowedModules?: string[];
+        timeoutMs?: number;
+        maxMemoryMb?: number;
+      };
+      bridgeToA2a?: boolean;
+      pricing?: {
+        pricingModel?: "free" | "fixed" | "per_token" | "per_call" | "subscription";
+        priceAmount?: string;
+        currency?: "JOY" | "TIA" | "USDC" | "MATIC" | "points";
+      };
+    },
+  ): Promise<MarketplaceListSkillResult> {
+    return this.ipcRenderer.invoke("marketplace:list-skill", args);
+  }
+  public async marketplaceListEntity(
+    args: {
+      kind: "agent" | "app";
+      entityId: number;
+      chain?: Erc8004ChainId;
+      erc8004AgentId?: string;
+      cardName?: string;
+      agentOptions?: {
+        modelId?: string;
+        systemPrompt?: string;
+        promptTemplate?: string;
+        maxTokens?: number;
+        temperature?: number;
+      };
+      bridgeToA2a?: boolean;
+      pricing?: {
+        pricingModel?: "free" | "fixed" | "per_token" | "per_call" | "subscription";
+        priceAmount?: string;
+        currency?: "JOY" | "TIA" | "USDC" | "MATIC" | "points";
+      };
+    },
+  ): Promise<MarketplaceListEntityResult> {
+    return this.ipcRenderer.invoke("marketplace:list-entity", args);
   }
   public async erc8004AcceptFeedback(
     args: { chain?: Erc8004ChainId; clientId: string; serverId: string },
@@ -6747,9 +6943,14 @@ export class IpcClient {
     return this.ipcRenderer.invoke("x402:creator-earnings", args);
   }
   public async x402PurchaseEdition(
-    args: { chain?: X402ChainId; dropId: string },
+    args: { chain?: X402ChainId; dropId: string; feedbackScore?: number },
   ): Promise<X402PurchaseResult> {
     return this.ipcRenderer.invoke("x402:purchase-edition", args);
+  }
+  public async x402PurchaseEditionWithMandate(
+    args: { chain?: X402ChainId; dropId: string; mandateId: string; feedbackScore?: number },
+  ): Promise<X402MandatePurchaseResult> {
+    return this.ipcRenderer.invoke("x402:purchase-edition-with-mandate", args);
   }
 
   // ── ERC-1144 interface broker ─────────────────────────────────────
@@ -6919,6 +7120,95 @@ export interface Erc8004AgentRecord {
   agentAddress: string;
 }
 
+/** Author-supplied skill description for `erc8004:publish-skill` (LR11). */
+export type Erc8004AuthorSkillInput =
+  | {
+      kind: "prompt-agent";
+      modelId: string;
+      systemPrompt: string;
+      promptTemplate?: string;
+      maxTokens?: number;
+      temperature?: number;
+    }
+  | {
+      kind: "tool-agent";
+      modelId: string;
+      systemPrompt: string;
+      tools: string[];
+      maxSteps?: number;
+      promptTemplate?: string;
+      maxTokens?: number;
+      temperature?: number;
+    }
+  | {
+      kind: "code-agent";
+      code: string;
+      allowedModules?: string[];
+      timeoutMs?: number;
+      maxMemoryMb?: number;
+    };
+
+export interface Erc8004PublishSkillResult {
+  agentId: string;
+  skillCid: string;
+  skillUri: string;
+  cardCid: string;
+  cardUri: string;
+  txHash: string;
+  pinnedRemotely: boolean;
+}
+
+export interface RuntimeInvokeReceipt {
+  agentId: string;
+  skillCid: string;
+  kind: "prompt-agent" | "tool-agent" | "code-agent";
+  modelId: string;
+  output: string;
+  finishReason: string;
+  steps?: number;
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  feedbackTxHash?: string;
+  chargeTxHash?: string;
+}
+
+export interface RuntimeBridgeA2aResult {
+  principalId: string;
+  did: string;
+  listingId: string;
+  capability: string;
+  binding: {
+    erc8004AgentId: string;
+    chain: string;
+    agentAddress: string;
+    skillCid?: string;
+  };
+  createdListing: boolean;
+}
+
+export interface MarketplaceListSkillResult {
+  skill: {
+    agentId: string;
+    skillCid: string;
+    skillUri: string;
+    cardCid: string;
+    cardUri: string;
+    txHash: string;
+    pinnedRemotely: boolean;
+  };
+  bridge?: RuntimeBridgeA2aResult;
+}
+
+export interface MarketplaceListEntityResult {
+  kind: "skill" | "agent" | "app";
+  /** The local `agents.id` that was actually published. */
+  resolvedAgentId: number;
+  skill: MarketplaceListSkillResult["skill"];
+  bridge?: RuntimeBridgeA2aResult;
+}
+
 export interface Erc8004ReputationScore {
   count: string;
   sum: string;
@@ -7042,6 +7332,17 @@ export interface X402SettleResult {
   error?: string;
 }
 
+export interface X402PurchaseFeedback {
+  submitted: boolean;
+  skipped: boolean;
+  reason?: string;
+  clientId: string;
+  serverId: string;
+  score: number;
+  txHash?: string;
+  acceptTxHash?: string;
+}
+
 export interface X402PurchaseResult {
   dropId: string;
   creator: string;
@@ -7052,6 +7353,15 @@ export interface X402PurchaseResult {
   tokenId: string;
   mintTxHash: string;
   blockNumber: number;
+  /** Post-purchase reputation outcome (LR3). Best-effort. */
+  feedback?: X402PurchaseFeedback;
+}
+
+export interface X402MandatePurchaseResult extends X402PurchaseResult {
+  /** The AgentMandate the spend was charged against (LR4). */
+  mandateId: string;
+  /** The on-chain `recordSpend` tx that decremented the remaining allowance. */
+  recordSpendTxHash: string;
 }
 
 // ── ERC-1144 interface broker types ──────────────────────────────────

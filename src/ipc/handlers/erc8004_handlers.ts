@@ -39,6 +39,10 @@ import {
   validationRequest,
   validationResponse,
 } from "@/lib/onchain/erc8004_client";
+import {
+  publishSkillToAgent,
+  type AuthorSkillInput,
+} from "@/lib/onchain/skill_authoring";
 
 const logger = log.scope("erc8004_handlers");
 
@@ -111,6 +115,30 @@ export function registerErc8004Handlers(): void {
     if (!params?.agentId) throw new Error("agentId is required");
     return getAgent(chain, params.agentId);
   });
+
+  // --- LR11: author + pin a skill bundle and attach it to an agent card -
+  ipcMain.handle(
+    "erc8004:publish-skill",
+    async (
+      _e,
+      params: { chain?: string; agentId: string; skill: AuthorSkillInput; cardName?: string },
+    ) => {
+      const chain = resolveChain(params?.chain);
+      if (!params?.agentId) throw new Error("agentId is required");
+      if (!params?.skill || typeof params.skill !== "object") {
+        throw new Error("skill description is required");
+      }
+      const wallet = await loadWallet(chain);
+      const result = await publishSkillToAgent(wallet, {
+        chain,
+        agentId: params.agentId,
+        skill: params.skill,
+        cardName: params.cardName,
+      });
+      logger.info(`published skill ${result.skillCid} to agent ${params.agentId}`);
+      return result;
+    },
+  );
 
   ipcMain.handle(
     "erc8004:resolve-by-address",

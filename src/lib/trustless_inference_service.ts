@@ -325,7 +325,6 @@ class TrustlessInferenceService {
   > {
     const requestId = uuidv4();
     const timestamp = Date.now();
-    const collectedChunks: string[] = [];
 
     const streamOpts = options?.config?.options as Record<string, unknown> | undefined;
     const modelConfig: LocalModelConfig = {
@@ -354,38 +353,45 @@ class TrustlessInferenceService {
       timestamp,
     };
 
-    // Stream tokens using callback-based API
+    // Push-based bridge: `streamChat`'s callback enqueues each token and wakes
+    // the generator, which yields immediately. No polling / fixed delay — a
+    // token reaches the renderer the moment the provider emits it.
+    const queue: string[] = [];
+    let finished = false;
+    let notify: (() => void) | null = null;
+    const wake = () => {
+      const fn = notify;
+      notify = null;
+      fn?.();
+    };
+
     const streamPromise = localModelService.streamChat(request, (chunk: string) => {
-      collectedChunks.push(chunk);
+      queue.push(chunk);
+      wake();
+    });
+    // Track settlement on a separate branch so a rejection here is not flagged
+    // as unhandled — the real error is surfaced by `await streamPromise` below.
+    void streamPromise.then(
+      () => {},
+      () => {},
+    ).finally(() => {
+      finished = true;
+      wake();
     });
 
-    // Poll for new chunks and yield them
-    let lastIndex = 0;
-    const pollInterval = 10; // ms
-    
+    // Drain: yield queued tokens, otherwise await the next wake.
     while (true) {
-      // Check for new chunks
-      while (lastIndex < collectedChunks.length) {
-        yield { type: "token", content: collectedChunks[lastIndex] };
-        lastIndex++;
+      if (queue.length > 0) {
+        yield { type: "token", content: queue.shift() as string };
+        continue;
       }
-
-      // Check if stream is done by using Promise.race with a small delay
-      const streamDone = await Promise.race([
-        streamPromise.then(() => true),
-        new Promise<false>(resolve => setTimeout(() => resolve(false), pollInterval))
-      ]);
-
-      if (streamDone) {
-        // Yield any remaining chunks
-        while (lastIndex < collectedChunks.length) {
-          yield { type: "token", content: collectedChunks[lastIndex] };
-          lastIndex++;
-        }
-        break;
-      }
+      if (finished) break;
+      await new Promise<void>((resolve) => {
+        notify = resolve;
+      });
     }
 
+    // Surfaces any stream error and yields the final aggregated response.
     const response = await streamPromise;
 
     // Get model info for verification
@@ -411,7 +417,72 @@ class TrustlessInferenceService {
         proof
       );
 
+      // Auto-pin if configured
+      if (this.config.autoPin) {
+        await heliaVerificationService.pinRecord(record.id);
+      }
+
+      // Auto-anchor to Celestia DA so the record gets a verifiable
+      // block-height "CA number" the renderer can display. Mirrors the
+      // blocking `runInference` path — without this, streamed records never
+      // get the Celestia anchor / Verified checkmark.
+      if (this.config.autoAnchorCelestia) {
+        try {
+          const { celestiaBlobService } = await import(
+            "@/lib/celestia_blob_service"
+          );
+          const anchorPayload = {
+            type: "joycreate-inference-anchor",
+            recordId: record.id,
+            cid: record.cid,
+            requestCid: proof.requestCid,
+            responseCid: proof.responseCid,
+            proofCid: proof.proofCid,
+            modelId: modelInfo.id,
+            modelProvider: provider,
+            createdAt: new Date(record.createdAt).toISOString(),
+          };
+          const anchor = await celestiaBlobService.submitJSON(anchorPayload, {
+            label: `inference:${record.id}`,
+            dataType: "inference-anchor",
+          });
+          record.celestiaHeight = anchor.height;
+          record.celestiaCommitment = anchor.commitment;
+          record.celestiaNamespace = anchor.namespace;
+          record.celestiaAnchoredAt = new Date().toISOString();
+          await heliaVerificationService.updateRecord(record);
+          logger.info("Streamed inference anchored to Celestia", {
+            id: record.id,
+            height: anchor.height,
+          });
+        } catch (anchorErr) {
+          logger.warn(
+            "Celestia anchor unavailable \u2014 streamed inference still verified locally",
+            {
+              id: record.id,
+              error:
+                anchorErr instanceof Error
+                  ? anchorErr.message
+                  : String(anchorErr),
+            },
+          );
+        }
+      }
+
+      // Verify the record so `record.verified` is set — this is the flag the
+      // renderer uses to show the green Verified checkmark.
+      const verification = await heliaVerificationService.verifyInferenceRecord(
+        record.id
+      );
+      record.verified = verification.valid;
+
       this.inferenceHistory.unshift(record);
+      if (this.inferenceHistory.length > this.config.maxRecordsInMemory) {
+        this.inferenceHistory = this.inferenceHistory.slice(
+          0,
+          this.config.maxRecordsInMemory
+        );
+      }
     } catch (verificationError) {
       logger.warn("Helia verification unavailable after stream — returning result without proof", {
         error: verificationError instanceof Error ? verificationError.message : String(verificationError),
@@ -701,6 +772,118 @@ class TrustlessInferenceService {
       tokens: result.response.totalTokens,
       timeMs: result.response.generationTimeMs,
     };
+  }
+
+  /**
+   * Streaming counterpart of {@link sendMessage}. Persists the user turn,
+   * yields assistant tokens as they arrive (push-based, no polling), then
+   * persists the assistant turn + updates the conversation when complete.
+   */
+  async *streamMessage(
+    conversationId: string,
+    userMessage: string,
+    config?: {
+      temperature?: number;
+      maxTokens?: number;
+      topP?: number;
+      topK?: number;
+      repeatPenalty?: number;
+      numCtx?: number;
+      seed?: number;
+      stop?: string[];
+    }
+  ): AsyncGenerator<
+    { type: "token"; content: string } | { type: "done"; recordId?: string; cid?: string },
+    void,
+    unknown
+  > {
+    const [convRow] = await db
+      .select()
+      .from(playgroundConversations)
+      .where(eq(playgroundConversations.id, conversationId))
+      .limit(1);
+    if (!convRow) {
+      throw new Error(`Conversation not found: ${conversationId}`);
+    }
+
+    const existing = await db
+      .select()
+      .from(playgroundMessages)
+      .where(eq(playgroundMessages.conversationId, conversationId))
+      .orderBy(asc(playgroundMessages.ordinal));
+    const nextOrdinal = existing.length;
+
+    // Persist the user turn first.
+    await db.insert(playgroundMessages).values({
+      id: uuidv4(),
+      conversationId,
+      role: "user",
+      content: userMessage,
+      ordinal: nextOrdinal,
+      createdAt: new Date(),
+    });
+
+    // Build full messages array including system prompt + prior history.
+    const allMessages: InferenceMessage[] = [];
+    if (convRow.systemPrompt) {
+      allMessages.push({ role: "system", content: convRow.systemPrompt });
+    }
+    for (const m of existing) {
+      allMessages.push({ role: m.role as InferenceMessage["role"], content: m.content });
+    }
+    allMessages.push({ role: "user", content: userMessage });
+
+    // Stream tokens and accumulate the full assistant response.
+    let output = "";
+    let record: InferenceRecord | undefined;
+    const stream = this.streamVerifiedInference(
+      convRow.provider as LocalModelProvider,
+      convRow.modelId,
+      allMessages,
+      {
+        systemPrompt: convRow.systemPrompt ?? undefined,
+        config: config ? { options: config } : undefined,
+      }
+    );
+    for await (const chunk of stream) {
+      if (chunk.type === "token") {
+        output += chunk.content;
+        yield { type: "token", content: chunk.content };
+      } else {
+        record = chunk.record;
+      }
+    }
+
+    // Persist the assistant turn.
+    await db.insert(playgroundMessages).values({
+      id: uuidv4(),
+      conversationId,
+      role: "assistant",
+      content: output,
+      recordId: record?.id ?? null,
+      cid: record?.cid ?? null,
+      ordinal: nextOrdinal + 1,
+      createdAt: new Date(),
+    });
+
+    // Update conversation: title (first turn) + recordIds + updatedAt.
+    const newRecordIds = record?.id
+      ? [...(convRow.recordIds ?? []), record.id]
+      : convRow.recordIds ?? [];
+    const isFirstUserTurn = existing.filter((m) => m.role === "user").length === 0;
+    const newTitle = isFirstUserTurn
+      ? userMessage.slice(0, 60) + (userMessage.length > 60 ? "..." : "")
+      : convRow.title;
+    await db
+      .update(playgroundConversations)
+      .set({
+        title: newTitle,
+        recordIds: newRecordIds,
+        updatedAt: new Date(),
+      })
+      .where(eq(playgroundConversations.id, conversationId));
+
+    yield { type: "done", recordId: record?.id, cid: record?.cid };
   }
 
   // ============================================================================

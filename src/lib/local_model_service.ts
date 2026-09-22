@@ -378,13 +378,29 @@ export class OllamaProvider {
         model: request.modelConfig.modelId,
         messages,
         stream: true,
-        options: request.modelConfig.options,
+        options: {
+          temperature: request.modelConfig.options?.temperature ?? 0.7,
+          top_p: request.modelConfig.options?.topP ?? 0.9,
+          top_k: request.modelConfig.options?.topK ?? 40,
+          repeat_penalty: request.modelConfig.options?.repeatPenalty ?? 1.1,
+          seed: request.modelConfig.options?.seed,
+          num_predict: request.modelConfig.options?.numPredict ?? 2048,
+          num_ctx: request.modelConfig.options?.numCtx ?? 4096,
+        },
       }),
     });
 
     if (!response.ok) {
       let streamErrMsg = response.statusText;
       try { const b = await response.json(); if (b?.error) streamErrMsg = b.error; } catch {}
+      // Mirror the non-streaming path: make an interrupted/missing pull actionable.
+      if (/model .* not found|pull model manifest/i.test(streamErrMsg)) {
+        throw new Error(
+          `Ollama stream failed: model '${request.modelConfig.modelId}' is not usable. ` +
+            `This usually means the download was interrupted. Re-pull it with: ` +
+            `\`ollama pull ${request.modelConfig.modelId}\` — or pick a different model.`,
+        );
+      }
       throw new Error(`Ollama stream failed: ${streamErrMsg}`);
     }
 

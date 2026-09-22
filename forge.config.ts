@@ -3,6 +3,9 @@ import { MakerSquirrel } from "@electron-forge/maker-squirrel";
 import { MakerZIP } from "@electron-forge/maker-zip";
 import { MakerDeb } from "@electron-forge/maker-deb";
 import { MakerRpm } from "@electron-forge/maker-rpm";
+import { MakerWix } from "@electron-forge/maker-wix";
+import { MakerDMG } from "@electron-forge/maker-dmg";
+import { MakerAppImage } from "@reforged/maker-appimage";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import { FusesPlugin } from "@electron-forge/plugin-fuses";
 import { FuseV1Options, FuseVersion } from "@electron/fuses";
@@ -10,6 +13,7 @@ import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-nati
 import { execSync } from "child_process";
 import path from "path";
 import fs from "fs";
+import { builtinModules } from "module";
 
 // Path to signtool.exe bundled with electron-winstaller
 // On GitHub Actions, this is the full path to the signtool binary.
@@ -48,18 +52,73 @@ function signWindowsExecutable(filePath: string): void {
 
 // Based on https://github.com/electron/forge/blob/6b2d547a7216c30fde1e1fddd1118eee5d872945/packages/plugin/vite/src/VitePlugin.ts#L124
 
-// Runtime-required dependencies that vite externalizes from the main bundle.
-// We use the full production-dependency closure from package.json — that way
-// any package that vite/rollup externalizes (explicitly or implicitly) will be
-// present in node_modules at runtime, avoiding "Cannot find module 'X'"
-// crashes in the packaged main process.
+// Which node_modules the packaged app ships.
+//
+// Vite bundles most code straight into .vite/build (main process) and the
+// renderer; only what the built bundle still `require()`s at runtime — the
+// externals in vite.main.config.mts, and their transitive deps — has to exist
+// in node_modules inside the asar.
+//
+// This used to seed the closure with EVERY package.json dependency. That was
+// safe, but it shipped renderer-only libraries Vite had already bundled
+// (Privy, thirdweb, monaco, WalletConnect…) and optional runtimes nothing
+// loads: 4.05 GB of node_modules, a 4.6 GB app, and a Squirrel Setup.exe that
+// could not be built at all. Seeding from what the bundle actually requires
+// ships 1.63 GB instead.
+//
+// Set JOYCREATE_FULL_DEP_CLOSURE=1 to go back to shipping everything.
 function getProductionDependencies(): string[] {
   const pkgJson = JSON.parse(
     fs.readFileSync(path.join(__dirname, "package.json"), "utf8"),
   );
   return Object.keys(pkgJson.dependencies || {});
 }
-const EXTERNAL_RUNTIME_PACKAGES = getProductionDependencies();
+
+// Packages the app reaches by filesystem path, which no require-scan can see.
+const PATH_LOADED_PACKAGES = [
+  "openclaw", // node_modules/openclaw/dist/control-ui — openclaw_gateway_service.ts
+  "sqlite-vec", // app.asar.unpacked/node_modules/sqlite-vec — sqlite_vec_backend.ts
+];
+
+/**
+ * Every package the built main-process bundles require by name.
+ *
+ * Returns null when there is no build to scan. A false positive (a package
+ * name inside a code template string) costs only size; a miss would crash, so
+ * the pattern errs wide: require(), require.resolve(), import() and `from`.
+ */
+function getBundleRuntimePackages(): string[] | null {
+  const buildDir = path.join(__dirname, ".vite", "build");
+  if (!fs.existsSync(buildDir)) return null;
+
+  const builtins = new Set(builtinModules);
+  const specifier =
+    /(?:\brequire(?:\.resolve)?|\bimport)\(\s*["']([^"'./][^"']*)["']\s*[,)]|\bfrom\s*["']([^"'./][^"']*)["']/g;
+  const packageName = /^(@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i;
+  const names = new Set<string>(PATH_LOADED_PACKAGES);
+
+  const scan = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scan(full);
+        continue;
+      }
+      if (!/\.(c|m)?js$/.test(entry.name)) continue;
+      const code = fs.readFileSync(full, "utf8");
+      for (const m of code.matchAll(specifier)) {
+        const spec = m[1] ?? m[2];
+        if (!spec || spec.startsWith("node:") || builtins.has(spec)) continue;
+        const parts = spec.split("/");
+        const name = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+        if (name === "electron" || !packageName.test(name)) continue;
+        names.add(name);
+      }
+    }
+  };
+  scan(buildDir);
+  return [...names];
+}
 
 // Resolve the full transitive dependency closure of the externalized packages.
 // Without this, packaging would only include the top-level package and runtime
@@ -127,12 +186,30 @@ function computeRuntimeDepClosure(roots: string[]): Set<string> {
   return allowPrefixes;
 }
 
-const EXTERNAL_RUNTIME_DEP_CLOSURE = computeRuntimeDepClosure(
-  EXTERNAL_RUNTIME_PACKAGES,
-);
-console.log(
-  `[forge.config] Including ${EXTERNAL_RUNTIME_DEP_CLOSURE.size} package directories in asar (externalized + transitive deps)`,
-);
+/**
+ * Computed on first use, not when this file loads.
+ *
+ * Forge loads this config before the Vite build runs, so scanning .vite/build
+ * at load time would read the previous build — or none. The packager calls
+ * `ignore` only after the build has finished, which is when this first runs.
+ */
+let runtimeDepClosure: Set<string> | undefined;
+function getRuntimeDepClosure(): Set<string> {
+  if (runtimeDepClosure) return runtimeDepClosure;
+  const fromBundle =
+    process.env.JOYCREATE_FULL_DEP_CLOSURE === "1"
+      ? null
+      : getBundleRuntimePackages();
+  const roots = fromBundle ?? getProductionDependencies();
+  runtimeDepClosure = computeRuntimeDepClosure(roots);
+  console.log(
+    `[forge.config] Including ${runtimeDepClosure.size} package directories in asar ` +
+      (fromBundle
+        ? `(closure of ${roots.length} packages the built main process requires)`
+        : "(every production dependency)"),
+  );
+  return runtimeDepClosure;
+}
 
 const ignore = (file: string) => {
   if (!file) return false;
@@ -175,13 +252,12 @@ const ignore = (file: string) => {
   // Packages externalized in vite.main.config.mts must be present in
   // node_modules at runtime, otherwise the main process throws
   // "Cannot find module 'X'" before the window can load.
-  const exact = (
-    EXTERNAL_RUNTIME_DEP_CLOSURE as Set<string> & { __exact?: Set<string> }
-  ).__exact;
+  const closure = getRuntimeDepClosure();
+  const exact = (closure as Set<string> & { __exact?: Set<string> }).__exact;
   if (exact && exact.has(file)) {
     return false;
   }
-  for (const prefix of EXTERNAL_RUNTIME_DEP_CLOSURE) {
+  for (const prefix of closure) {
     if (file === prefix || file.startsWith(prefix + "/")) {
       return false;
     }
@@ -191,6 +267,50 @@ const ignore = (file: string) => {
 };
 
 const isEndToEndTestBuild = process.env.E2E_TEST_BUILD === "true";
+
+// Signing and notarization need secrets only the release pipeline holds.
+// Without these guards an unsigned build — a developer's `npm run make`, or the
+// "Build Installers" workflow run without secrets — failed at the notarize step
+// instead of producing a working, if unsigned, app.
+const canSignMac = !isEndToEndTestBuild && Boolean(process.env.APPLE_TEAM_ID);
+const canNotarizeMac =
+  canSignMac && Boolean(process.env.APPLE_ID && process.env.APPLE_PASSWORD);
+
+/**
+ * Is a build tool on PATH?
+ *
+ * The MSI needs WiX Toolset v3 and the AppImage needs mksquashfs. A maker whose
+ * tool is missing is left out with a warning, rather than failing the whole
+ * `make` — which would also take down the Squirrel, deb and rpm builds, and the
+ * existing release workflow, which installs neither tool.
+ */
+function hasBinary(name: string): boolean {
+  const exts = process.platform === "win32" ? [".exe", ".cmd", ""] : [""];
+  const dirs = (process.env.PATH ?? process.env.Path ?? "").split(path.delimiter);
+  return dirs.some(
+    (dir) => dir && exts.some((ext) => fs.existsSync(path.join(dir, name + ext))),
+  );
+}
+
+/** Only a real `make`/`publish` should warn; `npm start` loads this file too. */
+const isMaking = process.argv.some((a) => a === "make" || a === "publish");
+
+/**
+ * Include a maker only when the tool it shells out to is installed on this
+ * machine. `onPlatform` is the OS the maker builds for: on any other OS Forge
+ * skips the maker anyway, so it is kept without checking for the tool.
+ */
+function optionalMaker<T>(
+  label: string,
+  onPlatform: NodeJS.Platform,
+  toolsPresent: () => boolean,
+  missing: string,
+  create: () => T,
+): T[] {
+  if (process.platform !== onPlatform || toolsPresent()) return [create()];
+  if (isMaking) console.warn(`[forge] ${label} skipped: ${missing}`);
+  return [];
+}
 
 const config: ForgeConfig = {
   outDir: "out-final",
@@ -203,18 +323,18 @@ const config: ForgeConfig = {
     ],
     icon: "./assets/icon/logo",
 
-    osxSign: isEndToEndTestBuild
-      ? undefined
-      : {
+    osxSign: canSignMac
+      ? {
           identity: process.env.APPLE_TEAM_ID,
-        },
-    osxNotarize: isEndToEndTestBuild
-      ? undefined
-      : {
+        }
+      : undefined,
+    osxNotarize: canNotarizeMac
+      ? {
           appleId: process.env.APPLE_ID!,
           appleIdPassword: process.env.APPLE_PASSWORD!,
           teamId: process.env.APPLE_TEAM_ID!,
-        },
+        }
+      : undefined,
     asar: true,
     ignore,
     extraResource: ["node_modules/dugite/git"],
@@ -239,8 +359,10 @@ const config: ForgeConfig = {
         );
         for (const artifact of result.artifacts) {
           const fileName = path.basename(artifact).toLowerCase();
-          // Sign .exe files (the Squirrel installer and Setup.exe)
-          if (fileName.endsWith(".exe")) {
+          // Sign .exe files (the Squirrel installer and Setup.exe) and the MSI.
+          // An unsigned MSI gets a SmartScreen warning and is refused outright
+          // by many managed-PC policies, which are the reason to ship an MSI.
+          if (fileName.endsWith(".exe") || fileName.endsWith(".msi")) {
             signWindowsExecutable(artifact);
           }
         }
@@ -254,13 +376,70 @@ const config: ForgeConfig = {
       iconUrl:
         "https://raw.githubusercontent.com/DisciplesofLove/JoyCreate/main/assets/icon/logo.ico",
     }),
+    // The MSI. Setup.exe installs per-user with no admin, which suits
+    // individuals; IT departments deploy with Group Policy, Intune or SCCM,
+    // which expect a per-machine MSI.
+    ...optionalMaker(
+      "MSI",
+      "win32",
+      () => hasBinary("candle") && hasBinary("light"),
+      "WiX Toolset v3 not found (candle.exe and light.exe must be on PATH).",
+      () =>
+        new MakerWix({
+          // Never change this. It is how Windows Installer recognises a new
+          // MSI as an upgrade of the installed one. Left unset, electron-wix-msi
+          // generates a random code per build, and every release then installs
+          // side by side with the last.
+          upgradeCode: "89A4928C-50C3-47FF-BAE4-08C4B54FE77E",
+          name: "JoyCreate",
+          programFilesFolderName: "JoyCreate",
+          shortcutFolderName: "JoyCreate",
+          icon: "./assets/icon/logo.ico",
+          defaultInstallMode: "perMachine",
+          ui: { chooseDirectory: true },
+        }),
+    ),
     new MakerZIP({}, ["darwin"]),
-    new MakerRpm({}),
-    new MakerDeb({
-      options: {
-        mimeType: ["x-scheme-handler/joycreate"],
-      },
+    // Drag-to-Applications disk image, the download Mac users expect.
+    new MakerDMG({
+      format: "ULFO",
+      icon: "./assets/icon/logo.icns",
     }),
+    ...optionalMaker(
+      "rpm",
+      "linux",
+      () => hasBinary("rpmbuild"),
+      "rpmbuild not found (install the rpm package).",
+      () => new MakerRpm({}),
+    ),
+    ...optionalMaker(
+      "deb",
+      "linux",
+      () => hasBinary("dpkg") && hasBinary("fakeroot"),
+      "dpkg and fakeroot not found.",
+      () =>
+        new MakerDeb({
+          options: {
+            mimeType: ["x-scheme-handler/joycreate"],
+          },
+        }),
+    ),
+    // Runs on any distro without root. It is the only package for Arch,
+    // Gentoo, NixOS and everything else the .deb and .rpm do not cover.
+    ...optionalMaker(
+      "AppImage",
+      "linux",
+      () => hasBinary("mksquashfs"),
+      "mksquashfs not found (install squashfs-tools).",
+      () =>
+        new MakerAppImage({
+          options: {
+            icon: "./assets/icon/logo.png",
+            categories: ["Development"],
+            mimeType: ["x-scheme-handler/joycreate"],
+          },
+        }),
+    ),
   ],
   publishers: [
     {

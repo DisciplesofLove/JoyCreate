@@ -190,7 +190,7 @@ export async function handleExportAgentStandalone(
 OPENAI_API_KEY=your-api-key-here
 
 # Model configuration
-MODEL_ID=${agent.modelId || "gpt-5-mini"}
+MODEL_ID=${agent.modelId || "gpt-5.6-luna"}
 TEMPERATURE=${agent.temperature || 0.7}
 MAX_TOKENS=${agent.maxTokens || 4096}
 `;
@@ -290,7 +290,7 @@ import { streamText, generateText } from "ai";
 import "dotenv/config";
 ${hasTools ? 'import { tools } from "./tools.js";' : ""}
 
-const MODEL_ID = process.env.MODEL_ID || "${agent.modelId || "gpt-5-mini"}";
+const MODEL_ID = process.env.MODEL_ID || "${agent.modelId || "gpt-5.6-luna"}";
 const TEMPERATURE = parseFloat(process.env.TEMPERATURE || "${agent.temperature || 0.7}");
 const MAX_TOKENS = parseInt(process.env.MAX_TOKENS || "${agent.maxTokens || 4096}");
 
@@ -474,7 +474,7 @@ docker-compose up -d
 | Variable | Description | Default |
 |----------|-------------|---------|
 | OPENAI_API_KEY | OpenAI API key | required |
-| MODEL_ID | Model to use | ${agent.modelId || "gpt-5-mini"} |
+| MODEL_ID | Model to use | ${agent.modelId || "gpt-5.6-luna"} |
 | TEMPERATURE | Sampling temperature | ${agent.temperature || 0.7} |
 | MAX_TOKENS | Maximum tokens | ${agent.maxTokens || 4096} |
 
@@ -560,7 +560,7 @@ API_KEY=your-api-key-here
 # Ollama:    http://localhost:11434/v1
 # LM Studio: http://localhost:1234/v1
 BASE_URL=https://api.openai.com/v1
-MODEL_ID=${agent.modelId || "gpt-5-mini"}
+MODEL_ID=${agent.modelId || "gpt-5.6-luna"}
 PORT=3001
 `;
     await fs.writeFile(path.join(exportDir, ".env.example"), envExample);
@@ -586,7 +586,7 @@ CMD ["node", "server.js"]
     environment:
       - API_KEY=\${API_KEY}
       - BASE_URL=\${BASE_URL:-https://api.openai.com/v1}
-      - MODEL_ID=\${MODEL_ID:-${agent.modelId || "gpt-5-mini"}}
+      - MODEL_ID=\${MODEL_ID:-${agent.modelId || "gpt-5.6-luna"}}
     restart: unless-stopped
 `;
     await fs.writeFile(path.join(exportDir, "docker-compose.yml"), dockerCompose);
@@ -822,7 +822,7 @@ import { join, extname } from "node:path";
 
 const API_KEY    = process.env.API_KEY    || "";
 const BASE_URL   = process.env.BASE_URL   || "https://api.openai.com/v1";
-const MODEL_ID   = process.env.MODEL_ID   || ${JSON.stringify(agent.modelId || "gpt-5-mini")};
+const MODEL_ID   = process.env.MODEL_ID   || ${JSON.stringify(agent.modelId || "gpt-5.6-luna")};
 const PORT       = parseInt(process.env.PORT || "3001", 10);
 // Default to loopback for safety: an exported agent should not expose its
 // chat / API surface to the local network unless the operator explicitly

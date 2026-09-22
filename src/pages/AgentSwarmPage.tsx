@@ -1471,7 +1471,7 @@ function SpawnAgentDialog({
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [role, setRole] = useState<AgentRole>("worker");
-  const [modelId, setModelId] = useState("gpt-5-mini");
+  const [modelId, setModelId] = useState("gpt-5.6-luna");
   const [temperature, setTemperature] = useState(0.7);
   const [systemPrompt, setSystemPrompt] = useState("");
 
@@ -1508,7 +1508,7 @@ function SpawnAgentDialog({
   const resetForm = () => {
     setName("");
     setRole("worker");
-    setModelId("gpt-5-mini");
+    setModelId("gpt-5.6-luna");
     setTemperature(0.7);
     setSystemPrompt("");
   };
@@ -1566,13 +1566,14 @@ function SpawnAgentDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="gpt-5.1">GPT 5.1</SelectItem>
-                <SelectItem value="gpt-5-mini">GPT 5 Mini</SelectItem>
-                <SelectItem value="gpt-5.1-codex">GPT 5.1 Codex</SelectItem>
-                <SelectItem value="claude-opus-4-7">Claude Opus 4.7 (Latest)</SelectItem>
-                <SelectItem value="claude-sonnet-4-6">Claude Sonnet 4.6 (Latest)</SelectItem>
-                <SelectItem value="claude-opus-4-6">Claude Opus 4.6</SelectItem>
-                <SelectItem value="claude-sonnet-4-5">Claude Sonnet 4</SelectItem>
+                <SelectItem value="gpt-6-astra">GPT-6 Astra</SelectItem>
+                <SelectItem value="gpt-5.6-sol">GPT-5.6 Sol</SelectItem>
+                <SelectItem value="gpt-5.6-terra">GPT-5.6 Terra</SelectItem>
+                <SelectItem value="gpt-5.6-luna">GPT-5.6 Luna</SelectItem>
+                <SelectItem value="claude-fable-5-1">Claude Fable 5.1</SelectItem>
+                <SelectItem value="claude-opus-5">Claude Opus 5</SelectItem>
+                <SelectItem value="claude-sonnet-5">Claude Sonnet 5</SelectItem>
+                <SelectItem value="claude-haiku-4-5">Claude Haiku 4.5</SelectItem>
               </SelectContent>
             </Select>
           </div>

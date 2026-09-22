@@ -902,7 +902,7 @@ export class AgentSwarm extends EventEmitter {
     const now = Date.now();
 
     const defaultConfig: AgentNodeConfig = {
-      modelId: "gpt-5-mini",
+      modelId: "gpt-5.6-luna",
       temperature: 0.7,
       maxTokens: 4096,
       systemPrompt: `You are an AI agent in a swarm. Your role: ${request.role}.`,

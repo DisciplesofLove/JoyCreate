@@ -99,13 +99,15 @@ export function normaliseProvider(
  * checkpoint is loaded, and naming one that is not present fails.
  */
 export const DEFAULT_IMAGE_MODELS: Record<string, string> = {
-  openai: "dall-e-3",
-  google: "imagen-3.0-generate-002",
+  // dall-e-3 was shut down 2026-05-12; OpenAI names gpt-image-2 as its replacement.
+  openai: "gpt-image-2",
+  // Imagen 3 is retired and Imagen 4 is deprecated; Nano Banana 2 is current.
+  google: "gemini-3.1-flash-image",
   stabilityai: "stable-diffusion-3.5-large",
   replicate: "black-forest-labs/flux-schnell",
   fal: "fal-ai/flux/schnell",
   runway: "gen3a_turbo",
-  xai: "grok-2-image",
+  xai: "grok-imagine-image",
   comfyui: "",
   a1111: "",
   localai: "",
@@ -117,7 +119,8 @@ export const DEFAULT_VIDEO_MODELS: Record<string, string> = {
   replicate: "lightricks/ltx-video",
   luma: "ray-2",
   stabilityai: "stable-video-diffusion",
-  google: "veo-2.0-generate-001",
+  google: "veo-3.1-generate-preview",
+  // OpenAI schedules sora-2 for shutdown on 2026-09-24 and lists no replacement.
   openai: "sora-2",
 };
 

@@ -55,7 +55,7 @@ export function registerHelpBotHandlers() {
         let assistantContent = "";
 
         const stream = streamText({
-          model: provider.responses("gpt-5-nano"),
+          model: provider.responses("gpt-5.6-luna"),
           providerOptions: {
             openai: {
               reasoningSummary: "auto",
@@ -105,7 +105,7 @@ export function registerHelpBotHandlers() {
               const usage = await stream.usage;
               if (usage) {
                 recordAICost({
-                  model: "gpt-5-nano",
+                  model: "gpt-5.6-luna",
                   provider: "openai",
                   inputTokens: usage.inputTokens ?? 0,
                   outputTokens: usage.outputTokens ?? 0,

@@ -198,9 +198,9 @@ function AIQueryConfigForm({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="default">Default (Local)</SelectItem>
-            <SelectItem value="gpt-5.1">GPT 5.1</SelectItem>
-            <SelectItem value="claude-sonnet-4-5">Claude Sonnet 4</SelectItem>
-            <SelectItem value="gemini-3-flash-preview">Gemini 3 Flash</SelectItem>
+            <SelectItem value="gpt-5.6-sol">GPT-5.6 Sol</SelectItem>
+            <SelectItem value="claude-sonnet-5">Claude Sonnet 5</SelectItem>
+            <SelectItem value="gemini-3.8-flash">Gemini 3.8 Flash</SelectItem>
             <SelectItem value="llama3.2:8b">Llama 3.2 (Local)</SelectItem>
           </SelectContent>
         </Select>

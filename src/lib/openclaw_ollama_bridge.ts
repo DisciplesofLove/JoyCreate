@@ -455,7 +455,7 @@ export class OpenClawOllamaBridge extends EventEmitter {
     
     if (!useLocal || !this.ollamaAvailable) {
       return {
-        model: "claude-sonnet-4-5", // Default cloud model
+        model: "claude-sonnet-5", // Default cloud model
         reason: this.ollamaAvailable
           ? "Task complexity exceeds local threshold"
           : "Ollama not available",
@@ -480,7 +480,7 @@ export class OpenClawOllamaBridge extends EventEmitter {
         speed = "slow";
       } else {
         return {
-          model: "claude-sonnet-4-5",
+          model: "claude-sonnet-5",
           reason: "No local vision model available",
           isLocal: false,
           estimatedSpeed: "medium",

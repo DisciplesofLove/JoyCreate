@@ -14,6 +14,7 @@ import { getTelegramBot } from "@/lib/telegram_bot_service";
 import { getOpenClawGateway } from "@/lib/openclaw_gateway_service";
 import { assertMayStart, resolveOwner } from "@/lib/channels/channel_owner";
 import { getOpenClawAutonomous } from "@/lib/openclaw_autonomous";
+import { buildChannelTools } from "@/lib/channels/channel_agent_tools";
 import { voiceAssistant } from "@/lib/voice_assistant";
 import {
   detectPublishCommand,
@@ -587,6 +588,9 @@ You don't just talk about doing things — you actually do them. When someone as
     await fs.unlink(wavPath).catch(() => {});
   }
 
+  // Warn once per process, not once per message, about open bot access.
+  let warnedOpenAccess = false;
+
   // ── Conversation history per chat (ring buffer, max 50 messages) ──
   const MAX_HISTORY = 50;
   const chatHistories = new Map<string, Array<{ role: "user" | "assistant"; content: string }>>();
@@ -632,12 +636,40 @@ You don't just talk about doing things — you actually do them. When someone as
 
       // Append an explicit tool-usage rule so the model knows it MUST call
       // execute_joycreate_task instead of claiming it cannot access JoyCreate.
+      // The same typed tools the local agent has — documents, apps, email,
+      // publishing, images, video, workflows, agents, the economy — called
+      // directly. execute_joycreate_task stays as the catch-all.
+      const channelTools = buildChannelTools({
+        channel: "telegram",
+        onToolStart: () => {
+          bot.sendChatAction(chatId, "typing").catch(() => {});
+        },
+        onMediaFile: async (filePath) => {
+          if (/\.(mp4|webm|mov)$/i.test(filePath)) {
+            await bot.sendVideoFile(chatId, filePath);
+          } else {
+            await bot.sendPhotoFile(chatId, filePath);
+          }
+        },
+      });
+
+      // These tools send email, publish and spend without a confirmation
+      // dialog. With no chat allowlist, anyone who finds the bot can use them.
+      if (!warnedOpenAccess && !bot.getConfig().allowedChatIds?.length) {
+        warnedOpenAccess = true;
+        logger.warn(
+          `Telegram bot has no allowedChatIds — any Telegram user can call all ${channelTools.names.length} JoyCreate tools, including ${channelTools.destructiveNames.length} that change state. Set allowedChatIds to restrict it.`,
+        );
+      }
+
       const toolRule = [
         "\n\n## TOOL USAGE — CRITICAL",
-        `You have a tool called \`execute_joycreate_task\` that gives you FULL access to JoyCreate.`,
+        `You have ${channelTools.names.length + 1} tools with FULL access to JoyCreate: ${channelTools.names.length} direct tools (documents, apps, email, publishing, images, video, workflows, agents, datasets, marketplace, wallet) and \`execute_joycreate_task\` for anything no single tool covers.`,
+        "Prefer the direct tool that matches the request: its arguments are validated, so it is more reliable. Use execute_joycreate_task for broad multi-step requests or when no direct tool fits.",
         needsAction
-          ? "The user's message requires a JoyCreate action. You MUST invoke execute_joycreate_task — do NOT respond with text alone."
-          : "When the user asks about their JoyCreate data or wants any action performed, ALWAYS call execute_joycreate_task. Never say you cannot access JoyCreate — the tool IS the connection.",
+          ? "The user's message requires a JoyCreate action. You MUST call a tool — do NOT respond with text alone."
+          : "When the user asks about their JoyCreate data or wants any action performed, call the matching tool. Never say you cannot access JoyCreate — the tools ARE the connection.",
+        "Tools that change things (create, send, publish, delete, spend) run immediately with no confirmation, so only call them when the user actually asked for that action.",
       ].join("\n");
 
       const systemWithContext =
@@ -701,9 +733,10 @@ You don't just talk about doing things — you actually do them. When someone as
       const result = await generateText({
         model: modelClient.model,
         messages,
-        tools: { execute_joycreate_task: executeJoyCreateTask },
-        // Allow up to 6 model+tool steps.
-        stopWhen: stepCountIs(6),
+        tools: { ...channelTools.tools, execute_joycreate_task: executeJoyCreateTask },
+        // A direct-tool chain ("write a doc, export it, email it") takes more
+        // steps than a single delegated task did.
+        stopWhen: stepCountIs(12),
         maxOutputTokens: 4096,
       });
 
@@ -713,10 +746,17 @@ You don't just talk about doing things — you actually do them. When someone as
       if (!text && lastToolSummary) {
         text = lastToolSummary;
       }
+      if (!text && channelTools.callCount() > 0) {
+        text = channelTools.lastSummary();
+      }
+      // Any tool call means the model acted. A direct tool is as real as the
+      // delegated task and must not trigger the "did nothing" escalations below,
+      // which would run the request a second time.
+      const actedViaTool = Boolean(lastToolSummary) || channelTools.callCount() > 0;
 
       // Escalation 1: action-type message but the model never called the tool —
       // fall straight through to the autonomous brain so the user gets real results.
-      if (needsAction && !lastToolSummary) {
+      if (needsAction && !actedViaTool) {
         logger.info(
           `Model did not call tool for action intent "${intent}" — escalating to autonomous brain: "${content.slice(0, 80)}"`,
         );
@@ -725,7 +765,7 @@ You don't just talk about doing things — you actually do them. When someone as
       }
 
       // Escalation 2: model produced a refusal instead of calling the tool.
-      if (!lastToolSummary && looksLikeToollessRefusal(text)) {
+      if (!actedViaTool && looksLikeToollessRefusal(text)) {
         logger.info(
           `Model produced a toolless refusal — escalating to autonomous brain: "${content.slice(0, 80)}"`,
         );

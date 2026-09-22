@@ -214,19 +214,24 @@ export const SUBSCRIPTION_CLIS: SubscriptionCliDefinition[] = [
     docsUrl: "https://docs.claude.com/en/docs/claude-code/overview",
     models: [
       {
-        id: "claude-opus-4-6",
-        label: "Claude Opus 4.6",
-        description: "Most capable. Heaviest against a Max plan's limits.",
+        id: "claude-opus-5",
+        label: "Claude Opus 5",
+        description: "Anthropic's recommended default for most work.",
       },
       {
-        id: "claude-sonnet-4-5",
-        label: "Claude Sonnet 4.5",
-        description: "The everyday default — fast and strong.",
+        id: "claude-fable-5-1",
+        label: "Claude Fable 5.1",
+        description: "Deepest reasoning and long-horizon work. Heaviest on plan limits.",
+      },
+      {
+        id: "claude-sonnet-5",
+        label: "Claude Sonnet 5",
+        description: "Fast and strong — lighter on your quota.",
       },
       {
         id: "claude-haiku-4-5",
         label: "Claude Haiku 4.5",
-        description: "Cheapest on your quota. Good for bulk work.",
+        description: "Fastest and cheapest on your quota.",
       },
     ],
     buildArgs: (prompt, model) => {
@@ -270,20 +275,27 @@ export const SUBSCRIPTION_CLIS: SubscriptionCliDefinition[] = [
     installCommand: "npm install -g @openai/codex",
     docsUrl: "https://developers.openai.com/codex/cli",
     models: [
+      // The GPT-5.x Codex models were shut down on 2026-07-23; OpenAI names
+      // gpt-5.6-sol and gpt-5.6-terra as their replacements.
       {
-        id: "gpt-5.1-codex",
-        label: "GPT-5.1 Codex",
-        description: "Tuned for coding and long agentic runs.",
+        id: "gpt-5.6-sol",
+        label: "GPT-5.6 Sol",
+        description: "OpenAI's flagship for complex and coding work.",
       },
       {
-        id: "gpt-5.1",
-        label: "GPT-5.1",
-        description: "General-purpose flagship.",
+        id: "gpt-6-astra",
+        label: "GPT-6 Astra",
+        description: "Most capable; heaviest on plan limits, where your plan includes it.",
       },
       {
-        id: "gpt-5.1-codex-mini",
-        label: "GPT-5.1 Codex Mini",
-        description: "Faster and lighter on your quota.",
+        id: "gpt-5.6-terra",
+        label: "GPT-5.6 Terra",
+        description: "Balanced cost and capability.",
+      },
+      {
+        id: "gpt-5.6-luna",
+        label: "GPT-5.6 Luna",
+        description: "Lightest on your quota.",
       },
     ],
     buildArgs: (prompt, model) => {
@@ -316,14 +328,19 @@ export const SUBSCRIPTION_CLIS: SubscriptionCliDefinition[] = [
     docsUrl: "https://github.com/google-gemini/gemini-cli",
     models: [
       {
-        id: "gemini-2.5-pro",
-        label: "Gemini 2.5 Pro",
-        description: "Deepest reasoning, 1M-token context.",
+        id: "gemini-3.8-flash",
+        label: "Gemini 3.8 Flash",
+        description: "Google's newest Flash — strong for coding and agents.",
       },
       {
-        id: "gemini-2.5-flash",
-        label: "Gemini 2.5 Flash",
-        description: "Fast, and the most generous free quota.",
+        id: "gemini-3.1-pro-preview",
+        label: "Gemini 3.1 Pro (Preview)",
+        description: "Deepest reasoning.",
+      },
+      {
+        id: "gemini-3.5-flash-lite",
+        label: "Gemini 3.5 Flash-Lite",
+        description: "Fastest and lightest on your quota.",
       },
     ],
     buildArgs: (prompt, model) => {
@@ -364,16 +381,18 @@ export const SUBSCRIPTION_CLIS: SubscriptionCliDefinition[] = [
     installCommand: "npm install -g @github/copilot",
     docsUrl: "https://docs.github.com/copilot/concepts/agents/about-copilot-cli",
     models: [
+      // GitHub publishes Copilot's models by display name, not the identifier
+      // its CLI's --model flag takes. A guessed identifier fails the run, so
+      // this defers to whatever model the user's Copilot plan selects.
       {
-        id: "claude-sonnet-4.5",
-        label: "Claude Sonnet 4.5",
-        description: "Copilot's default for agentic work.",
+        id: "default",
+        label: "Copilot's default model",
+        description: "Whichever model your Copilot plan selects.",
       },
-      { id: "gpt-5.1", label: "GPT-5.1", description: "OpenAI flagship via Copilot." },
     ],
     buildArgs: (prompt, model) => {
       const args = ["-p", prompt, "--allow-all-tools"];
-      if (model) args.push("--model", model);
+      if (model && model !== "default") args.push("--model", model);
       return args;
     },
     parseLine: plainTextParse,

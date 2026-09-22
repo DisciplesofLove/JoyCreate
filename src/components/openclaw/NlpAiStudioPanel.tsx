@@ -115,12 +115,13 @@ export function NlpAiStudioPanel() {
   ];
 
   const apiModels = [
-    { provider: "anthropic" as const, modelName: "claude-opus-4-7", displayName: "Claude Opus 4.7 (Anthropic, Latest)" },
-    { provider: "anthropic" as const, modelName: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6 (Anthropic, Latest)" },
-    { provider: "anthropic" as const, modelName: "claude-opus-4-6", displayName: "Claude Opus 4.6 (Anthropic)" },
-    { provider: "anthropic" as const, modelName: "claude-sonnet-4-5", displayName: "Claude Sonnet 4 (Anthropic)" },
-    { provider: "openai" as const, modelName: "gpt-5.1", displayName: "GPT 5.1 (OpenAI)" },
-    { provider: "openai" as const, modelName: "gpt-5-mini", displayName: "GPT 5 Mini (OpenAI)" },
+    { provider: "anthropic" as const, modelName: "claude-fable-5-1", displayName: "Claude Fable 5.1 (Anthropic)" },
+    { provider: "anthropic" as const, modelName: "claude-opus-5", displayName: "Claude Opus 5 (Anthropic)" },
+    { provider: "anthropic" as const, modelName: "claude-sonnet-5", displayName: "Claude Sonnet 5 (Anthropic)" },
+    { provider: "anthropic" as const, modelName: "claude-haiku-4-5", displayName: "Claude Haiku 4.5 (Anthropic)" },
+    { provider: "openai" as const, modelName: "gpt-6-astra", displayName: "GPT-6 Astra (OpenAI)" },
+    { provider: "openai" as const, modelName: "gpt-5.6-sol", displayName: "GPT-5.6 Sol (OpenAI)" },
+    { provider: "openai" as const, modelName: "gpt-5.6-luna", displayName: "GPT-5.6 Luna (OpenAI)" },
   ];
 
   // Determine which model to use based on routing mode

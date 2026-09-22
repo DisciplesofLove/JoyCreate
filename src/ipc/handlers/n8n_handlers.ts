@@ -1053,7 +1053,7 @@ function parseWorkflowPrompt(prompt: string, requiredTrigger?: string): Workflow
   }
   
   if (promptLower.includes("openai") || promptLower.includes("gpt") || promptLower.includes("ai")) {
-    steps.push({ type: "n8n-nodes-base.openAi", name: "OpenAI", config: { operation: "message", model: "gpt-5-mini" } });
+    steps.push({ type: "n8n-nodes-base.openAi", name: "OpenAI", config: { operation: "message", model: "gpt-5.6-luna" } });
   }
   
   if (promptLower.includes("slack")) {

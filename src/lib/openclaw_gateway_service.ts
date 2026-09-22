@@ -11,6 +11,7 @@ import * as fs from "fs-extra";
 import * as nodeFs from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import log from "electron-log";
+import { rejectsSamplingParams } from "@/ipc/utils/claude_sampling";
 import WebSocket, { WebSocketServer } from "ws";
 import http from "node:http";
 import net from "node:net";
@@ -1352,7 +1353,11 @@ export class OpenClawGatewayService extends EventEmitter {
           role: m.role === "assistant" ? "assistant" : "user",
           content: m.content,
         })),
-        temperature: request.temperature ?? provider.temperature ?? 0.7,
+        // Claude Opus 4.7+ and the Claude 5 generation return a 400 for any
+        // temperature, so it is omitted for them.
+        ...(rejectsSamplingParams(request.model || provider.model)
+          ? {}
+          : { temperature: request.temperature ?? provider.temperature ?? 0.7 }),
       }),
     });
     

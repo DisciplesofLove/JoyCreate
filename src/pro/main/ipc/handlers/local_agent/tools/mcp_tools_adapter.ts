@@ -84,8 +84,27 @@ class CapturingServer {
 
 /**
  * Heuristic: tools that look like they mutate state require explicit consent.
+ *
+ * Matched against whole `_`-separated segments, anywhere in the name. This used
+ * to accept only `verb_…` and `…_verb_…`, which misses the most common naming
+ * in these files — noun first, verb last. So `app_deploy`, `app_write_file`,
+ * `agent_hire`, `agent_refund`, `skill_publish` and `plugin_install` ran with
+ * no consent prompt at all, while `create_document` asked. 6 of 97 tools were
+ * flagged.
  */
 const DESTRUCTIVE_PREFIXES = [
+  // Missed state- and money-changing verbs used by the current tool names.
+  "write",
+  "stop",
+  "toggle",
+  "sell",
+  "hire",
+  "invoke",
+  "refund",
+  "set",
+  "import",
+  "download",
+  "finetune",
   "create",
   "delete",
   "update",
@@ -108,10 +127,9 @@ const DESTRUCTIVE_PREFIXES = [
   "send",
 ];
 
-function isDestructive(shortName: string): boolean {
-  return DESTRUCTIVE_PREFIXES.some(
-    (p) => shortName.startsWith(`${p}_`) || shortName.includes(`_${p}_`),
-  );
+export function isDestructive(shortName: string): boolean {
+  const segments = shortName.split("_");
+  return DESTRUCTIVE_PREFIXES.some((verb) => segments.includes(verb));
 }
 
 /**

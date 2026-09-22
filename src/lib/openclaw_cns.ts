@@ -554,7 +554,7 @@ export class OpenClawCNS extends EventEmitter {
     
     // Check if local is available
     if (!ollamaBridge.isOllamaAvailable()) {
-      return { useLocal: false, model: "claude-sonnet-4-5", provider: "cloud" };
+      return { useLocal: false, model: "claude-sonnet-5", provider: "cloud" };
     }
     
     // Check channel routing
@@ -564,7 +564,7 @@ export class OpenClawCNS extends EventEmitter {
         return { useLocal: true, model: this.getLocalModel(request), provider: "ollama" };
       }
       if (channelRoute === "cloud") {
-        return { useLocal: false, model: "claude-sonnet-4-5", provider: "cloud" };
+        return { useLocal: false, model: "claude-sonnet-5", provider: "cloud" };
       }
     }
     
@@ -574,7 +574,7 @@ export class OpenClawCNS extends EventEmitter {
         useLocal: request.options.preferLocal,
         model: request.options.preferLocal
           ? this.getLocalModel(request)
-          : "claude-sonnet-4-5",
+          : "claude-sonnet-5",
         provider: request.options.preferLocal ? "ollama" : "cloud",
       };
     }

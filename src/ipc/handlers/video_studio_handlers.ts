@@ -448,7 +448,7 @@ async function generateWithStabilityAI(params: GenerateVideoParams): Promise<{ f
 
 async function generateWithGoogleVeo(params: GenerateVideoParams): Promise<{ filePath: string; thumbnailPath: string | null }> {
   const apiKey = await getApiKey("google");
-  const model = params.model || "veo-3.0-generate-001";
+  const model = params.model || "veo-3.1-generate-preview";
 
   const instance: Record<string, unknown> = {
     prompt: params.prompt,
@@ -729,10 +729,8 @@ function getProviderCatalog(): Record<string, ProviderCatalogEntry> {
       website: "https://aistudio.google.com/app/apikey",
       apiKeyEnvVars: ["GOOGLE_AI_API_KEY", "GEMINI_API_KEY"],
       models: [
-        { id: "veo-3.0-generate-001", label: "Veo 3", supportsImg2Video: true, minDurationSeconds: 4, maxDurationSeconds: 8, defaultFps: 24 },
-        { id: "veo-3.0-fast-generate-001", label: "Veo 3 Fast", supportsImg2Video: true, minDurationSeconds: 4, maxDurationSeconds: 8, defaultFps: 24 },
-        { id: "veo-2.0-generate-001", label: "Veo 2", supportsImg2Video: true, minDurationSeconds: 4, maxDurationSeconds: 8, defaultFps: 24 },
-        { id: "veo-002", label: "Veo 2 (legacy alias)", supportsImg2Video: true, minDurationSeconds: 4, maxDurationSeconds: 8, defaultFps: 24 },
+        { id: "veo-3.1-generate-preview", label: "Veo 3.1", supportsImg2Video: true, minDurationSeconds: 4, maxDurationSeconds: 8, defaultFps: 24 },
+        { id: "veo-3.1-lite-generate-preview", label: "Veo 3.1 Lite", supportsImg2Video: true, minDurationSeconds: 4, maxDurationSeconds: 8, defaultFps: 24 },
       ],
     },
     openai: {

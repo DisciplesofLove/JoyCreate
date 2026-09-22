@@ -30,6 +30,7 @@ import {
 import { createFallback } from "./fallback_ai_model";
 import { createGeniusCoreLanguageModel } from "./genius_core_provider";
 import { createSubscriptionCliLanguageModel } from "./subscription_cli_provider";
+import { withoutRejectedSamplingParams } from "./claude_sampling";
 import { isSubscriptionCliProvider } from "../../lib/subscription_cli/cli_registry";
 
 const joyEngineUrl = process.env.JOY_ENGINE_URL;
@@ -37,19 +38,21 @@ const joyEngineUrl = process.env.JOY_ENGINE_URL;
 const AUTO_MODELS = [
   {
     provider: "google",
-    name: "gemini-2.5-flash",
+    name: "gemini-3.8-flash",
   },
   {
+    // qwen/qwen3-coder:free no longer exists on OpenRouter, so auto mode
+    // failed for anyone whose only key was OpenRouter.
     provider: "openrouter",
-    name: "qwen/qwen3-coder:free",
+    name: "qwen/qwen3-coder-next",
   },
   {
     provider: "anthropic",
-    name: "claude-sonnet-4-5",
+    name: "claude-sonnet-5",
   },
   {
     provider: "openai",
-    name: "gpt-4.1",
+    name: "gpt-5.6-sol",
   },
 ];
 
@@ -117,7 +120,12 @@ export async function getModelClient(
       // Do not use free variant (for openrouter).
       const modelName = model.name.split(":free")[0];
       const autoModelClient = {
-        model: provider(`${providerConfig.gatewayPrefix || ""}${modelName}`),
+        // The engine forwards sampling parameters to the upstream provider, so
+        // current Claude models need them stripped here too.
+        model: withoutRejectedSamplingParams(
+          provider(`${providerConfig.gatewayPrefix || ""}${modelName}`),
+          modelName,
+        ),
         builtinProviderId: model.provider,
       };
 
@@ -238,7 +246,8 @@ async function getRegularModelClient(
       const provider = createAnthropic({ apiKey });
       return {
         modelClient: {
-          model: provider(model.name),
+          // Opus 4.7+ and the Claude 5 generation 400 on any temperature/top_p/top_k.
+          model: withoutRejectedSamplingParams(provider(model.name), model.name),
           builtinProviderId: providerId,
         },
         backupModelClients: [],
@@ -307,7 +316,8 @@ async function getRegularModelClient(
       const provider = createOpenRouter({ apiKey });
       return {
         modelClient: {
-          model: provider(model.name),
+          // OpenRouter passes sampling parameters through to Anthropic.
+          model: withoutRejectedSamplingParams(provider(model.name), model.name),
           builtinProviderId: providerId,
         },
         backupModelClients: [],
@@ -425,7 +435,7 @@ async function getRegularModelClient(
       });
       return {
         modelClient: {
-          model: provider(model.name),
+          model: withoutRejectedSamplingParams(provider(model.name), model.name),
           builtinProviderId: providerId,
         },
         backupModelClients: [],

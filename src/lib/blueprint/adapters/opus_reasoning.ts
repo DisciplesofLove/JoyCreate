@@ -40,7 +40,7 @@ export async function runOpusReasoning(
   ).selectedChatModel;
   const model: LargeLanguageModel = {
     provider: (selectedRaw?.provider ?? "auto") as LargeLanguageModel["provider"],
-    name: p.modelId ?? selectedRaw?.name ?? "claude-sonnet-4-5",
+    name: p.modelId ?? selectedRaw?.name ?? "claude-sonnet-5",
   };
 
   const { modelClient } = await getModelClient(model, settings);

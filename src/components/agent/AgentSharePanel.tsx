@@ -294,7 +294,7 @@ export default function AgentSharePanel({
                     onChange={(e) =>
                       setBc((p) => ({ ...p, modelId: e.target.value }))
                     }
-                    placeholder="gpt-5-mini"
+                    placeholder="gpt-5.6-luna"
                   />
                 </div>
                 <div className="space-y-1.5">

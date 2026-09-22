@@ -21,286 +21,221 @@ export interface ModelOption {
 
 export const MODEL_OPTIONS: Record<string, ModelOption[]> = {
   openai: [
-    // https://platform.openai.com/docs/models/gpt-5.1
+    // Verified 2026-09-15 against OpenAI's models page and OpenRouter's live
+    // list. GPT-5.x Codex models were shut down on 2026-07-23.
     {
-      name: "gpt-5.2",
-      displayName: "GPT 5.2",
-      description: "OpenAI's latest model",
-      // Technically it's 128k but OpenAI errors if you set max_tokens instead of max_completion_tokens
+      name: "gpt-5.6-sol",
+      displayName: "GPT-5.6 Sol",
+      description: "OpenAI's flagship for complex professional and coding work",
       maxOutputTokens: undefined,
-      contextWindow: 400_000,
-      // Requires temperature to be default value (1)
+      contextWindow: 1_050_000,
+      // GPT-5 reasoning models require the default temperature (1).
       temperature: 1,
       dollarSigns: 3,
-    },
-    // https://platform.openai.com/docs/models/gpt-5.1
-    {
-      name: "gpt-5.1",
-      displayName: "GPT 5.1",
-      description:
-        "OpenAI's flagship model- smarter, faster, and more conversational",
-      // Technically it's 128k but OpenAI errors if you set max_tokens instead of max_completion_tokens
-      maxOutputTokens: undefined,
-      contextWindow: 400_000,
-      // Requires temperature to be default value (1)
-      temperature: 1,
-      dollarSigns: 3,
-    },
-    // https://platform.openai.com/docs/models/gpt-5.1-codex
-    {
-      name: "gpt-5.1-codex",
-      displayName: "GPT 5.1 Codex",
-      description: "OpenAI's advanced coding workflows",
-      // Technically it's 128k but OpenAI errors if you set max_tokens instead of max_completion_tokens
-      maxOutputTokens: undefined,
-      contextWindow: 400_000,
-      // Requires temperature to be default value (1)
-      temperature: 1,
-      dollarSigns: 3,
-    },
-    // https://platform.openai.com/docs/models/gpt-5.1-codex-mini
-    {
-      name: "gpt-5.1-codex-mini",
-      displayName: "GPT 5.1 Codex Mini",
-      description: "OpenAI's compact and efficient coding model",
-      // Technically it's 128k but OpenAI errors if you set max_tokens instead of max_completion_tokens
-      maxOutputTokens: undefined,
-      contextWindow: 400_000,
-      // Requires temperature to be default value (1)
-      temperature: 1,
-      dollarSigns: 2,
-    },
-
-    // https://platform.openai.com/docs/models/gpt-5
-    {
-      name: "gpt-5",
-      displayName: "GPT 5",
-      description: "OpenAI's flagship model",
-      // Technically it's 128k but OpenAI errors if you set max_tokens instead of max_completion_tokens
-      maxOutputTokens: undefined,
-      contextWindow: 400_000,
-      // Requires temperature to be default value (1)
-      temperature: 1,
-      dollarSigns: 3,
-    },
-    // https://platform.openai.com/docs/models/gpt-5-codex
-    {
-      name: "gpt-5-codex",
-      displayName: "GPT 5 Codex",
-      description: "OpenAI's flagship model optimized for coding",
-      // Technically it's 128k but OpenAI errors if you set max_tokens instead of max_completion_tokens
-      maxOutputTokens: undefined,
-      contextWindow: 400_000,
-      // Requires temperature to be default value (1)
-      temperature: 1,
-      dollarSigns: 3,
-    },
-    // https://platform.openai.com/docs/models/gpt-5-mini
-    {
-      name: "gpt-5-mini",
-      displayName: "GPT 5 Mini",
-      description: "OpenAI's lightweight, but intelligent model",
-      // Technically it's 128k but OpenAI errors if you set max_tokens instead of max_completion_tokens
-      maxOutputTokens: undefined,
-      contextWindow: 400_000,
-      // Requires temperature to be default value (1)
-      temperature: 1,
-      dollarSigns: 2,
-    },
-  ],
-  // https://docs.anthropic.com/en/docs/about-claude/models/all-models#model-comparison-table
-  anthropic: [
-    {
-      name: "claude-opus-4-7",
-      displayName: "Claude Opus 4.7",
-      description:
-        "Anthropic's most capable model — best for complex coding & reasoning (very expensive!)",
-      maxOutputTokens: 32_000,
-      contextWindow: 200_000,
-      temperature: 0,
-      dollarSigns: 5,
       tag: "Latest",
       tagColor: "green",
     },
     {
-      name: "claude-sonnet-4-6",
-      displayName: "Claude Sonnet 4.6",
-      description:
-        "Anthropic's latest Sonnet — fast, smart default for most coding tasks",
+      name: "gpt-6-astra",
+      displayName: "GPT-6 Astra",
+      description: "OpenAI's most capable model, for the hardest end-to-end work",
+      maxOutputTokens: undefined,
+      contextWindow: 1_050_000,
+      temperature: 1,
+      dollarSigns: 4,
+    },
+    {
+      name: "gpt-5.6-terra",
+      displayName: "GPT-5.6 Terra",
+      description: "Balances intelligence and cost",
+      maxOutputTokens: undefined,
+      contextWindow: 1_050_000,
+      temperature: 1,
+      dollarSigns: 2,
+    },
+    {
+      name: "gpt-5.6-luna",
+      displayName: "GPT-5.6 Luna",
+      description: "Fast and low cost, for high-volume work",
+      maxOutputTokens: undefined,
+      contextWindow: 1_050_000,
+      temperature: 1,
+      dollarSigns: 1,
+    },
+  ],
+  anthropic: [
+    // Verified 2026-09-15 against Anthropic's models page. These models reject
+    // non-default temperature/top_p/top_k with a 400; getModelClient strips
+    // those parameters for them, so no temperature is set here.
+    {
+      name: "claude-opus-5",
+      displayName: "Claude Opus 5",
+      description: "Anthropic's recommended default for complex agentic coding and most work",
       maxOutputTokens: 32_000,
       contextWindow: 1_000_000,
-      temperature: 0,
       dollarSigns: 4,
       tag: "Latest",
       tagColor: "green",
     },
     {
-      name: "claude-opus-4-6",
-      displayName: "Claude Opus 4.6",
-      description:
-        "Previous flagship Opus (very expensive!)",
-      maxOutputTokens: 32_000,
-      contextWindow: 200_000,
-      temperature: 0,
-      dollarSigns: 5,
-    },
-    {
-      name: "claude-opus-4-5",
-      displayName: "Claude Opus 4.5",
-      description:
-        "Anthropic's previous flagship model for coding (note: this model is very expensive!)",
-      maxOutputTokens: 32_000,
-      contextWindow: 200_000,
-      temperature: 0,
-      dollarSigns: 5,
-    },
-    {
-      name: "claude-sonnet-4-5-20250929",
-      displayName: "Claude Sonnet 4.5",
-      description:
-        "Previous Sonnet (note: >200k tokens is very expensive!)",
+      name: "claude-fable-5-1",
+      displayName: "Claude Fable 5.1",
+      description: "Anthropic's most capable model, for demanding reasoning and long-horizon agentic work",
       maxOutputTokens: 32_000,
       contextWindow: 1_000_000,
-      temperature: 0,
       dollarSigns: 5,
     },
     {
-      name: "claude-sonnet-4-5",
-      displayName: "Claude Sonnet 4",
-      description: "Excellent coder (note: >200k tokens is very expensive!)",
+      name: "claude-sonnet-5",
+      displayName: "Claude Sonnet 5",
+      description: "The best combination of speed and intelligence",
       maxOutputTokens: 32_000,
       contextWindow: 1_000_000,
-      temperature: 0,
-      dollarSigns: 5,
+      dollarSigns: 3,
+    },
+    {
+      name: "claude-haiku-4-5",
+      displayName: "Claude Haiku 4.5",
+      description: "Anthropic's fastest model, with near-frontier intelligence",
+      maxOutputTokens: 32_000,
+      contextWindow: 200_000,
+      dollarSigns: 1,
     },
   ],
   google: [
-    // https://ai.google.dev/gemini-api/docs/models#gemini-3-pro
+    // Verified 2026-09-15 against Google's Gemini models and pricing pages.
+    // gemini-3-pro-preview is shut down.
     {
-      name: "gemini-3-pro-preview",
-      displayName: "Gemini 3 Pro (Preview)",
-      description: "Google's latest Gemini model",
-      // See Flash 2.5 comment below (go 1 below just to be safe, even though it seems OK now).
+      name: "gemini-3.8-flash",
+      displayName: "Gemini 3.8 Flash",
+      description: "Google's most intelligent Flash model, built for coding and agents",
       maxOutputTokens: 65_536 - 1,
-      // Gemini context window = input token + output token
       contextWindow: 1_048_576,
-      // Recommended by Google: https://ai.google.dev/gemini-api/docs/gemini-3?thinking=high#temperature
-      temperature: 1.0,
-      dollarSigns: 4,
-    },
-    // https://ai.google.dev/gemini-api/docs/models#gemini-3-pro
-    {
-      name: "gemini-3-flash-preview",
-      displayName: "Gemini 3 Flash (Preview)",
-      description: "Powerful coding model at a good price",
-      // See Flash 2.5 comment below (go 1 below just to be safe, even though it seems OK now).
-      maxOutputTokens: 65_536 - 1,
-      // Gemini context window = input token + output token
-      contextWindow: 1_048_576,
-      // Recommended by Google: https://ai.google.dev/gemini-api/docs/gemini-3?thinking=high#temperature
       temperature: 1.0,
       dollarSigns: 2,
+      tag: "Latest",
+      tagColor: "green",
     },
-    // https://ai.google.dev/gemini-api/docs/models#gemini-2.5-pro-preview-03-25
+    {
+      name: "gemini-3.1-pro-preview",
+      displayName: "Gemini 3.1 Pro (Preview)",
+      description: "Google's advanced reasoning and agentic model",
+      maxOutputTokens: 65_536 - 1,
+      contextWindow: 1_048_576,
+      temperature: 1.0,
+      dollarSigns: 3,
+    },
+    {
+      name: "gemini-3.5-flash-lite",
+      displayName: "Gemini 3.5 Flash-Lite",
+      description: "Google's fastest, most cost-effective model",
+      maxOutputTokens: 65_536 - 1,
+      contextWindow: 1_048_576,
+      temperature: 1.0,
+      dollarSigns: 1,
+    },
     {
       name: "gemini-2.5-pro",
       displayName: "Gemini 2.5 Pro",
-      description: "Google's Gemini 2.5 Pro model",
-      // See Flash 2.5 comment below (go 1 below just to be safe, even though it seems OK now).
+      description: "Previous-generation stable Pro model",
       maxOutputTokens: 65_536 - 1,
-      // Gemini context window = input token + output token
       contextWindow: 1_048_576,
-      temperature: 0,
+      temperature: 1.0,
       dollarSigns: 3,
-    },
-    // https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview
-    {
-      name: "gemini-flash-latest",
-      displayName: "Gemini 2.5 Flash",
-      description: "Google's Gemini 2.5 Flash model (free tier available)",
-      // Weirdly for Vertex AI, the output token limit is *exclusive* of the stated limit.
-      maxOutputTokens: 65_536 - 1,
-      // Gemini context window = input token + output token
-      contextWindow: 1_048_576,
-      temperature: 0,
-      dollarSigns: 2,
     },
   ],
   vertex: [
-    // Vertex Gemini 2.5 Pro
+    {
+      name: "gemini-3.8-flash",
+      displayName: "Gemini 3.8 Flash",
+      description: "Google's most intelligent Flash model, via Vertex AI",
+      maxOutputTokens: 65_536 - 1,
+      contextWindow: 1_048_576,
+      temperature: 1.0,
+    },
+    {
+      name: "gemini-3.1-pro-preview",
+      displayName: "Gemini 3.1 Pro (Preview)",
+      description: "Google's advanced reasoning model, via Vertex AI",
+      maxOutputTokens: 65_536 - 1,
+      contextWindow: 1_048_576,
+      temperature: 1.0,
+    },
     {
       name: "gemini-2.5-pro",
       displayName: "Gemini 2.5 Pro",
-      description: "Vertex Gemini 2.5 Pro",
+      description: "Previous-generation stable Pro model, via Vertex AI",
       maxOutputTokens: 65_536 - 1,
       contextWindow: 1_048_576,
-      temperature: 0,
-    },
-    // Vertex Gemini 2.5 Flash
-    {
-      name: "gemini-flash-latest",
-      displayName: "Gemini 2.5 Flash",
-      description: "Vertex Gemini 2.5 Flash",
-      maxOutputTokens: 65_536 - 1,
-      contextWindow: 1_048_576,
-      temperature: 0,
+      temperature: 1.0,
     },
   ],
   openrouter: [
+    // Verified 2026-09-15 against OpenRouter's live model list. The previous
+    // free models (qwen/qwen3-coder:free, mistralai/devstral-2512:free) no
+    // longer exist, which broke the "Free (OpenRouter)" option.
     {
-      name: "qwen/qwen3-coder:free",
-      displayName: "Qwen3 Coder (free)",
-      description: "Use for free (data may be used for training)",
+      name: "thinkingmachines/inkling:free",
+      displayName: "Inkling (free)",
+      description: "Free, tool-capable model with a 1M-token context",
       maxOutputTokens: 32_000,
-      contextWindow: 262_000,
+      contextWindow: 1_048_576,
       temperature: 0,
       dollarSigns: 0,
     },
     {
-      name: "mistralai/devstral-2512:free",
-      displayName: "Devstral 2 (free)",
-      description: "Use for free (data may be used for training)",
+      name: "nvidia/nemotron-3.5-lightning:free",
+      displayName: "Nemotron 3.5 Lightning (free)",
+      description: "Free, fast, tool-capable model with a 1M-token context",
       maxOutputTokens: 32_000,
-      contextWindow: 200_000,
+      contextWindow: 1_000_000,
       temperature: 0,
       dollarSigns: 0,
     },
     {
-      name: "z-ai/glm-4.7",
-      displayName: "GLM 4.7",
-      description: "Z-AI's best coding model",
+      name: "qwen/qwen3-coder-next",
+      displayName: "Qwen3 Coder Next",
+      description: "Qwen's latest coding model",
       maxOutputTokens: 32_000,
-      contextWindow: 200_000,
-      temperature: 0.7,
-      dollarSigns: 2,
+      contextWindow: 262_144,
+      temperature: 0,
+      dollarSigns: 1,
     },
     {
-      name: "qwen/qwen3-coder",
-      displayName: "Qwen3 Coder",
-      description: "Qwen's best coding model",
+      name: "deepseek/deepseek-v4-pro",
+      displayName: "DeepSeek V4 Pro",
+      description: "DeepSeek's strongest model",
       maxOutputTokens: 32_000,
-      contextWindow: 262_000,
+      contextWindow: 1_048_576,
       temperature: 0,
       dollarSigns: 2,
     },
     {
-      name: "deepseek/deepseek-chat-v3.1",
-      displayName: "DeepSeek v3.1",
-      description: "Strong cost-effective model with optional thinking",
+      name: "deepseek/deepseek-v4.1-flash",
+      displayName: "DeepSeek V4.1 Flash",
+      description: "DeepSeek's newest fast, low-cost model",
       maxOutputTokens: 32_000,
-      contextWindow: 128_000,
+      contextWindow: 1_048_576,
+      temperature: 0,
+      dollarSigns: 1,
+    },
+    {
+      name: "z-ai/glm-5.3",
+      displayName: "GLM 5.3",
+      description: "Z.ai's latest flagship",
+      maxOutputTokens: 32_000,
+      contextWindow: 1_310_720,
       temperature: 0,
       dollarSigns: 2,
     },
-    // https://openrouter.ai/moonshotai/kimi-k2
     {
-      name: "moonshotai/kimi-k2-0905",
-      displayName: "Kimi K2",
-      description: "Powerful cost-effective model (updated to 0905)",
+      name: "moonshotai/kimi-k3",
+      displayName: "Kimi K3",
+      description: "Moonshot AI's latest flagship",
       maxOutputTokens: 32_000,
-      contextWindow: 256_000,
+      contextWindow: 1_048_576,
       temperature: 0,
-      dollarSigns: 2,
+      dollarSigns: 3,
     },
   ],
   auto: [
@@ -348,157 +283,107 @@ export const MODEL_OPTIONS: Record<string, ModelOption[]> = {
     },
   ],
   azure: [
+    // Azure deployment names must match these; availability per region varies.
+    {
+      name: "gpt-5.6-sol",
+      displayName: "GPT-5.6 Sol",
+      description: "OpenAI's flagship, via Azure OpenAI",
+      contextWindow: 1_050_000,
+      temperature: 1,
+    },
+    {
+      name: "gpt-6-astra",
+      displayName: "GPT-6 Astra",
+      description: "OpenAI's most capable model, via Azure OpenAI",
+      contextWindow: 1_050_000,
+      temperature: 1,
+    },
+    {
+      name: "gpt-5.6-terra",
+      displayName: "GPT-5.6 Terra",
+      description: "Balanced cost and capability, via Azure OpenAI",
+      contextWindow: 1_050_000,
+      temperature: 1,
+    },
+    {
+      name: "gpt-5.6-luna",
+      displayName: "GPT-5.6 Luna",
+      description: "Fast and low cost, via Azure OpenAI",
+      contextWindow: 1_050_000,
+      temperature: 1,
+    },
     {
       name: "gpt-5.1",
       displayName: "GPT-5.1",
-      description: "Azure OpenAI GPT-5.1 model",
-      // See OpenAI comment above
-      // maxOutputTokens: 128_000,
+      description: "Previous generation, for existing Azure deployments",
       contextWindow: 400_000,
-      temperature: 1,
-    },
-    {
-      name: "gpt-5.1-codex",
-      displayName: "GPT-5.1 Codex",
-      description: "Azure OpenAI GPT-5.1 Codex model",
-      // See OpenAI comment above
-      // maxOutputTokens: 128_000,
-      contextWindow: 400_000,
-      temperature: 1,
-    },
-    {
-      name: "gpt-5.1-codex-mini",
-      displayName: "GPT-5.1 Codex Mini",
-      description: "Azure OpenAI GPT-5.1 Codex Mini model",
-      // See OpenAI comment above
-      // maxOutputTokens: 128_000,
-      contextWindow: 400_000,
-      temperature: 1,
-    },
-    {
-      name: "gpt-5-codex",
-      displayName: "GPT-5 Codex",
-      description: "Azure OpenAI GPT-5 Codex model",
-      // See OpenAI comment above
-      // maxOutputTokens: 128_000,
-      contextWindow: 400_000,
-      temperature: 1,
-    },
-    {
-      name: "gpt-5",
-      displayName: "GPT-5",
-      description: "Azure OpenAI GPT-5 model with reasoning capabilities",
-      // See OpenAI comment above
-      // maxOutputTokens: 128_000,
-      contextWindow: 400_000,
-      temperature: 1,
-    },
-    {
-      name: "gpt-5-mini",
-      displayName: "GPT-5 Mini",
-      description: "Azure OpenAI GPT-5 Mini model",
-      // See OpenAI comment above
-      // maxOutputTokens: 128_000,
-      contextWindow: 400_000,
-      temperature: 1,
-    },
-    {
-      name: "gpt-5-nano",
-      displayName: "GPT-5 Nano",
-      description: "Azure OpenAI GPT-5 Nano model",
-      // See OpenAI comment above
-      // maxOutputTokens: 128_000,
-      contextWindow: 400_000,
-      temperature: 1,
-    },
-    {
-      name: "gpt-5-chat",
-      displayName: "GPT-5 Chat",
-      description: "Azure OpenAI GPT-5 Chat model",
-      // See OpenAI comment above
-      // maxOutputTokens: 16_384,
-      contextWindow: 128_000,
       temperature: 1,
     },
   ],
   xai: [
-    // https://docs.x.ai/docs/models
+    // Verified 2026-09-15 against xAI's models page and OpenRouter's live list.
     {
-      name: "grok-code-fast-1",
-      displayName: "Grok Code Fast",
-      description: "Fast coding model",
+      name: "grok-4.6",
+      displayName: "Grok 4.6",
+      description: "xAI's latest flagship",
+      maxOutputTokens: 32_000,
+      contextWindow: 500_000,
+      temperature: 0,
+      dollarSigns: 3,
+      tag: "Latest",
+      tagColor: "green",
+    },
+    {
+      name: "grok-build-0.1",
+      displayName: "Grok Build",
+      description: "xAI's coding model",
       maxOutputTokens: 32_000,
       contextWindow: 256_000,
       temperature: 0,
       dollarSigns: 1,
     },
     {
-      name: "grok-4",
-      displayName: "Grok 4",
-      description: "Most capable coding model",
+      name: "grok-4.3",
+      displayName: "Grok 4.3",
+      description: "Lower cost, with a 1M-token context",
       maxOutputTokens: 32_000,
-      contextWindow: 256_000,
+      contextWindow: 1_000_000,
       temperature: 0,
-      dollarSigns: 4,
-    },
-    {
-      name: "grok-3",
-      displayName: "Grok 3",
-      description: "Powerful coding model",
-      maxOutputTokens: 32_000,
-      contextWindow: 131_072,
-      temperature: 0,
-      dollarSigns: 4,
+      dollarSigns: 1,
     },
   ],
   bedrock: [
+    // Bedrock IDs for the Claude 5 generation are the Messages-API IDs from
+    // Anthropic's models page. Not verified against a live Bedrock account.
+    {
+      name: "anthropic.claude-opus-5",
+      displayName: "Claude Opus 5",
+      description: "Anthropic's recommended default for complex agentic coding",
+      maxOutputTokens: 32_000,
+      contextWindow: 1_000_000,
+      tag: "Latest",
+      tagColor: "green",
+    },
+    {
+      name: "anthropic.claude-sonnet-5",
+      displayName: "Claude Sonnet 5",
+      description: "Speed and intelligence for most coding tasks",
+      maxOutputTokens: 32_000,
+      contextWindow: 1_000_000,
+    },
+    {
+      name: "anthropic.claude-fable-5-1",
+      displayName: "Claude Fable 5.1",
+      description: "Anthropic's most capable model (expensive)",
+      maxOutputTokens: 32_000,
+      contextWindow: 1_000_000,
+    },
     {
       name: "us.anthropic.claude-opus-4-7-v1:0",
-      displayName: "Claude Opus 4.7",
-      description:
-        "Anthropic's most capable model — best for complex coding & reasoning (very expensive!)",
-      maxOutputTokens: 32_000,
-      contextWindow: 200_000,
-      temperature: 0,
-      tag: "Latest",
-      tagColor: "green",
-    },
-    {
-      name: "us.anthropic.claude-sonnet-4-6-v1:0",
-      displayName: "Claude Sonnet 4.6",
-      description:
-        "Anthropic's latest Sonnet — fast, smart default for most coding tasks",
+      displayName: "Claude Opus 4.7 (legacy)",
+      description: "Previous-generation Opus",
       maxOutputTokens: 32_000,
       contextWindow: 1_000_000,
-      temperature: 0,
-      tag: "Latest",
-      tagColor: "green",
-    },
-    {
-      name: "us.anthropic.claude-opus-4-6-v1:0",
-      displayName: "Claude Opus 4.6",
-      description:
-        "Previous flagship Opus (very expensive!)",
-      maxOutputTokens: 32_000,
-      contextWindow: 200_000,
-      temperature: 0,
-    },
-    {
-      name: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-      displayName: "Claude 4.5 Sonnet",
-      description:
-        "Anthropic's best model for coding (note: >200k tokens is very expensive!)",
-      maxOutputTokens: 32_000,
-      contextWindow: 1_000_000,
-      temperature: 0,
-    },
-    {
-      name: "us.anthropic.claude-sonnet-4-5-v1:0",
-      displayName: "Claude 4 Sonnet",
-      description: "Excellent coder (note: >200k tokens is very expensive!)",
-      maxOutputTokens: 32_000,
-      contextWindow: 1_000_000,
-      temperature: 0,
     },
   ],
 };

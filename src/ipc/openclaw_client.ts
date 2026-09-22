@@ -467,7 +467,7 @@ class OpenClawClientImpl {
       name: "anthropic",
       config: {
         apiKey,
-        model: config?.model || "claude-sonnet-4-5",
+        model: config?.model || "claude-sonnet-5",
         enabled: true,
         priority: 2,
       },

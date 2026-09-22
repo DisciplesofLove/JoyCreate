@@ -807,7 +807,8 @@ export async function handleAgentCreateImage(
       event,
       {
         provider: request.provider ?? "openai",
-        model: "dall-e-3",
+        // dall-e-3 was shut down 2026-05-12; gpt-image-2 replaces it.
+        model: "gpt-image-2",
         prompt: request.prompt,
         width: request.width ?? 1024,
         height: request.height ?? 1024,

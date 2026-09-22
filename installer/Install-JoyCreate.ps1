@@ -22,7 +22,8 @@ param(
     [switch]$Silent,           # Skip all prompts, install JoyCreate only
     [switch]$Full,             # Skip prompts, install everything
     [switch]$NoCompanions,     # Skip prompts, JoyCreate only
-    [switch]$SkipOllamaModel   # Don't pull a starter model even if Ollama installed
+    [switch]$SkipOllamaModel,  # Don't pull a starter model even if Ollama installed
+    [switch]$UseMsi            # Install from the .msi instead of Setup.exe (IT / managed PCs)
 )
 
 $ErrorActionPreference = "Stop"
@@ -88,25 +89,73 @@ Write-Host ""
 # ---------------------------------------------------------------------------
 Write-Step "Installing JoyCreate..."
 
-$setupExe = Get-ChildItem -Path $scriptRoot -Filter "JoyCreate-*Setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $setupExe) {
-    $setupExe = Get-ChildItem -Path $scriptRoot -Filter "*Setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+$setupExe = Get-ChildItem -Path $scriptRoot -Filter "*Setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+$msiFile  = Get-ChildItem -Path $scriptRoot -Filter "*.msi"       -ErrorAction SilentlyContinue | Select-Object -First 1
+
+if ($UseMsi -and -not $msiFile) {
+    Write-Fail "-UseMsi was given but no .msi file is next to this script."
+    exit 1
 }
-if (-not $setupExe) {
-    Write-Fail "Could not find JoyCreate Setup.exe next to this script."
-    Write-Host "    Expected something like: JoyCreate-0.32.0-Setup.exe in $scriptRoot"
+if (-not $setupExe -and -not $msiFile) {
+    Write-Fail "Could not find JoyCreate Setup.exe or .msi next to this script."
+    Write-Host "    Expected something like: joycreate-0.32.0-beta.1.Setup.exe in $scriptRoot"
     exit 1
 }
 
-# Squirrel installers are silent by default; --silent suppresses the splash.
-& $setupExe.FullName --silent
-if ($LASTEXITCODE -ne 0) {
-    Write-Warn2 "Squirrel installer exit code: $LASTEXITCODE (continuing anyway)"
+# Both installers are GUI-subsystem programs. Invoking one with `&` returns
+# immediately without waiting, and leaves $LASTEXITCODE holding whatever ran
+# before it -- so the old version reported "installed" for installs that were
+# still running, or that had failed. Start-Process -Wait is the only reliable
+# way to get the real exit code.
+if ($UseMsi -or -not $setupExe) {
+    # The MSI installs for all users under Program Files. Run silently without
+    # elevation, msiexec fails with 1603/1925 and no visible prompt, so check
+    # up front and say what to do instead.
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Fail "The MSI installs for all users and needs an elevated PowerShell (right-click -> Run as administrator)."
+        if ($setupExe) { Write-Host "    Or run without -UseMsi to install just for you, no admin needed." }
+        exit 1
+    }
+    $msiLog = Join-Path $env:TEMP "JoyCreate-msi-install.log"
+    Write-Host "    Installing $($msiFile.Name) (log: $msiLog)" -ForegroundColor DarkGray
+    $proc = Start-Process -FilePath "msiexec.exe" -Wait -PassThru -ArgumentList @(
+        "/i", "`"$($msiFile.FullName)`"", "/qn", "/norestart", "/l*v", "`"$msiLog`""
+    )
+    # 3010 = success, reboot required. Anything else non-zero is a failure.
+    if ($proc.ExitCode -eq 3010) {
+        Write-Warn2 "Installed, but Windows wants a restart before JoyCreate is fully usable."
+    } elseif ($proc.ExitCode -ne 0) {
+        Write-Fail "MSI install failed with exit code $($proc.ExitCode). See $msiLog"
+        exit $proc.ExitCode
+    }
+} else {
+    Write-Host "    Running $($setupExe.Name)" -ForegroundColor DarkGray
+    $proc = Start-Process -FilePath $setupExe.FullName -ArgumentList "--silent" -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+        Write-Fail "Setup.exe failed with exit code $($proc.ExitCode)."
+        Write-Host "    Squirrel writes its log to: $env:LOCALAPPDATA\SquirrelTemp\SquirrelSetup.log"
+        exit $proc.ExitCode
+    }
 }
-Write-Ok "JoyCreate installed."
 
-$installRoot = Join-Path $env:LOCALAPPDATA "JoyCreate"
-$joyExe      = Join-Path $installRoot "JoyCreate.exe"
+# Setup.exe installs per-user under %LOCALAPPDATA%\joycreate; the MSI may land
+# elsewhere depending on how it was built. Look rather than assume, and do not
+# claim success until the executable is actually on disk.
+$candidates = @(
+    (Join-Path $env:LOCALAPPDATA "joycreate\JoyCreate.exe"),
+    (Join-Path $env:LOCALAPPDATA "JoyCreate\JoyCreate.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\JoyCreate\JoyCreate.exe"),
+    (Join-Path $env:ProgramFiles "JoyCreate\JoyCreate.exe")
+)
+$joyExe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $joyExe) {
+    Write-Fail "The installer exited cleanly, but JoyCreate.exe was not found in any expected location."
+    $candidates | ForEach-Object { Write-Host "      checked: $_" }
+    exit 1
+}
+$installRoot = Split-Path -Parent $joyExe
+Write-Ok "JoyCreate installed at $installRoot"
 
 # ---------------------------------------------------------------------------
 # 2. Optional companions

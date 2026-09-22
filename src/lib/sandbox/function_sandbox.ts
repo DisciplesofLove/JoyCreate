@@ -17,15 +17,16 @@
  *    hard timeout regardless of result.
  *
  * Limitations (intentional, not bugs):
- *  - The sandboxed code can still `require()` Node built-ins like `fs`,
- *    `child_process`, etc. A full capability-restricted sandbox needs either
- *    an external process with stripped permissions or a VM-based isolate
- *    (vm2 is unmaintained; isolated-vm requires native compilation). This
- *    module is a *process-isolation* sandbox: a crash, hang, or memory
- *    blowup in the worker cannot take down the renderer or main process,
- *    and the worker terminates after `timeoutMs`.
- *  - For stronger isolation, layer a child-process / container sandbox on
- *    top of this — the API stays the same.
+ *  - The sandboxed code is denied `require(...)` of any module not in the
+ *    `allowedModules` allow-list (empty by default), and the ambient
+ *    `require`/`process`/`module` globals are shadowed + scrubbed. The one
+ *    residual escape is dynamic `import()`, which is syntactic and cannot be
+ *    stripped from an in-process worker. For *fully* untrusted marketplace
+ *    code, layer the container-isolated path (`JcnJobExecutor` Docker mode)
+ *    on top — the API stays the same. This module is a hardened
+ *    *process-isolation* sandbox: a crash, hang, memory blowup, or blocked
+ *    `require` in the worker cannot take down the renderer or main process,
+ *    and the worker terminates after `timeoutMs` / `maxMemoryMb`.
  */
 
 import { Worker } from "node:worker_threads";
@@ -39,6 +40,17 @@ export interface SandboxRunOptions {
   timeoutMs?: number;
   /** Optional human-readable label for log lines. */
   label?: string;
+  /**
+   * Allow-list of module names the sandboxed code may `require(...)`. Anything
+   * not in this list (including `fs`, `child_process`, `net`, …) is **denied**
+   * by default — the list is empty unless you opt specific modules in.
+   */
+  allowedModules?: string[];
+  /**
+   * Hard cap on the worker's V8 old-generation heap (MiB). The worker is torn
+   * down if it exceeds this. Defaults to 128 MiB.
+   */
+  maxMemoryMb?: number;
 }
 
 export interface SandboxResult {
@@ -51,19 +63,64 @@ export interface SandboxResult {
 
 /**
  * The worker source is inlined as a string so we don't depend on the bundler
- * emitting a separate worker chunk. The worker only knows how to:
- *   1. Build an AsyncFunction from `code`
- *   2. Invoke it with `input`
- *   3. Post the JSON-serializable result back
+ * emitting a separate worker chunk. The worker:
+ *   1. Captures `parentPort` before scrubbing globals.
+ *   2. Builds a **guarded `require`** that only resolves allow-listed modules.
+ *   3. Compiles `code` as an AsyncFunction whose parameters *shadow* the
+ *      dangerous ambient identifiers (`require`, `process`, `module`, …) with
+ *      neutered values, then best-effort scrubs the real globals so the
+ *      `Function("return process")()` escape hatch is closed too.
+ *   4. Invokes it with `input` and posts the JSON-serializable result back.
+ *
+ * Defence-in-depth, not a perfect jail: dynamic `import()` is syntactic and
+ * cannot be removed from this in-process worker. For *fully* untrusted
+ * marketplace code, prefer the container-isolated path
+ * (`JcnJobExecutor` Docker mode). This worker guarantees process isolation,
+ * a require allow-list, a hard timeout, and a heap cap.
  */
 const WORKER_SOURCE = `
 const { parentPort, workerData } = require("node:worker_threads");
 
 (async () => {
+  // Capture the real require BEFORE we scrub it, then build a guarded one
+  // that only resolves explicitly allow-listed module names.
+  const realRequire = require;
+  const allowed = new Set(Array.isArray(workerData.allowedModules) ? workerData.allowedModules : []);
+  const guardedRequire = (name) => {
+    if (!allowed.has(name)) {
+      throw new Error("require('" + String(name) + "') is blocked by the sandbox policy");
+    }
+    return realRequire(name);
+  };
+
+  // Best-effort scrub of the global escape hatches. Param shadowing (below)
+  // is the primary control; this closes \`Function("return process")()\`.
+  try { Object.defineProperty(globalThis, "process", { value: undefined, configurable: true }); } catch (e) {}
+  try { delete globalThis.require; } catch (e) {}
+
   try {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    const fn = new AsyncFunction("input", workerData.code);
-    const result = await fn(workerData.input);
+    // Each ambient identifier is a parameter, so references inside the user
+    // code resolve to our neutered/guarded values instead of the real globals.
+    const fn = new AsyncFunction(
+      "input",
+      "require",
+      "process",
+      "module",
+      "__dirname",
+      "__filename",
+      "global",
+      workerData.code,
+    );
+    const result = await fn(
+      workerData.input,
+      guardedRequire,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    );
     parentPort.postMessage({ ok: true, result });
   } catch (err) {
     parentPort.postMessage({
@@ -87,6 +144,8 @@ export async function runInSandbox(
 ): Promise<SandboxResult> {
   const timeoutMs = options.timeoutMs ?? 5_000;
   const label = options.label ?? "anonymous";
+  const allowedModules = options.allowedModules ?? [];
+  const maxMemoryMb = options.maxMemoryMb ?? 128;
   const start = Date.now();
 
   return new Promise<SandboxResult>((resolve) => {
@@ -108,7 +167,10 @@ export async function runInSandbox(
     try {
       worker = new Worker(WORKER_SOURCE, {
         eval: true,
-        workerData: { code, input },
+        workerData: { code, input, allowedModules },
+        // Cap the worker's heap so a memory-bomb skill is torn down instead of
+        // exhausting the host. The thread is also killed after `timeoutMs`.
+        resourceLimits: { maxOldGenerationSizeMb: maxMemoryMb },
         // No stdin/stdout/stderr piping — keeps untrusted console.log noise
         // out of the main log file unless we explicitly opt in later.
       });

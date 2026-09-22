@@ -1,0 +1,34 @@
+[
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "StoreRegistered",
+    "inputs": [
+      { "indexed": true, "name": "storeId", "type": "uint256" },
+      { "indexed": true, "name": "owner", "type": "address" },
+      { "indexed": true, "name": "agentId", "type": "uint256" },
+      { "indexed": false, "name": "slugHash", "type": "bytes32" },
+      { "indexed": false, "name": "slug", "type": "bytes" }
+    ]
+  },
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "StoreAgentUpdated",
+    "inputs": [
+      { "indexed": true, "name": "storeId", "type": "uint256" },
+      { "indexed": true, "name": "owner", "type": "address" },
+      { "indexed": true, "name": "agentId", "type": "uint256" }
+    ]
+  },
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "StoreTransferred",
+    "inputs": [
+      { "indexed": true, "name": "storeId", "type": "uint256" },
+      { "indexed": true, "name": "from", "type": "address" },
+      { "indexed": true, "name": "to", "type": "address" }
+    ]
+  }
+]

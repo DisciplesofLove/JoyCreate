@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "822460bf-5ebb-4e8d-bbfd-e28b9ab703f2",
+  "id": "a34ad9b3-d9ff-4a8b-bd75-d1fc3c13e781",
   "prevId": "ce1c56c3-48e8-4dde-8f12-e0d2c0d16534",
   "tables": {
     "agent_collab_channels": {
@@ -1870,6 +1870,20 @@
         "dry_run_at": {
           "name": "dry_run_at",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "erc8004_agent_id": {
+          "name": "erc8004_agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "erc8004_chain": {
+          "name": "erc8004_chain",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

@@ -1,0 +1,23 @@
+[
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "FeedbackSubmitted",
+    "inputs": [
+      { "indexed": true, "name": "clientId", "type": "uint256" },
+      { "indexed": true, "name": "serverId", "type": "uint256" },
+      { "indexed": false, "name": "score", "type": "uint256" },
+      { "indexed": false, "name": "feedbackUri", "type": "bytes" }
+    ]
+  },
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "AuthFeedback",
+    "inputs": [
+      { "indexed": true, "name": "clientId", "type": "uint256" },
+      { "indexed": true, "name": "serverId", "type": "uint256" },
+      { "indexed": false, "name": "authorizedBy", "type": "address" }
+    ]
+  }
+]

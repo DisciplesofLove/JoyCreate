@@ -1,0 +1,79 @@
+type Agent @entity {
+  "ERC-8004 agentId (decimal string)"
+  id: ID!
+  agentAddress: Bytes!
+  domainHash: Bytes!
+  agentDomain: String!
+  store: Store
+  reputationScore: BigInt!
+  feedbackCount: Int!
+  createdAt: BigInt!
+  updatedAt: BigInt!
+}
+
+type Store @entity {
+  "StoreRegistry storeId (decimal string)"
+  id: ID!
+  owner: Bytes!
+  agentId: BigInt!
+  agent: Agent
+  slugHash: Bytes!
+  slug: String!
+  drops: [Drop!]! @derivedFrom(field: "store")
+  createdAt: BigInt!
+  updatedAt: BigInt!
+}
+
+type Drop @entity {
+  "EditionController dropId (decimal string)"
+  id: ID!
+  creator: Bytes!
+  store: Store!
+  assetLeaf: Bytes!
+  price: BigInt!
+  maxSupply: BigInt!
+  minted: BigInt!
+  active: Boolean!
+  requiresProof: Boolean!
+  mints: [Mint!]! @derivedFrom(field: "drop")
+  createdAt: BigInt!
+  updatedAt: BigInt!
+}
+
+type Mint @entity(immutable: true) {
+  "txHash-logIndex"
+  id: ID!
+  drop: Drop!
+  tokenId: BigInt!
+  to: Bytes!
+  price: BigInt!
+  txHash: Bytes!
+  blockNumber: BigInt!
+  timestamp: BigInt!
+}
+
+type Feedback @entity(immutable: true) {
+  "txHash-logIndex"
+  id: ID!
+  clientId: BigInt!
+  serverId: BigInt!
+  agent: Agent
+  score: BigInt!
+  feedbackUri: String!
+  txHash: Bytes!
+  timestamp: BigInt!
+}
+
+type Mandate @entity {
+  "AgentMandate mandateId (decimal string)"
+  id: ID!
+  principal: Bytes!
+  agent: Bytes!
+  spendLimit: BigInt!
+  totalSpent: BigInt!
+  expiry: BigInt!
+  actionScope: Bytes!
+  active: Boolean!
+  createdAt: BigInt!
+  updatedAt: BigInt!
+}

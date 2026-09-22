@@ -71,6 +71,32 @@ export const MODEL_OPTIONS: Record<string, ModelOption[]> = {
       name: "claude-opus-5",
       displayName: "Claude Opus 5",
       description: "Anthropic's recommended default for complex agentic coding and most work",
+      name: "claude-opus-4-8",
+      displayName: "Claude Opus 4.8",
+      description:
+        "Anthropic's most capable model — best for complex coding & reasoning (very expensive!)",
+      maxOutputTokens: 32_000,
+      contextWindow: 200_000,
+      temperature: 0,
+      dollarSigns: 5,
+      tag: "Latest",
+      tagColor: "green",
+    },
+    {
+      name: "claude-opus-4-7",
+      displayName: "Claude Opus 4.7",
+      description:
+        "Previous flagship Opus — complex coding & reasoning (very expensive!)",
+      maxOutputTokens: 32_000,
+      contextWindow: 200_000,
+      temperature: 0,
+      dollarSigns: 5,
+    },
+    {
+      name: "claude-sonnet-4-6",
+      displayName: "Claude Sonnet 4.6",
+      description:
+        "Anthropic's latest Sonnet — fast, smart default for most coding tasks",
       maxOutputTokens: 32_000,
       contextWindow: 1_000_000,
       dollarSigns: 4,

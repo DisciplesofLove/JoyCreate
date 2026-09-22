@@ -122,7 +122,7 @@ function TrainTab() {
   const [loraRank, setLoraRank] = useState(8);
   const [loraAlpha, setLoraAlpha] = useState(16);
   const [openAiKey, setOpenAiKey] = useState("");
-  const [openAiModel, setOpenAiModel] = useState("gpt-5-mini");
+  const [openAiModel, setOpenAiModel] = useState("gpt-5.6-luna");
 
   // Queries
   const { data: datasets = [] } = useQuery<StudioDataset[]>({

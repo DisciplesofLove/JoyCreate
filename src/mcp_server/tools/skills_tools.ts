@@ -1,123 +1,109 @@
 /**
- * MCP Tools — Skills / Plugins / Prompts
- * Create, manage, and publish skills, prompts, and plugins via JoyCreate.
+ * MCP Tools — skills and plugins.
+ *
+ * Routed through the registered `skill:*` and `plugin:*` IPC channels.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { invokeHandler, runTool, toolError } from "./invoke_handler";
 
 export function registerSkillsTools(server: McpServer) {
   server.registerTool(
     "joycreate_skill_create",
     {
-      description: "Create a new reusable AI skill or prompt template in JoyCreate. Skills can be packaged and sold on Joy Marketplace.",
+      description:
+        "Create a reusable JoyCreate skill. `category` and `implementationType` are " +
+        "NOT NULL in the skills table, so both are required rather than defaulted " +
+        "silently to something the caller did not choose.",
       inputSchema: {
         name: z.string().describe("Skill name"),
-        description: z.string().describe("What this skill does"),
-        type: z.enum(["prompt", "chain", "tool", "plugin", "workflow"]).describe("Skill type"),
-        content: z.string().describe("The skill content — prompt template, code, or config"),
-        variables: z.array(z.object({
-          name: z.string(),
-          description: z.string(),
-          type: z.enum(["string", "number", "boolean", "array"]).optional(),
-          default: z.string().optional(),
-        })).optional().describe("Input variables for parameterized skills"),
-        tags: z.array(z.string()).optional(),
-        category: z.string().optional().describe("Category (e.g. coding, writing, research, creative)"),
+        description: z.string().describe("What the skill does"),
+        category: z
+          .enum([
+            "text_generation",
+            "code_generation",
+            "code_review",
+            "summarization",
+            "translation",
+            "question_answering",
+            "reasoning",
+            "math",
+            "vision",
+            "function_calling",
+            "web_search",
+            "file_operations",
+            "data_analysis",
+            "creative_writing",
+            "structured_output",
+          ])
+          .describe("Capability this skill provides"),
+        implementationType: z
+          .enum(["prompt", "function", "tool", "workflow"])
+          .describe("How the skill is implemented"),
+        implementationCode: z
+          .string()
+          .optional()
+          .describe("Prompt text, function body, or workflow reference"),
+        tags: z.array(z.string()).optional().describe("Free-form tags"),
       },
     },
-    async (params) => {
-      try {
-        const { createPrompt } = require("@/ipc/handlers/prompt_handlers");
-        const result = await createPrompt?.(params) ?? { error: "Skill creation not available" };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async (params) => runTool("joycreate_skill_create", () =>
+      invokeHandler("skill:create", {
+        name: params.name,
+        description: params.description,
+        category: params.category,
+        type: "custom",
+        implementationType: params.implementationType,
+        implementationCode: params.implementationCode,
+        tags: params.tags,
+      })),
   );
 
   server.registerTool(
     "joycreate_skill_list",
     {
-      description: "List skills, prompt templates, and plugins in JoyCreate.",
-      inputSchema: {
-        search: z.string().optional().describe("Search by name or description"),
-        type: z.enum(["prompt", "chain", "tool", "plugin", "workflow"]).optional(),
-        category: z.string().optional(),
-        limit: z.number().optional(),
-      },
+      description: "List skills available in this JoyCreate install.",
+      inputSchema: {},
     },
-    async (params) => {
-      try {
-        const { listPrompts } = require("@/ipc/handlers/prompt_handlers");
-        const result = await listPrompts?.(params) ?? { skills: [], count: 0 };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async () => runTool("joycreate_skill_list", () => invokeHandler("skill:list")),
   );
 
   server.registerTool(
     "joycreate_skill_publish",
     {
-      description: "Publish a skill or prompt template to Joy Marketplace as a sellable asset.",
+      description: "Publish a skill to Joy Marketplace.",
       inputSchema: {
-        skill_id: z.string().describe("Skill/prompt ID to publish"),
-        price_usd: z.number().optional().describe("Price in USD (0 for free)"),
-        license: z.string().optional().describe("License type"),
-        royalty_percent: z.number().optional(),
+        skillId: z.string().describe("Skill id (unused — see the error text)"),
       },
     },
-    async (params) => {
-      try {
-        const { publishPrompt } = require("@/ipc/handlers/prompt_handlers");
-        const result = await publishPrompt?.(params) ?? { error: "Skill publish not available" };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async () =>
+      toolError(
+        "joycreate_skill_publish is not a separate path. Export the skill with " +
+          "skill:export, then call joycreate_publish_asset with its bytes and " +
+          "assetType 'skill'.",
+      ),
   );
 
   server.registerTool(
     "joycreate_plugin_list",
     {
-      description: "List installed plugins in JoyCreate and browse the plugin registry.",
-      inputSchema: {
-        installed_only: z.boolean().optional().describe("Only show installed plugins (default false = show all)"),
-        search: z.string().optional(),
-        category: z.string().optional(),
-      },
+      description: "List installed JoyCreate plugins.",
+      inputSchema: {},
     },
-    async (params) => {
-      try {
-        const { listPlugins } = require("@/ipc/handlers/plugin_handlers");
-        const result = await listPlugins?.(params) ?? { plugins: [] };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async () => runTool("joycreate_plugin_list", () => invokeHandler("plugin:list")),
   );
 
   server.registerTool(
     "joycreate_plugin_install",
     {
-      description: "Install a plugin into JoyCreate from the registry or a URL.",
+      description:
+        "Install a plugin from the JoyCreate registry. Modifies the local install — " +
+        "invoke with user approval.",
       inputSchema: {
-        plugin_id: z.string().optional().describe("Plugin ID from registry"),
-        url: z.string().optional().describe("Direct URL to plugin package"),
+        pluginId: z.string().describe("Plugin id in the registry"),
       },
     },
-    async (params) => {
-      try {
-        const { installPlugin } = require("@/ipc/handlers/plugin_handlers");
-        const result = await installPlugin?.(params) ?? { error: "Plugin install not available" };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async (params) => runTool("joycreate_plugin_install", () =>
+      invokeHandler("plugin:install-from-registry", params)),
   );
 }

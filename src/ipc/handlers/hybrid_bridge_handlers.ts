@@ -425,20 +425,32 @@ async function pushToCloud(op: SyncOperation): Promise<void> {
     throw new Error("No cloud service available for push");
   }
 
-  // Execute push via n8n workflow or direct API
-  // TODO: Implement actual push logic
+  throw new Error(
+    `Hybrid sync is experimental: cloud push is not implemented yet (op ${op.id}). ` +
+      "Your local data was NOT synced.",
+  );
 }
 
 async function pullFromCloud(op: SyncOperation): Promise<void> {
-  // TODO: Implement pull logic
+  throw new Error(
+    `Hybrid sync is experimental: cloud pull is not implemented yet (op ${op.id}).`,
+  );
 }
 
 async function syncDelete(op: SyncOperation): Promise<void> {
-  // TODO: Implement delete sync logic
+  throw new Error(
+    `Hybrid sync is experimental: delete sync is not implemented yet (op ${op.id}). ` +
+      "The remote copy was NOT deleted.",
+  );
 }
 
 async function mergeData(op: SyncOperation): Promise<void> {
-  // TODO: Implement merge logic with conflict resolution
+  // Merging without real conflict resolution risks silent data loss —
+  // refuse instead of pretending the merge happened.
+  throw new Error(
+    `Hybrid sync is experimental: merge with conflict resolution is not implemented yet (op ${op.id}). ` +
+      "No data was merged.",
+  );
 }
 
 function startSyncInterval(): void {
@@ -503,22 +515,25 @@ async function executeBridgeRequest(request: BridgeRequest): Promise<BridgeRespo
       // Execute via n8n or cloud service
       const service = services.get(request.service);
       if (service && service.status.state === "connected") {
-        // TODO: Execute cloud request
         response.source = "cloud";
-        response.success = true;
+        throw new Error(
+          "Hybrid bridge is experimental: cloud request execution is not implemented yet.",
+        );
       } else if (useLocal || routePreference === "auto") {
         // Fallback to local
         response.source = "local";
-        response.success = true;
-        // TODO: Execute local request
+        throw new Error(
+          "Hybrid bridge is experimental: local request execution is not implemented yet.",
+        );
       } else {
         throw new Error("Cloud service not available");
       }
     } else {
       // Execute locally
       response.source = "local";
-      response.success = true;
-      // TODO: Execute local request
+      throw new Error(
+        "Hybrid bridge is experimental: local request execution is not implemented yet.",
+      );
     }
   } catch (error) {
     response.success = false;

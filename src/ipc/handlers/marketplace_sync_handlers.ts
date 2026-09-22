@@ -359,9 +359,15 @@ export function registerMarketplaceSyncHandlers() {
    */
   ipcMain.handle(
     "marketplace-sync:query-marketplace-subgraph",
-    async (_, query: string, variables?: Record<string, unknown>) => {
-      const { querySubgraph } = await import("@/config/thirdweb");
-      return querySubgraph("marketplace", query, variables);
+    async () => {
+      // The MarketplaceV3 subgraph ("marketplace") was a Polygon Amoy lane and is
+      // decommissioned; Arbitrum Sepolia indexes no `listings` entity. Fail with
+      // the reason rather than querying a dead endpoint or returning [].
+      throw new Error(
+        "marketplace-sync:query-marketplace-subgraph is unavailable: the MarketplaceV3 " +
+          "subgraph was retired with Polygon Amoy. Use the drop subgraph " +
+          "(marketplace-sync:query-drop-subgraph) for editions and claims.",
+      );
     },
   );
 
@@ -391,24 +397,14 @@ export function registerMarketplaceSyncHandlers() {
    * Get all active marketplace listings from subgraph
    */
   ipcMain.handle("marketplace-sync:get-active-listings", async () => {
-    const { querySubgraph } = await import("@/config/thirdweb");
-    return querySubgraph("marketplace", `{
-      listings(where: { status: "active" }, orderBy: createdAt, orderDirection: desc, first: 100) {
-        id
-        tokenId
-        seller
-        price
-        currency
-        status
-        createdAt
-        metadata {
-          name
-          description
-          image
-          category
-        }
-      }
-    }`);
+    // The MarketplaceV3 subgraph ("marketplace") was a Polygon Amoy lane and is
+    // decommissioned; Arbitrum Sepolia indexes no `listings` entity. Fail with
+    // the reason rather than querying a dead endpoint or returning [].
+    throw new Error(
+      "marketplace-sync:get-active-listings is unavailable: the MarketplaceV3 " +
+        "subgraph was retired with Polygon Amoy. Use the drop subgraph " +
+        "(marketplace-sync:query-drop-subgraph) for editions and claims.",
+    );
   });
 
   /**

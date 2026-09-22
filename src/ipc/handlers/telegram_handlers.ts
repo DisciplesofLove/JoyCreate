@@ -12,7 +12,9 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { getTelegramBot } from "@/lib/telegram_bot_service";
 import { getOpenClawGateway } from "@/lib/openclaw_gateway_service";
+import { assertMayStart, resolveOwner } from "@/lib/channels/channel_owner";
 import { getOpenClawAutonomous } from "@/lib/openclaw_autonomous";
+import { buildChannelTools } from "@/lib/channels/channel_agent_tools";
 import { voiceAssistant } from "@/lib/voice_assistant";
 import {
   detectPublishCommand,
@@ -29,7 +31,7 @@ import {
 import { homedir } from "node:os";
 import { readFileSync, existsSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { readSettings } from "@/main/settings";
+import { readSettings, writeSettings } from "@/main/settings";
 
 const logger = log.scope("telegram-ipc");
 
@@ -586,6 +588,9 @@ You don't just talk about doing things — you actually do them. When someone as
     await fs.unlink(wavPath).catch(() => {});
   }
 
+  // Warn once per process, not once per message, about open bot access.
+  let warnedOpenAccess = false;
+
   // ── Conversation history per chat (ring buffer, max 50 messages) ──
   const MAX_HISTORY = 50;
   const chatHistories = new Map<string, Array<{ role: "user" | "assistant"; content: string }>>();
@@ -631,12 +636,40 @@ You don't just talk about doing things — you actually do them. When someone as
 
       // Append an explicit tool-usage rule so the model knows it MUST call
       // execute_joycreate_task instead of claiming it cannot access JoyCreate.
+      // The same typed tools the local agent has — documents, apps, email,
+      // publishing, images, video, workflows, agents, the economy — called
+      // directly. execute_joycreate_task stays as the catch-all.
+      const channelTools = buildChannelTools({
+        channel: "telegram",
+        onToolStart: () => {
+          bot.sendChatAction(chatId, "typing").catch(() => {});
+        },
+        onMediaFile: async (filePath) => {
+          if (/\.(mp4|webm|mov)$/i.test(filePath)) {
+            await bot.sendVideoFile(chatId, filePath);
+          } else {
+            await bot.sendPhotoFile(chatId, filePath);
+          }
+        },
+      });
+
+      // These tools send email, publish and spend without a confirmation
+      // dialog. With no chat allowlist, anyone who finds the bot can use them.
+      if (!warnedOpenAccess && !bot.getConfig().allowedChatIds?.length) {
+        warnedOpenAccess = true;
+        logger.warn(
+          `Telegram bot has no allowedChatIds — any Telegram user can call all ${channelTools.names.length} JoyCreate tools, including ${channelTools.destructiveNames.length} that change state. Set allowedChatIds to restrict it.`,
+        );
+      }
+
       const toolRule = [
         "\n\n## TOOL USAGE — CRITICAL",
-        `You have a tool called \`execute_joycreate_task\` that gives you FULL access to JoyCreate.`,
+        `You have ${channelTools.names.length + 1} tools with FULL access to JoyCreate: ${channelTools.names.length} direct tools (documents, apps, email, publishing, images, video, workflows, agents, datasets, marketplace, wallet) and \`execute_joycreate_task\` for anything no single tool covers.`,
+        "Prefer the direct tool that matches the request: its arguments are validated, so it is more reliable. Use execute_joycreate_task for broad multi-step requests or when no direct tool fits.",
         needsAction
-          ? "The user's message requires a JoyCreate action. You MUST invoke execute_joycreate_task — do NOT respond with text alone."
-          : "When the user asks about their JoyCreate data or wants any action performed, ALWAYS call execute_joycreate_task. Never say you cannot access JoyCreate — the tool IS the connection.",
+          ? "The user's message requires a JoyCreate action. You MUST call a tool — do NOT respond with text alone."
+          : "When the user asks about their JoyCreate data or wants any action performed, call the matching tool. Never say you cannot access JoyCreate — the tools ARE the connection.",
+        "Tools that change things (create, send, publish, delete, spend) run immediately with no confirmation, so only call them when the user actually asked for that action.",
       ].join("\n");
 
       const systemWithContext =
@@ -700,9 +733,10 @@ You don't just talk about doing things — you actually do them. When someone as
       const result = await generateText({
         model: modelClient.model,
         messages,
-        tools: { execute_joycreate_task: executeJoyCreateTask },
-        // Allow up to 6 model+tool steps.
-        stopWhen: stepCountIs(6),
+        tools: { ...channelTools.tools, execute_joycreate_task: executeJoyCreateTask },
+        // A direct-tool chain ("write a doc, export it, email it") takes more
+        // steps than a single delegated task did.
+        stopWhen: stepCountIs(12),
         maxOutputTokens: 4096,
       });
 
@@ -712,10 +746,17 @@ You don't just talk about doing things — you actually do them. When someone as
       if (!text && lastToolSummary) {
         text = lastToolSummary;
       }
+      if (!text && channelTools.callCount() > 0) {
+        text = channelTools.lastSummary();
+      }
+      // Any tool call means the model acted. A direct tool is as real as the
+      // delegated task and must not trigger the "did nothing" escalations below,
+      // which would run the request a second time.
+      const actedViaTool = Boolean(lastToolSummary) || channelTools.callCount() > 0;
 
       // Escalation 1: action-type message but the model never called the tool —
       // fall straight through to the autonomous brain so the user gets real results.
-      if (needsAction && !lastToolSummary) {
+      if (needsAction && !actedViaTool) {
         logger.info(
           `Model did not call tool for action intent "${intent}" — escalating to autonomous brain: "${content.slice(0, 80)}"`,
         );
@@ -724,7 +765,7 @@ You don't just talk about doing things — you actually do them. When someone as
       }
 
       // Escalation 2: model produced a refusal instead of calling the tool.
-      if (!lastToolSummary && looksLikeToollessRefusal(text)) {
+      if (!actedViaTool && looksLikeToollessRefusal(text)) {
         logger.info(
           `Model produced a toolless refusal — escalating to autonomous brain: "${content.slice(0, 80)}"`,
         );
@@ -805,6 +846,9 @@ You don't just talk about doing things — you actually do them. When someone as
     ) => {
       // Persist the token into the openclaw config file
       if (config.token) {
+        // Store as JoyCreate's OWN independent agent token (durable — survives
+        // the daemon's config rewrites). tryAutoStartTelegramBot prefers this.
+        writeSettings({ telegramBotToken: config.token });
         const gw = getOpenClawGateway();
         const currentConfig = gw.getConfig() as unknown as Record<string, unknown>;
         const existingChannels = (currentConfig.channels || {}) as Record<string, unknown>;
@@ -867,6 +911,11 @@ You don't just talk about doing things — you actually do them. When someone as
   // Start / Stop / Status
   // -------------------------------------------------------------------------
   ipcMain.handle("telegram:start", async () => {
+    // Refuse to become a second owner of this token. Telegram allows exactly
+    // one getUpdates poller per token, and two bots answering the same message
+    // is its own bug — so the rule is uniform across channels. Throws with the
+    // reason, which the UI shows verbatim.
+    await assertMayStart("telegram", { hasLocalCredential: bot.isConfigured() });
     await bot.start();
     return bot.getStatus();
   });
@@ -877,7 +926,12 @@ You don't just talk about doing things — you actually do them. When someone as
   });
 
   ipcMain.handle("telegram:status", async () => {
-    return bot.getStatus();
+    // Ownership travels with status so the UI can explain a bot that is not
+    // running *because something else owns it*, rather than just showing 'off'.
+    const ownership = await resolveOwner("telegram", {
+      hasLocalCredential: bot.isConfigured(),
+    });
+    return { ...bot.getStatus(), ownership };
   });
 
   ipcMain.handle("telegram:config", async () => {
@@ -921,59 +975,134 @@ You don't just talk about doing things — you actually do them. When someone as
  * Returns `true` if the file was changed, `false` if it was already disabled
  * or the regex didn't match.
  */
-function disableDaemonTelegramChannel(): boolean {
-  const daemonConfigPath = join(homedir(), ".openclaw", "openclaw.json");
+
+/**
+ * Resolve every config file the OpenClaw daemon might actually load, most
+ * authoritative first. Critically, the daemon is launched by `gateway.cmd`
+ * which sets `OPENCLAW_CONFIG_PATH` (e.g. to `openclaw-ollama.json`) — a
+ * DIFFERENT file than the default `openclaw.json`. If we only edit
+ * `openclaw.json`, the daemon keeps running its (non-agentic) Telegram bot
+ * from the real config and steals the token. So we disable Telegram in all
+ * candidates.
+ */
+function resolveDaemonConfigPaths(): string[] {
+  const paths: string[] = [];
+  const add = (p: string | undefined) => {
+    if (p && !paths.includes(p)) paths.push(p);
+  };
+
+  // 1. Explicit env override (this process).
+  add(process.env.OPENCLAW_CONFIG_PATH);
+
+  // 2. The config path baked into the daemon's launcher (gateway.cmd). The
+  //    daemon runs with THIS env, not JoyCreate's, so this is the real one.
   try {
-    if (!existsSync(daemonConfigPath)) return false;
-    const raw = readFileSync(daemonConfigPath, "utf8");
-    // Match the `"telegram": { ... "enabled": true ... }` block. The
-    // `[^{}]*?` keeps us inside the immediate object body.
-    const next = raw.replace(
-      /("telegram"\s*:\s*\{[^{}]*?"enabled"\s*:\s*)true/,
-      "$1false",
-    );
-    if (next === raw) return false;
-    // The daemon marks the config read-only after each write — clear the flag
-    // first so our text-level edit can persist (see openclaw-config.md).
-    try {
-      chmodSync(daemonConfigPath, 0o666);
-    } catch {
-      // Best-effort — writeFileSync below will surface the real error.
+    const gatewayCmdPath = join(homedir(), ".openclaw", "gateway.cmd");
+    if (existsSync(gatewayCmdPath)) {
+      const cmd = readFileSync(gatewayCmdPath, "utf8");
+      const m = cmd.match(/set\s+"?OPENCLAW_CONFIG_PATH=([^"\r\n]+)"?/i);
+      if (m?.[1]) add(m[1].trim());
     }
-    writeFileSync(daemonConfigPath, next, "utf8");
-    logger.info(
-      "Disabled daemon Telegram channel in openclaw.json (text-level edit). " +
-        "Restart the daemon to release the bot token.",
-    );
-    return true;
-  } catch (err) {
-    // EBUSY/EPERM means the running daemon holds an exclusive lock. We can't
-    // persist the change, but the runtime WS-RPC eviction below still frees
-    // the token for this session — so this is non-fatal.
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
-      logger.warn(
-        `Could not persist daemon Telegram disable (${code}) — daemon holds the config lock. ` +
-          "Falling back to runtime WS-RPC eviction for this session.",
-      );
-    } else {
-      logger.warn("Failed to disable daemon Telegram channel:", err);
-    }
-    return false;
+  } catch {
+    // Best-effort — fall through to default.
   }
+
+  // 3. Default config file.
+  add(join(homedir(), ".openclaw", "openclaw.json"));
+
+  return paths;
+}
+
+function disableDaemonTelegramChannel(): boolean {
+  let anyChanged = false;
+  for (const daemonConfigPath of resolveDaemonConfigPaths()) {
+    try {
+      if (!existsSync(daemonConfigPath)) continue;
+      const raw = readFileSync(daemonConfigPath, "utf8");
+      // Match the `"telegram": { ... "enabled": true ... }` block. The
+      // `[^{}]*?` keeps us inside the immediate object body.
+      const next = raw.replace(
+        /("telegram"\s*:\s*\{[^{}]*?"enabled"\s*:\s*)true/,
+        "$1false",
+      );
+      if (next === raw) continue;
+      // The daemon marks the config read-only after each write — clear the flag
+      // first so our text-level edit can persist (see openclaw-config.md).
+      try {
+        chmodSync(daemonConfigPath, 0o666);
+      } catch {
+        // Best-effort — writeFileSync below will surface the real error.
+      }
+      writeFileSync(daemonConfigPath, next, "utf8");
+      logger.info(
+        `Disabled daemon Telegram channel in ${daemonConfigPath} (text-level edit). ` +
+          "Restart the daemon to release the bot token.",
+      );
+      anyChanged = true;
+    } catch (err) {
+      // EBUSY/EPERM means the running daemon holds an exclusive lock. We can't
+      // persist the change, but the runtime WS-RPC eviction below still frees
+      // the token for this session — so this is non-fatal.
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
+        logger.warn(
+          `Could not persist daemon Telegram disable in ${daemonConfigPath} (${code}) — ` +
+            "daemon holds the config lock. Falling back to runtime WS-RPC eviction for this session.",
+        );
+      } else {
+        logger.warn(`Failed to disable daemon Telegram channel in ${daemonConfigPath}:`, err);
+      }
+    }
+  }
+  return anyChanged;
+}
+
+/**
+ * Returns whether ANY config the daemon could load currently has its Telegram
+ * channel enabled with a bot token. The bot watchdog uses this to detect when
+ * the daemon has (re-)claimed Telegram so it can re-evict and keep ownership
+ * local. Checks the daemon's real config (e.g. openclaw-ollama.json via
+ * gateway.cmd), not just the default openclaw.json.
+ */
+export function daemonTelegramChannelEnabled(): boolean {
+  for (const daemonConfigPath of resolveDaemonConfigPaths()) {
+    try {
+      if (!existsSync(daemonConfigPath)) continue;
+      const daemonConfig = JSON.parse(readFileSync(daemonConfigPath, "utf8"));
+      if (
+        daemonConfig?.channels?.telegram?.enabled &&
+        daemonConfig?.channels?.telegram?.botToken
+      ) {
+        return true;
+      }
+    } catch {
+      // Unreadable / invalid JSON — try the next candidate.
+    }
+  }
+  return false;
 }
 
 export async function tryAutoStartTelegramBot(): Promise<void> {
   try {
-    // Resolve the token FIRST — we need it both for daemon-skip and local-start paths
     let token: string | undefined;
+
+    // 0. Prefer JoyCreate's OWN independent Telegram token (from settings).
+    //    This runs the local agentic "agent" on a dedicated bot token,
+    //    decoupled from the OpenClaw daemon's channel token — so you can talk
+    //    to the agent on one bot and (optionally) the plain daemon bot on
+    //    another. It's also durable: user-settings.json is never rewritten by
+    //    the daemon (unlike openclaw.json).
+    const ownToken = readSettings().telegramBotToken;
+    if (ownToken) {
+      token = ownToken;
+    }
 
     // 1. Check the gateway's in-memory config (app userData path)
     const gw = getOpenClawGateway();
     const config = gw.getConfig() as unknown as Record<string, unknown>;
     const channels = config.channels as Record<string, unknown> | undefined;
     const tgChannel = channels?.telegram as Record<string, unknown> | undefined;
-    if (tgChannel?.botToken) {
+    if (!token && tgChannel?.botToken) {
       token = tgChannel.botToken as string;
     }
     if (!token) {
@@ -983,17 +1112,21 @@ export async function tryAutoStartTelegramBot(): Promise<void> {
       }
     }
 
-    // 2. Fallback: read directly from ~/.openclaw/openclaw.json (daemon config)
+    // 2. Fallback: read directly from the daemon's actual config file(s).
+    //    The daemon may load openclaw-ollama.json (via OPENCLAW_CONFIG_PATH in
+    //    gateway.cmd) rather than the default openclaw.json — check both.
     if (!token) {
-      try {
-        const daemonConfigPath = join(homedir(), ".openclaw", "openclaw.json");
-        const raw = readFileSync(daemonConfigPath, "utf8");
-        const daemonConfig = JSON.parse(raw);
-        token = daemonConfig?.channels?.telegram?.botToken
-          || daemonConfig?.telegram?.token
-          || daemonConfig?.config?.telegram?.token;
-      } catch {
-        // File doesn't exist or isn't valid JSON — that's fine
+      for (const daemonConfigPath of resolveDaemonConfigPaths()) {
+        try {
+          const raw = readFileSync(daemonConfigPath, "utf8");
+          const daemonConfig = JSON.parse(raw);
+          token = daemonConfig?.channels?.telegram?.botToken
+            || daemonConfig?.telegram?.token
+            || daemonConfig?.config?.telegram?.token;
+          if (token) break;
+        } catch {
+          // File doesn't exist or isn't valid JSON — try the next candidate.
+        }
       }
     }
 

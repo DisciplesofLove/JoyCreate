@@ -25,12 +25,14 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ChannelsPanel } from "@/components/channels/ChannelsPanel";
 import { Progress } from "@/components/ui/progress";
 import { 
   AlertCircle, CheckCircle, ExternalLink, Key, Link, Plus, Settings, Trash2, Webhook,
   Brain, Bot, Workflow, Server, Database, GitBranch, Zap, Activity, Globe, 
   Shield, Cpu, MonitorSpeaker, Store, Target, Users, DollarSign, TrendingUp,
   Play, Pause, RefreshCw, BarChart3, Network, Clock
+, MessageSquare
 } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "@tanstack/react-router";
@@ -265,6 +267,10 @@ export function IntegrationsPage() {
           <TabsTrigger value="workflows" className="gap-1">
             <Workflow className="h-3.5 w-3.5" />
             Workflows
+          </TabsTrigger>
+          <TabsTrigger value="channels" className="gap-1">
+            <MessageSquare className="h-3.5 w-3.5" />
+            Channels
           </TabsTrigger>
           <TabsTrigger value="providers" className="gap-1">
             <Brain className="h-3.5 w-3.5" />
@@ -522,6 +528,10 @@ export function IntegrationsPage() {
         </TabsContent>
 
         {/* AI Providers Tab */}
+        <TabsContent value="channels" className="flex-1 m-0 p-6 overflow-auto">
+          <ChannelsPanel />
+        </TabsContent>
+
         <TabsContent value="providers" className="flex-1 m-0 p-6 overflow-auto">
           <ProvidersOverview providers={aiProviders} />
         </TabsContent>

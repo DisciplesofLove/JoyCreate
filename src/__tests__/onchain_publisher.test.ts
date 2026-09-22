@@ -19,24 +19,24 @@ vi.mock("electron-log", () => ({
 
 import { OnchainPublisher } from "@/lib/joymarketplace/onchain_publisher";
 import {
-  AMOY_ENS_CONTRACTS,
   ARB_SEPOLIA_ENS_CONTRACTS,
+  CANONICAL_EDITION_CONTROLLER_ABI,
   CONTRACT_ABIS,
   CONTRACT_ADDRESSES,
-  POLYGON_AMOY,
+  ARBITRUM_SEPOLIA,
 } from "@/config/joymarketplace";
 import { getMarketplaceChain } from "@/lib/onchain/chain_registry";
 
 // Build a wallet with a stub provider whose `send` we can drive deterministically.
 function buildStubWallet(sendImpl: (method: string, params: unknown[]) => Promise<unknown>): ethers.Wallet {
-  const provider = new ethers.JsonRpcProvider(POLYGON_AMOY.rpcUrl, POLYGON_AMOY.chainId);
+  const provider = new ethers.JsonRpcProvider(ARBITRUM_SEPOLIA.rpcUrl, ARBITRUM_SEPOLIA.chainId);
   // Override private network detection + transport for deterministic tests.
   const p = provider as unknown as {
     _detectNetwork: () => Promise<ethers.Network>;
     send: (method: string, params: unknown[]) => Promise<unknown>;
   };
   p._detectNetwork = async () =>
-    new ethers.Network(POLYGON_AMOY.name, BigInt(POLYGON_AMOY.chainId));
+    new ethers.Network(ARBITRUM_SEPOLIA.name, BigInt(ARBITRUM_SEPOLIA.chainId));
   p.send = sendImpl;
   // Pseudo-private-key — never used to sign anything we send.
   const pk = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -46,7 +46,7 @@ function buildStubWallet(sendImpl: (method: string, params: unknown[]) => Promis
 describe("OnchainPublisher", () => {
   it("verifyCreatorGate returns canMint=true when gate replies non-zero", async () => {
     const send = vi.fn(async (method: string, _params: unknown[]) => {
-      if (method === "eth_chainId") return `0x${POLYGON_AMOY.chainId.toString(16)}`;
+      if (method === "eth_chainId") return `0x${ARBITRUM_SEPOLIA.chainId.toString(16)}`;
       if (method === "eth_call") {
         // Pad bool true into 32 bytes
         return "0x0000000000000000000000000000000000000000000000000000000000000001";
@@ -54,19 +54,19 @@ describe("OnchainPublisher", () => {
       throw new Error(`unexpected ${method}`);
     });
     const wallet = buildStubWallet(send);
-    const publisher = new OnchainPublisher(wallet, POLYGON_AMOY);
+    const publisher = new OnchainPublisher(wallet, ARBITRUM_SEPOLIA);
     const r = await publisher.verifyCreatorGate(wallet.address);
     expect(r.canMint).toBe(true);
   });
 
   it("verifyCreatorGate returns canMint=false with reason on revert", async () => {
     const send = vi.fn(async (method: string, _params: unknown[]) => {
-      if (method === "eth_chainId") return `0x${POLYGON_AMOY.chainId.toString(16)}`;
+      if (method === "eth_chainId") return `0x${ARBITRUM_SEPOLIA.chainId.toString(16)}`;
       if (method === "eth_call") throw new Error("revert: no joy name");
       throw new Error(`unexpected ${method}`);
     });
     const wallet = buildStubWallet(send);
-    const publisher = new OnchainPublisher(wallet, POLYGON_AMOY);
+    const publisher = new OnchainPublisher(wallet, ARBITRUM_SEPOLIA);
     const r = await publisher.verifyCreatorGate(wallet.address);
     expect(r.canMint).toBe(false);
     expect(r.reason).toMatch(/revert/);
@@ -75,11 +75,11 @@ describe("OnchainPublisher", () => {
   it("lazyMintDrop dry-run returns nextTokenId, calldata and gas estimate", async () => {
     let nextIdCallCount = 0;
     const send = vi.fn(async (method: string, params: unknown[]) => {
-      if (method === "eth_chainId") return `0x${POLYGON_AMOY.chainId.toString(16)}`;
+      if (method === "eth_chainId") return `0x${ARBITRUM_SEPOLIA.chainId.toString(16)}`;
       if (method === "eth_call") {
         // Inspect the `to` field; if it's the platformDrop, return uint256(7)
         const call = params[0] as { to?: string; data?: string };
-        if (call?.to?.toLowerCase() === AMOY_ENS_CONTRACTS.platformDrop.toLowerCase()) {
+        if (call?.to?.toLowerCase() === ARB_SEPOLIA_ENS_CONTRACTS.platformDrop.toLowerCase()) {
           nextIdCallCount += 1;
           return "0x0000000000000000000000000000000000000000000000000000000000000007";
         }
@@ -92,13 +92,13 @@ describe("OnchainPublisher", () => {
       throw new Error(`unexpected ${method}`);
     });
     const wallet = buildStubWallet(send);
-    const publisher = new OnchainPublisher(wallet, POLYGON_AMOY);
+    const publisher = new OnchainPublisher(wallet, ARBITRUM_SEPOLIA);
     const r = await publisher.lazyMintDrop("ipfs://bafyMeta", 1, { dryRun: true });
     expect(r.dryRun).toBe(true);
     expect(r.tokenId).toBe("7");
     expect(nextIdCallCount).toBe(1);
     expect(r.gasEstimate).toBe(21000n);
-    expect(r.to?.toLowerCase()).toBe(AMOY_ENS_CONTRACTS.JoyCreatorGate.toLowerCase());
+    expect(r.to?.toLowerCase()).toBe(ARB_SEPOLIA_ENS_CONTRACTS.JoyCreatorGate.toLowerCase());
     // Decode the calldata back via the gate ABI to assert the args.
     const iface = new ethers.Interface(CONTRACT_ABIS.JOY_CREATOR_GATE);
     const decoded = iface.parseTransaction({ data: r.data! });
@@ -110,12 +110,12 @@ describe("OnchainPublisher", () => {
 
   it("createListing dry-run targets ENHANCED_MODEL_MARKETPLACE with the correct args", async () => {
     const send = vi.fn(async (method: string) => {
-      if (method === "eth_chainId") return `0x${POLYGON_AMOY.chainId.toString(16)}`;
+      if (method === "eth_chainId") return `0x${ARBITRUM_SEPOLIA.chainId.toString(16)}`;
       if (method === "eth_estimateGas") return "0x9c40"; // 40000
       throw new Error(`unexpected ${method}`);
     });
     const wallet = buildStubWallet(send);
-    const publisher = new OnchainPublisher(wallet, POLYGON_AMOY);
+    const publisher = new OnchainPublisher(wallet, ARBITRUM_SEPOLIA);
     const r = await publisher.createListing(
       "7",
       1_000_000n, // 1 USDC
@@ -137,10 +137,9 @@ describe("OnchainPublisher", () => {
   it("lazyMintDrop targets the per-chain creatorGate when marketplaceChain is supplied (Arb Sepolia)", async () => {
     const arbCfg = getMarketplaceChain("arbitrumSepolia");
     const send = vi.fn(async (method: string, params: unknown[]) => {
-      if (method === "eth_chainId") return `0x${POLYGON_AMOY.chainId.toString(16)}`;
+      if (method === "eth_chainId") return `0x${ARBITRUM_SEPOLIA.chainId.toString(16)}`;
       if (method === "eth_call") {
         const call = params[0] as { to?: string };
-        // Match against the Arb Sepolia platformDrop, not the Amoy one.
         if (call?.to?.toLowerCase() === ARB_SEPOLIA_ENS_CONTRACTS.platformDrop.toLowerCase()) {
           return "0x0000000000000000000000000000000000000000000000000000000000000003";
         }
@@ -150,16 +149,86 @@ describe("OnchainPublisher", () => {
       throw new Error(`unexpected ${method}`);
     });
     const wallet = buildStubWallet(send);
-    const publisher = new OnchainPublisher(wallet, POLYGON_AMOY, arbCfg);
+    const publisher = new OnchainPublisher(wallet, ARBITRUM_SEPOLIA, arbCfg);
     const r = await publisher.lazyMintDrop("ipfs://bafyArb", 2, { dryRun: true });
     expect(r.dryRun).toBe(true);
     expect(r.tokenId).toBe("3");
-    // Critical: the gate address comes from the Arb Sepolia config, NOT Amoy.
+    // The gate address comes from the supplied marketplaceChain config, not
+    // from the publisher's own default.
     expect(r.to?.toLowerCase()).toBe(
       ARB_SEPOLIA_ENS_CONTRACTS.JoyCreatorGate.toLowerCase(),
     );
-    expect(r.to?.toLowerCase()).not.toBe(
-      AMOY_ENS_CONTRACTS.JoyCreatorGate.toLowerCase(),
+    expect(r.to?.toLowerCase()).toBe(arbCfg.contracts.creatorGate.toLowerCase());
+  });
+
+  it("createCanonicalEdition targets the deployed controller with claim conditions", async () => {
+    const send = vi.fn(async (method: string, params: unknown[]) => {
+      if (method === "eth_chainId") return `0x${ARBITRUM_SEPOLIA.chainId.toString(16)}`;
+      if (method === "eth_call") {
+        const call = params[0] as { to?: string };
+        if (call?.to?.toLowerCase() === ARB_SEPOLIA_ENS_CONTRACTS.platformDrop.toLowerCase()) {
+          return "0x0000000000000000000000000000000000000000000000000000000000000009";
+        }
+      }
+      if (method === "eth_estimateGas") return "0x186a0";
+      throw new Error(`unexpected ${method}`);
+    });
+    const wallet = buildStubWallet(send);
+    const publisher = new OnchainPublisher(
+      wallet,
+      ARBITRUM_SEPOLIA,
+      getMarketplaceChain("arbitrumSepolia"),
     );
+    const indexedStoreNode = `0x${"ab".repeat(32)}`;
+    const result = await publisher.createCanonicalEdition(
+      {
+        storeSlug: "My-Store",
+        storeNode: indexedStoreNode,
+        metadataUri: "ipfs://bafyMeta",
+        priceUsdc: 1_500_000n,
+        maxSupply: 100n,
+      },
+      { dryRun: true },
+    );
+
+    expect(result.tokenId).toBe("9");
+    expect(result.to?.toLowerCase()).toBe(
+      ARB_SEPOLIA_ENS_CONTRACTS.EditionController.toLowerCase(),
+    );
+    const decoded = new ethers.Interface(
+      CANONICAL_EDITION_CONTROLLER_ABI,
+    ).parseTransaction({ data: result.data! });
+    expect(decoded?.name).toBe("createEdition");
+    expect(decoded?.args[0]).toBe(indexedStoreNode);
+    expect(decoded?.args[1]).toBe("ipfs://bafyMeta");
+    expect(decoded?.args[3].maxSupply).toBe(100n);
+    expect(decoded?.args[3].pricePerToken).toBe(1_500_000n);
+    expect(decoded?.args[3].quantityLimitPerWallet).toBe(1n);
+    expect(decoded?.args[3].currency.toLowerCase()).toBe(
+      "0x75faf114eafb1bdbe2f0316df893fd58ce46aa4d",
+    );
+  });
+
+  it("goldskyWatch detects the live Token entity", async () => {
+    const wallet = buildStubWallet(async () => {
+      throw new Error("RPC should not be called");
+    });
+    const publisher = new OnchainPublisher(wallet, ARBITRUM_SEPOLIA);
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      expect(body.query).toContain("token(id: $id)");
+      return new Response(
+        JSON.stringify({ data: { token: { id: "9", tokenId: "9", baseURI: "ipfs://meta" } } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const result = await publisher.goldskyWatch(
+      "https://example.com/subgraph",
+      "9",
+      1_000,
+      fetchImpl as typeof fetch,
+    );
+    expect(result.indexed).toBe(true);
   });
 });

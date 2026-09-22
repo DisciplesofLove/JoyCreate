@@ -1,35 +1,28 @@
 /**
- * MCP Tools — Dataset Studio
- * Create, manage, and publish datasets via JoyCreate's Dataset Studio.
+ * MCP Tools — Dataset Studio.
+ *
+ * Routed through the registered `dataset-studio:*` IPC channels.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { invokeHandler, runTool, toolError } from "./invoke_handler";
 
 export function registerDatasetTools(server: McpServer) {
   server.registerTool(
     "joycreate_dataset_create",
     {
-      description: "Create a new dataset in JoyCreate Dataset Studio. Can generate synthetic data using AI or import from existing sources.",
+      description: "Create a dataset in JoyCreate Dataset Studio.",
       inputSchema: {
         name: z.string().describe("Dataset name"),
-        description: z.string().describe("What this dataset contains and its intended use"),
-        type: z.enum(["text", "image", "audio", "tabular", "multimodal", "instruction", "preference"]).describe("Dataset type"),
-        generate: z.boolean().optional().describe("Use AI to generate synthetic data (default false)"),
-        generation_prompt: z.string().optional().describe("Prompt for AI data generation (required if generate=true)"),
-        num_samples: z.number().optional().describe("Number of samples to generate (default 100)"),
-        schema: z.record(z.any()).optional().describe("JSON schema for tabular/structured datasets"),
-        tags: z.array(z.string()).optional().describe("Tags for categorization"),
+        description: z.string().optional().describe("Dataset description"),
+        modality: z
+          .string()
+          .optional()
+          .describe("text, image, audio, video or tabular"),
       },
     },
-    async (params) => {
-      try {
-        const { createDataset } = require("@/ipc/handlers/dataset_studio_handlers");
-        const result = await createDataset?.(params) ?? { error: "Dataset Studio not available" };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async (params) => runTool("joycreate_dataset_create", () =>
+      invokeHandler("dataset-studio:create-dataset", params)),
   );
 
   server.registerTool(
@@ -37,64 +30,46 @@ export function registerDatasetTools(server: McpServer) {
     {
       description: "List datasets in JoyCreate Dataset Studio.",
       inputSchema: {
-        search: z.string().optional().describe("Search by name or description"),
-        type: z.string().optional().describe("Filter by dataset type"),
-        limit: z.number().optional().describe("Max results (default 20)"),
+        limit: z.number().optional().describe("Max results"),
       },
     },
-    async (params) => {
-      try {
-        const { listDatasets } = require("@/ipc/handlers/dataset_studio_handlers");
-        const result = await listDatasets?.(params) ?? { datasets: [], count: 0 };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async (params) => runTool("joycreate_dataset_list", () =>
+      invokeHandler("dataset-studio:list-datasets", params)),
   );
 
   server.registerTool(
     "joycreate_dataset_generate_synthetic",
     {
-      description: "Generate synthetic training data using AI. Useful for fine-tuning, evaluation sets, or augmentation.",
+      description:
+        "Start a synthetic data generation job for a dataset. Returns the job id; " +
+        "poll it with the job status channel.",
       inputSchema: {
-        task: z.string().describe("Description of the task the data should train for"),
-        format: z.enum(["instruction", "preference", "qa", "completion", "classification"]).describe("Training data format"),
-        num_samples: z.number().describe("Number of samples to generate"),
-        examples: z.array(z.record(z.any())).optional().describe("Few-shot examples to guide generation"),
-        output_format: z.enum(["jsonl", "csv", "parquet"]).optional().describe("Output file format"),
+        datasetId: z.string().describe("Target dataset id"),
+        prompt: z.string().optional().describe("Generation prompt or schema"),
+        count: z.number().optional().describe("Number of items to generate"),
+        model: z.string().optional().describe("Model to generate with"),
       },
     },
-    async (params) => {
-      try {
-        const { generateSyntheticData } = require("@/ipc/handlers/data_generation_handlers");
-        const result = await generateSyntheticData?.(params) ?? { error: "Data generation not available" };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async (params) => runTool("joycreate_dataset_generate_synthetic", () =>
+      invokeHandler("dataset-studio:create-generation-job", params)),
   );
 
   server.registerTool(
     "joycreate_dataset_publish",
     {
-      description: "Publish a dataset to Joy Marketplace. Packages it with metadata, IPFS upload, and creates a marketplace listing.",
+      description:
+        "Publish a dataset to Joy Marketplace. Datasets go through the same encrypted " +
+        "publish path as every other asset.",
       inputSchema: {
-        dataset_id: z.string().describe("Dataset ID to publish"),
-        price_usd: z.number().optional().describe("Listing price in USD (0 for free)"),
-        license: z.string().optional().describe("License type (e.g. MIT, CC-BY-4.0, proprietary)"),
-        royalty_percent: z.number().optional().describe("Royalty % on resales (default 10)"),
+        datasetId: z.string().describe("Dataset id (unused — see the error text)"),
       },
     },
-    async (params) => {
-      try {
-        const { publishDataset } = require("@/ipc/handlers/dataset_studio_handlers");
-        const result = await publishDataset?.(params) ?? { error: "Dataset publish not available" };
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }] };
-      }
-    }
+    async () =>
+      toolError(
+        "joycreate_dataset_publish is not a separate path. Publishing goes through " +
+          "joycreate_publish_asset, which encrypts the content, pins it, and mints on " +
+          "the store's drop contract. Export the dataset to a file, then call " +
+          "joycreate_publish_asset with its bytes and assetType 'dataset'.",
+      ),
   );
 }

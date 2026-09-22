@@ -690,6 +690,23 @@ export async function failContract(contractId: string, reason: string): Promise<
       }),
     "failContract emitEvent",
   );
+
+  // Failure returns the escrow. Without this, every failed invocation stranded
+  // the caller's money: the funds were debited at escrow, the provider was
+  // never credited because settlement only runs on the verified path, and
+  // `refundContract` had to be called by hand — so a caller whose provider
+  // simply threw lost that budget until the next UTC day rolled the counter
+  // over. The refund is the automatic consequence of failing, not a separate
+  // decision. A dispute is the case where funds are deliberately held, and
+  // that goes through `disputeContract`, which does not come through here.
+  if (updated.escrowLedgerId) {
+    try {
+      return await refundContract(contractId, `auto-refund after failure: ${reason}`);
+    } catch (err) {
+      // A refund that cannot complete must not mask the failure it follows.
+      logger.error(`failContract: auto-refund failed for ${contractId}`, err);
+    }
+  }
   return updated;
 }
 
@@ -704,12 +721,33 @@ export async function disputeContract(
 export async function refundContract(contractId: string, note?: string): Promise<A2AContractRow> {
   const contract = await getContract(contractId);
   if (contract.escrowLedgerId) {
-    await db
-      .update(rewardsLedger)
-      .set({ status: "expired" })
-      .where(eq(rewardsLedger.id, contract.escrowLedgerId));
-    await creditPrincipal(contract.callerPrincipalId, contract.amount);
+    // Guard on the ledger row, not on contract state. `failContract` now
+    // refunds automatically, so an operator calling refund on the same
+    // contract afterwards would otherwise credit the caller a second time and
+    // hand them free budget. The escrow row moving to `expired` is the record
+    // that the money has already gone back, and it is checked before the
+    // credit rather than after.
+    const escrow = await db
+      .select({ status: rewardsLedger.status })
+      .from(rewardsLedger)
+      .where(eq(rewardsLedger.id, contract.escrowLedgerId))
+      .limit(1);
+    const alreadyReleased = escrow[0]?.status === "expired";
+
+    if (!alreadyReleased) {
+      await db
+        .update(rewardsLedger)
+        .set({ status: "expired" })
+        .where(eq(rewardsLedger.id, contract.escrowLedgerId));
+      await creditPrincipal(contract.callerPrincipalId, contract.amount);
+    }
   }
+
+  // Already REFUNDED means a prior call finished the job; the state machine
+  // would reject REFUNDED → REFUNDED, so return rather than throw. Checked
+  // outside the escrow block so it also covers a contract that never held
+  // funds.
+  if (contract.state === "REFUNDED") return contract;
   return transitionContract(contractId, "REFUNDED", { resolutionNote: note ?? "refunded" }, note).then(
     async (updated) => {
       const caller = await getPrincipal(updated.callerPrincipalId);
@@ -976,6 +1014,86 @@ export async function verifyInvocation(
     );
   }
   return getInvocation(invocationId);
+}
+
+// =============================================================================
+// BOOT RECONCILIATION
+// =============================================================================
+
+/**
+ * Close out contracts that were mid-execution when the process died.
+ *
+ * `IN_PROGRESS` means an executor was running inside a process that no longer
+ * exists — no timer, promise or abort controller survives a restart, so such a
+ * contract can never advance on its own. Left alone it sits there permanently
+ * with the caller's funds escrowed, counting against their daily cap and the
+ * spend-limit policy forever.
+ *
+ * This runs against `a2a_contracts` rather than the activity table on purpose.
+ * The activity row is observability and may be missing, pruned, or lacking a
+ * resume cursor; the contract row is the money, and it is the thing that has
+ * to be made consistent. Failing the contract refunds it, because
+ * `failContract` now releases escrow.
+ *
+ * Deliberately not resumed. The executor's side effects are unknown — it may
+ * have generated an image, sent a message, or spent tokens with an upstream
+ * provider — so replaying is the more expensive mistake. The caller gets their
+ * money back and can hire again.
+ */
+export async function reconcileStrandedContracts(): Promise<{
+  contracts: number;
+  invocations: number;
+}> {
+  let contracts = 0;
+  let invocations = 0;
+
+  try {
+    // Invocations first: the contract transition reads consistent state only
+    // once the invocation is no longer claiming to run.
+    const running = await db
+      .select()
+      .from(a2aInvocations)
+      .where(eq(a2aInvocations.status, "running"));
+
+    for (const inv of running) {
+      const ts = now();
+      await db
+        .update(a2aInvocations)
+        .set({
+          status: "failed",
+          errorMessage: "interrupted: process exited while running",
+          completedAt: ts,
+          updatedAt: ts,
+        })
+        .where(eq(a2aInvocations.id, inv.id));
+      invocations++;
+    }
+
+    const stranded = await db
+      .select()
+      .from(a2aContracts)
+      .where(eq(a2aContracts.state, "IN_PROGRESS"));
+
+    for (const contract of stranded) {
+      try {
+        await failContract(contract.id, "interrupted: process exited mid-invocation");
+        contracts++;
+      } catch (err) {
+        // One unrecoverable contract must not block the rest of the sweep.
+        logger.error(`reconcileStrandedContracts: ${contract.id} failed`, err);
+      }
+    }
+
+    if (contracts || invocations) {
+      logger.info(
+        `reconciled ${contracts} stranded contract(s), ${invocations} interrupted invocation(s)`,
+      );
+    }
+  } catch (err) {
+    logger.error("reconcileStrandedContracts failed", err);
+  }
+
+  return { contracts, invocations };
 }
 
 // =============================================================================

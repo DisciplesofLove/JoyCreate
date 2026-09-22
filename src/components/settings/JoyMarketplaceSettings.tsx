@@ -26,13 +26,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { IpcClient } from "@/ipc/ipc_client";
 import { ShoppingCart, KeyRound, Save, Network } from "lucide-react";
 import { toast } from "sonner";
@@ -53,15 +46,20 @@ export function JoyMarketplaceSettings() {
   const [supabaseKey, setSupabaseKey] = useState("");
   const [saving, setSaving] = useState(false);
   const { settings, updateSettings } = useSettings();
-  const marketplaceChain =
-    (settings as { marketplaceChain?: string } | null)?.marketplaceChain ?? "arbitrumSepolia";
   const configuredStoreSlug =
     (settings as { marketplaceStoreSlug?: string } | null)?.marketplaceStoreSlug ?? "";
   const [storeSlug, setStoreSlug] = useState("");
+  const configuredPayoutAddress =
+    (settings as { marketplacePayoutAddress?: string } | null)?.marketplacePayoutAddress ?? "";
+  const [payoutAddress, setPayoutAddress] = useState("");
 
   useEffect(() => {
     setStoreSlug(configuredStoreSlug);
   }, [configuredStoreSlug]);
+
+  useEffect(() => {
+    setPayoutAddress(configuredPayoutAddress);
+  }, [configuredPayoutAddress]);
 
   async function refresh(): Promise<void> {
     try {
@@ -197,48 +195,16 @@ export function JoyMarketplaceSettings() {
           </Button>
         </div>
         <div className="pt-4 border-t mt-2">
-          <Label htmlFor="marketplace-chain" className="flex items-center gap-1">
+          <Label className="flex items-center gap-1">
             <Network className="h-3 w-3" />
             Marketplace network
           </Label>
-          <Select
-            value={marketplaceChain}
-            onValueChange={(value) => {
-              void updateSettings({
-                marketplaceChain: value as
-                  | "polygonAmoy"
-                  | "arbitrumSepolia"
-                  | "arbitrumOne",
-              })
-                .then(() => toast.success(`Marketplace network: ${value}`))
-                .catch((err: unknown) =>
-                  toast.error(
-                    err instanceof Error ? err.message : "Failed to switch network",
-                  ),
-                );
-            }}
-          >
-            <SelectTrigger id="marketplace-chain" className="mt-1">
-              <SelectValue placeholder="Select network" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="arbitrumSepolia">
-                Arbitrum Sepolia (default — testnet)
-              </SelectItem>
-              <SelectItem value="arbitrumOne">
-                Arbitrum One (mainnet — not yet deployed)
-              </SelectItem>
-              <SelectItem value="polygonAmoy">
-                Polygon Amoy (legacy — USDC)
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="mt-1 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+            Arbitrum Sepolia (testnet)
+          </div>
           <p className="text-xs text-muted-foreground mt-1">
-            Default is Arbitrum Sepolia — the Web 4.0 stack (store registry,
-            edition drops, ERC-1144 discovery, x402 USDC payments) is deployed
-            there. Switching networks is additive — previously published items
-            are not migrated and remain visible. Arbitrum One is not yet
-            deployed; Polygon Amoy is the legacy USDC route.
+            Marketplace publishing, discovery, and purchases currently use
+            Arbitrum Sepolia exclusively.
           </p>
         </div>
         <div className="pt-2">
@@ -269,6 +235,40 @@ export function JoyMarketplaceSettings() {
             The storefront that published assets are licensed to. Auto-registered
             on-chain on first publish. Leave blank to mint without creating a
             purchasable x402 drop.
+          </p>
+        </div>
+        <div className="pt-2">
+          <Label htmlFor="marketplace-payout-address" className="flex items-center gap-1">
+            <KeyRound className="h-3 w-3" />
+            Payout address (Seller 80%)
+          </Label>
+          <Input
+            id="marketplace-payout-address"
+            placeholder="0x…"
+            value={payoutAddress}
+            onChange={(e) => setPayoutAddress(e.target.value)}
+            onBlur={() => {
+              const next = payoutAddress.trim();
+              if (next === configuredPayoutAddress) return;
+              if (next && !/^0x[0-9a-fA-F]{40}$/.test(next)) {
+                toast.error("Payout address must be a 0x-prefixed 20-byte address");
+                return;
+              }
+              void updateSettings({ marketplacePayoutAddress: next })
+                .then(() =>
+                  toast.success(next ? `Payout address: ${next}` : "Payout address cleared"),
+                )
+                .catch((err: unknown) =>
+                  toast.error(
+                    err instanceof Error ? err.message : "Failed to save payout address",
+                  ),
+                );
+            }}
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            Where the 80% Seller share should settle. Drops pay out to the wallet
+            that creates them — publishing warns if the signing wallet differs
+            from this address.
           </p>
         </div>
       </CardContent>

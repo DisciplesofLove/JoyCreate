@@ -1,9 +1,14 @@
 /**
  * Joy Marketplace Subgraph Client
  *
- * Queries Goldsky-indexed subgraphs for on-chain marketplace data:
- * - joy-drop-amoy: Token drops, purchases, user balances
- * - joy-stores-amoy: Stores, domains, text records
+ * Queries Goldsky-indexed subgraphs for on-chain marketplace data on
+ * Arbitrum Sepolia — the only chain this app talks to:
+ * - joy-store-drops-arbitrum-sepolia: tokens, purchases, user balances
+ * - joy-stores-arbitrum-sepolia: stores, domains, agents, text records
+ *
+ * The MarketplaceV3 helpers below are retained as explicit failures rather than
+ * deleted, so callers still compile and get a message naming the cause instead
+ * of a silent empty list. See `marketplaceV3Retired`.
  */
 
 import log from "electron-log";
@@ -33,17 +38,38 @@ const logger = log.scope("subgraph");
 
 // ── Subgraph endpoints ─────────────────────────────────────────────────────
 
+// Arbitrum Sepolia only. The three Polygon Amoy endpoints this module used to
+// point at (`joy-drop-amoy@0.0.1`, `joy-stores-amoy@0.0.3`,
+// `joy-marketplace-amoy@0.0.3`) were decommissioned — every one returned
+// HTTP 404 "Subgraph not found", so `agent-market:*` and every other consumer
+// here had been failing silently against a chain the marketplace had left.
 const SUBGRAPH_URLS = {
+  /** Per-store DropERC1155 clones + the legacy shared platform drop. */
   drops:
-    "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-amoy/0.0.1/gn",
+    "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-store-drops-arbitrum-sepolia/0.0.2/gn",
   stores:
-    "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-amoy/0.0.3/gn",
-  /** @deprecated MarketplaceV3 subgraph — retired in the 2026-05-02 pivot.
-   *  Use `src/lib/joymarketplace/drop_subgraph.ts` for browse / detail reads.
-   *  Kept only so legacy helpers below surface a clear failure mode. */
-  marketplace:
-    "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-marketplace-amoy/0.0.3/gn",
+    "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.5/gn",
 } as const;
+
+/**
+ * The MarketplaceV3 lane is gone, not merely moved.
+ *
+ * `assets`, `listings`, `aimodels`, `licenses` and `receipts` were entities of
+ * the retired `joy-marketplace-amoy` subgraph. Nothing on Arbitrum Sepolia
+ * indexes them — the live drop subgraph exposes only `tokens`, `purchases`,
+ * `userBalances`, `dropStats` and `storeDrops`.
+ *
+ * Throwing beats returning `[]`: an empty array reads as "no results" and the
+ * caller renders an empty marketplace, which is exactly how this went unnoticed.
+ */
+function marketplaceV3Retired(fn: string): never {
+  throw new Error(
+    `${fn}() is unavailable: it queried the retired MarketplaceV3 subgraph on ` +
+      `Polygon Amoy, which is decommissioned. Arbitrum Sepolia indexes no ` +
+      `equivalent entity. Use src/lib/joymarketplace/drop_subgraph.ts for ` +
+      `browse and detail reads.`,
+  );
+}
 
 // ── Generic GraphQL fetcher ────────────────────────────────────────────────
 
@@ -308,58 +334,7 @@ export async function getStoreStats(): Promise<SubgraphStoreStats | null> {
  * for our flow; expect empty/erroring results in production.
  */
 export async function getMarketplaceAssets(params?: SubgraphAssetsParams): Promise<SubgraphAsset[]> {
-  const first = params?.first ?? 100;
-  const skip = params?.skip ?? 0;
-  const orderBy = params?.orderBy ?? "createdAt";
-  const orderDirection = params?.orderDirection ?? "desc";
-
-  const where: Record<string, unknown> = {};
-  if (params?.assetType) where.assetType = params.assetType;
-  if (params?.creator) where.creator = params.creator.toLowerCase();
-
-  const data = await querySubgraph<{ assets: SubgraphAsset[] }>(
-    SUBGRAPH_URLS.marketplace,
-    `query GetAssets($first: Int!, $skip: Int!, $orderBy: Asset_orderBy!, $orderDirection: OrderDirection!, $where: Asset_filter) {
-      assets(first: $first, skip: $skip, orderBy: $orderBy, orderDirection: $orderDirection, where: $where) {
-        id
-        tokenId
-        contractAddress
-        owner
-        creator
-        name
-        assetType
-        merkleRoot
-        totalChunks
-        encrypted
-        verificationScore
-        totalSales
-        totalVolume
-        createdAt
-        createdTxHash
-        publisher {
-          id
-          address
-          name
-          reputationScore
-          totalAssets
-          totalSales
-        }
-        store {
-          id
-          name
-          isVerified
-        }
-        verification {
-          level
-          active
-          verifiedAt
-        }
-      }
-    }`,
-    { first, skip, orderBy, orderDirection, where: Object.keys(where).length ? where : undefined },
-  );
-
-  return data.assets;
+  marketplaceV3Retired("getMarketplaceAssets");
 }
 
 /**
@@ -369,242 +344,39 @@ export async function getMarketplaceAssets(params?: SubgraphAssetsParams): Promi
  * `listDrops` from `lib/joymarketplace/drop_subgraph.ts`.
  */
 export async function getMarketplaceListings(params?: SubgraphListingsParams): Promise<SubgraphListing[]> {
-  const first = params?.first ?? 100;
-  const skip = params?.skip ?? 0;
-  const orderBy = params?.orderBy ?? "createdAt";
-  const orderDirection = params?.orderDirection ?? "desc";
-
-  const where: Record<string, unknown> = {};
-  if (params?.activeOnly !== false) where.active = true;
-  if (params?.seller) where.seller = params.seller.toLowerCase();
-
-  const data = await querySubgraph<{ listings: SubgraphListing[] }>(
-    SUBGRAPH_URLS.marketplace,
-    `query GetListings($first: Int!, $skip: Int!, $orderBy: Listing_orderBy!, $orderDirection: OrderDirection!, $where: Listing_filter) {
-      listings(first: $first, skip: $skip, orderBy: $orderBy, orderDirection: $orderDirection, where: $where) {
-        id
-        listingId
-        seller
-        nftContract
-        tokenId
-        quantity
-        pricePerItem
-        effectivePrice
-        hasDiscount
-        discountEndTime
-        discountedPrice
-        active
-        createdAt
-        updatedAt
-        soldAt
-        buyer
-        totalPaid
-        platformFee
-        royaltyPaid
-        createdTxHash
-        asset {
-          id
-          tokenId
-          name
-          assetType
-          creator
-          verificationScore
-          totalSales
-          publisher {
-            name
-            reputationScore
-          }
-        }
-      }
-    }`,
-    { first, skip, orderBy, orderDirection, where },
-  );
-
-  return data.listings;
+  marketplaceV3Retired("getMarketplaceListings");
 }
 
 /**
  * @deprecated MarketplaceV3 read path — retired 2026-05-02.
  */
 export async function getAIModels(params?: SubgraphAIModelsParams): Promise<SubgraphAIModel[]> {
-  const first = params?.first ?? 100;
-  const skip = params?.skip ?? 0;
-  const orderBy = params?.orderBy ?? "createdAt";
-  const orderDirection = params?.orderDirection ?? "desc";
-
-  const where: Record<string, unknown> = {};
-  if (params?.creator) where.creator = params.creator.toLowerCase();
-  if (params?.verified !== undefined) where.verified = params.verified;
-
-  const data = await querySubgraph<{ aimodels: SubgraphAIModel[] }>(
-    SUBGRAPH_URLS.marketplace,
-    `query GetAIModels($first: Int!, $skip: Int!, $orderBy: AIModel_orderBy!, $orderDirection: OrderDirection!, $where: AIModel_filter) {
-      aimodels(first: $first, skip: $skip, orderBy: $orderBy, orderDirection: $orderDirection, where: $where) {
-        id
-        tokenId
-        creator
-        owner
-        name
-        category
-        licenseType
-        verified
-        qualityScore
-        usageCount
-        totalLicenseRevenue
-        createdAt
-        createdTxHash
-        licenses(first: 10, orderBy: timestamp, orderDirection: desc) {
-          id
-          licensee
-          licenseType
-          amount
-          expiresAt
-          timestamp
-          txHash
-        }
-      }
-    }`,
-    { first, skip, orderBy, orderDirection, where: Object.keys(where).length ? where : undefined },
-  );
-
-  return data.aimodels;
+  marketplaceV3Retired("getAIModels");
 }
 
 /**
  * @deprecated MarketplaceV3 read path — retired 2026-05-02.
  */
 export async function getUserLicenses(walletAddress: string, first = 100): Promise<SubgraphAIModelLicense[]> {
-  const addr = walletAddress.toLowerCase();
-
-  const data = await querySubgraph<{ aimodelLicenses: SubgraphAIModelLicense[] }>(
-    SUBGRAPH_URLS.marketplace,
-    `query GetUserLicenses($licensee: String!, $first: Int!) {
-      aimodelLicenses(where: { licensee: $licensee }, first: $first, orderBy: timestamp, orderDirection: desc) {
-        id
-        licensee
-        licenseType
-        amount
-        expiresAt
-        timestamp
-        txHash
-        model {
-          id
-          tokenId
-          name
-          creator
-          category
-          verified
-          qualityScore
-        }
-      }
-    }`,
-    { licensee: addr, first },
-  );
-
-  return data.aimodelLicenses;
+  marketplaceV3Retired("getUserLicenses");
 }
 
 /**
  * @deprecated MarketplaceV3 read path — retired 2026-05-02.
  */
 export async function getUserReceipts(walletAddress: string, first = 100): Promise<SubgraphReceipt[]> {
-  const addr = walletAddress.toLowerCase();
-
-  const data = await querySubgraph<{ receipts: SubgraphReceipt[] }>(
-    SUBGRAPH_URLS.marketplace,
-    `query GetUserReceipts($buyer: String!, $first: Int!) {
-      receipts(where: { buyer: $buyer }, first: $first, orderBy: issuedAt, orderDirection: desc) {
-        id
-        receiptId
-        buyer
-        seller
-        listingId
-        price
-        fulfilled
-        fulfilledMethod
-        fulfilledAt
-        disputed
-        disputeReason
-        refunded
-        refundAmount
-        downloadCount
-        issuedAt
-        issuedTxHash
-      }
-    }`,
-    { buyer: addr, first },
-  );
-
-  return data.receipts;
+  marketplaceV3Retired("getUserReceipts");
 }
 
 /**
  * @deprecated MarketplaceV3 read path — retired 2026-05-02.
  */
 export async function getMarketplaceStats(): Promise<SubgraphMarketplaceStats | null> {
-  try {
-    const data = await querySubgraph<{ marketplaceStats_collection: SubgraphMarketplaceStats[] }>(
-      SUBGRAPH_URLS.marketplace,
-      `{ marketplaceStats_collection(first: 1) {
-        id totalListings activeListings totalSales totalVolume
-        totalAssets totalPublishers totalEscrows totalReviews
-        totalCollections totalBundles updatedAt
-      } }`,
-    );
-    return data.marketplaceStats_collection?.[0] ?? null;
-  } catch {
-    return null;
-  }
+  marketplaceV3Retired("getMarketplaceStats");
 }
 
 // ── Aggregated "My Assets" query ───────────────────────────────────────────
 
 export async function getMyMarketplaceAssets(params: SubgraphQueryParams): Promise<MyMarketplaceAssets> {
-  const { walletAddress } = params;
-
-  if (!walletAddress) {
-    throw new Error("Wallet address is required to query marketplace assets");
-  }
-
-  logger.info(`Fetching marketplace assets for ${walletAddress}`);
-
-  const [ownedTokens, purchases, stores, domains, dropStats, storeStats, marketplaceAssets, activeListings, licenses, marketplaceStats] = await Promise.all([
-    getUserBalances(walletAddress).catch((e) => {
-      logger.warn("Failed to fetch user balances:", e);
-      return [] as SubgraphUserBalance[];
-    }),
-    getUserPurchases(walletAddress).catch((e) => {
-      logger.warn("Failed to fetch user purchases:", e);
-      return [] as SubgraphPurchase[];
-    }),
-    getUserStores(walletAddress).catch((e) => {
-      logger.warn("Failed to fetch user stores:", e);
-      return [] as SubgraphStore[];
-    }),
-    getUserDomains(walletAddress).catch((e) => {
-      logger.warn("Failed to fetch user domains:", e);
-      return [] as SubgraphDomainRegistration[];
-    }),
-    getDropStats(),
-    getStoreStats(),
-    getMarketplaceAssets({ creator: walletAddress }).catch((e) => {
-      logger.warn("Failed to fetch marketplace assets:", e);
-      return [] as SubgraphAsset[];
-    }),
-    getMarketplaceListings({ seller: walletAddress, activeOnly: true }).catch((e) => {
-      logger.warn("Failed to fetch active listings:", e);
-      return [] as SubgraphListing[];
-    }),
-    getUserLicenses(walletAddress).catch((e) => {
-      logger.warn("Failed to fetch user licenses:", e);
-      return [] as SubgraphAIModelLicense[];
-    }),
-    getMarketplaceStats(),
-  ]);
-
-  logger.info(
-    `Assets for ${walletAddress}: ${ownedTokens.length} tokens, ${purchases.length} purchases, ${stores.length} stores, ${domains.length} domains, ${marketplaceAssets.length} marketplace assets, ${activeListings.length} listings, ${licenses.length} licenses`,
-  );
-
-  return { ownedTokens, purchases, stores, domains, dropStats, storeStats, marketplaceAssets, activeListings, licenses, marketplaceStats };
+  marketplaceV3Retired("getMyMarketplaceAssets");
 }

@@ -70,6 +70,13 @@ function waitForOAuthCallback(
   const parsed = new URL(redirectUri);
   const port = Number.parseInt(parsed.port || "80", 10);
   const expectedPath = parsed.pathname || "/";
+  // OAuth providers always redirect to a loopback address (127.0.0.1 or
+  // localhost). Bind to the loopback interface explicitly so an attacker on
+  // the same LAN can't race a request to our transient callback server and
+  // steal the authorization code (a brief window, but the cost is zero).
+  const bindHost = parsed.hostname && parsed.hostname.length > 0
+    ? parsed.hostname
+    : "127.0.0.1";
 
   return new Promise<OAuthCallbackResult>((resolve, reject) => {
     let settled = false;
@@ -125,7 +132,7 @@ function waitForOAuthCallback(
         ),
       );
     });
-    server.listen(port);
+    server.listen(port, bindHost);
   });
 }
 

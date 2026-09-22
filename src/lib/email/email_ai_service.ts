@@ -40,20 +40,20 @@ const FAST_MODEL_PREFERENCES = [
   { provider: "ollama", name: "mistral" },
   { provider: "ollama", name: "phi3" },
   { provider: "lmstudio", name: "default" },
-  { provider: "google", name: "gemini-2.5-flash" },
-  { provider: "openrouter", name: "qwen/qwen3-coder:free" },
-  { provider: "openai", name: "gpt-4.1-mini" },
-  { provider: "anthropic", name: "claude-sonnet-4-5" },
+  { provider: "google", name: "gemini-3.8-flash" },
+  { provider: "openrouter", name: "thinkingmachines/inkling:free" },
+  { provider: "openai", name: "gpt-5.6-luna" },
+  { provider: "anthropic", name: "claude-sonnet-5" },
 ];
 
 /**
  * Capable models for complex generation tasks.
  */
 const CAPABLE_MODEL_PREFERENCES = [
-  { provider: "anthropic", name: "claude-sonnet-4-5" },
-  { provider: "openai", name: "gpt-4.1" },
-  { provider: "google", name: "gemini-2.5-flash" },
-  { provider: "openrouter", name: "qwen/qwen3-coder:free" },
+  { provider: "anthropic", name: "claude-sonnet-5" },
+  { provider: "openai", name: "gpt-5.6-sol" },
+  { provider: "google", name: "gemini-3.8-flash" },
+  { provider: "openrouter", name: "thinkingmachines/inkling:free" },
   { provider: "ollama", name: "llama3.2:3b" },
   { provider: "ollama", name: "llama3.2:latest" },
   { provider: "lmstudio", name: "default" },

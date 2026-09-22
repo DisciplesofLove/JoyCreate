@@ -53,33 +53,57 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "deepseek/deepseek-chat-v3.1":   { inputPer1M: 0.27, outputPer1M: 1.10, tier: 2, minComplexity: 1, maxComplexity: 7, provider: "openrouter" },
   "moonshotai/kimi-k2-0905":       { inputPer1M: 0.60, outputPer1M: 2.40, tier: 2, minComplexity: 1, maxComplexity: 7, provider: "openrouter" },
   "z-ai/glm-4.7":                  { inputPer1M: 0.50, outputPer1M: 2.00, tier: 2, minComplexity: 1, maxComplexity: 7, provider: "openrouter" },
+  // Prices from OpenRouter's live model list, 2026-09-15.
+  "deepseek/deepseek-v4.1-flash":  { inputPer1M: 0.15, outputPer1M: 0.60, tier: 1, minComplexity: 1, maxComplexity: 7, provider: "openrouter" },
+  "deepseek/deepseek-v4-pro":      { inputPer1M: 1.60, outputPer1M: 3.20, tier: 3, minComplexity: 3, maxComplexity: 8, provider: "openrouter" },
+  "qwen/qwen3-coder-next":         { inputPer1M: 0.12, outputPer1M: 0.80, tier: 2, minComplexity: 1, maxComplexity: 7, provider: "openrouter" },
+  "z-ai/glm-5.3":                  { inputPer1M: 1.40, outputPer1M: 4.40, tier: 3, minComplexity: 2, maxComplexity: 8, provider: "openrouter" },
+  "moonshotai/kimi-k3":            { inputPer1M: 2.65, outputPer1M: 13.28, tier: 3, minComplexity: 3, maxComplexity: 9, provider: "openrouter" },
 
   // â”€â”€ OpenAI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   "gpt-5-mini":          { inputPer1M:  1.50, outputPer1M:  6.00, tier: 2, minComplexity: 1, maxComplexity: 6, provider: "openai" },
   "gpt-5":               { inputPer1M:  5.00, outputPer1M: 15.00, tier: 3, minComplexity: 3, maxComplexity: 8, provider: "openai" },
-  "gpt-5-codex":         { inputPer1M:  5.00, outputPer1M: 15.00, tier: 3, minComplexity: 3, maxComplexity: 9, provider: "openai" },
+  // gpt-5-codex, gpt-5.1-codex and gpt-5.1-codex-mini were shut down on
+  // 2026-07-23, so their rows are gone. Entries here only price and filter the
+  // models a caller already offers; they never introduce one.
   "gpt-5.1":             { inputPer1M:  5.00, outputPer1M: 15.00, tier: 3, minComplexity: 3, maxComplexity: 9, provider: "openai" },
-  "gpt-5.1-codex":       { inputPer1M:  5.00, outputPer1M: 15.00, tier: 3, minComplexity: 3, maxComplexity: 9, provider: "openai" },
-  "gpt-5.1-codex-mini":  { inputPer1M:  2.00, outputPer1M:  8.00, tier: 2, minComplexity: 1, maxComplexity: 7, provider: "openai" },
   "gpt-5.2":             { inputPer1M:  5.00, outputPer1M: 15.00, tier: 4, minComplexity: 4, maxComplexity: 10, provider: "openai" },
+  // Current lineup. Prices from OpenAI's models page; OpenRouter lists
+  // gpt-5.6-sol at $2/$10, so treat Sol's estimate as an upper bound.
+  "gpt-6-astra":         { inputPer1M: 10.00, outputPer1M: 50.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "openai" },
+  "gpt-5.6-sol":         { inputPer1M:  4.00, outputPer1M: 20.00, tier: 4, minComplexity: 4, maxComplexity: 10, provider: "openai" },
+  "gpt-5.6-terra":       { inputPer1M:  2.00, outputPer1M: 12.00, tier: 3, minComplexity: 3, maxComplexity: 9, provider: "openai" },
+  "gpt-5.6-luna":        { inputPer1M:  0.20, outputPer1M:  1.20, tier: 2, minComplexity: 1, maxComplexity: 7, provider: "openai" },
 
   // â”€â”€ Anthropic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   "claude-sonnet-4-5":   { inputPer1M: 3.00, outputPer1M: 15.00, tier: 3, minComplexity: 3, maxComplexity: 9, provider: "anthropic" },
   "claude-sonnet-4-5-20250929": { inputPer1M: 3.00, outputPer1M: 15.00, tier: 4, minComplexity: 4, maxComplexity: 10, provider: "anthropic" },
-  "claude-opus-4-8":            { inputPer1M: 15.00, outputPer1M: 75.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "anthropic" },
-  "claude-opus-4-7":            { inputPer1M: 15.00, outputPer1M: 75.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "anthropic" },
+  // Opus 4.5 and later cost $5/$25 per Anthropic's pricing; $15/$75 was the Opus 4.1 rate.
+  "claude-opus-4-7":            { inputPer1M:  5.00, outputPer1M: 25.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "anthropic" },
   "claude-sonnet-4-6":          { inputPer1M:  3.00, outputPer1M: 15.00, tier: 4, minComplexity: 4, maxComplexity:  9, provider: "anthropic" },
-  "claude-opus-4-5":            { inputPer1M: 15.00, outputPer1M: 75.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "anthropic" },
-  "claude-opus-4-6":            { inputPer1M: 15.00, outputPer1M: 75.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "anthropic" },
+  "claude-opus-4-5":            { inputPer1M:  5.00, outputPer1M: 25.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "anthropic" },
+  "claude-opus-4-6":            { inputPer1M:  5.00, outputPer1M: 25.00, tier: 5, minComplexity: 7, maxComplexity: 10, provider: "anthropic" },
+  // Current lineup — Anthropic's models page, 2026-09-15.
+  "claude-fable-5-1":           { inputPer1M: 10.00, outputPer1M: 50.00, tier: 5, minComplexity: 8, maxComplexity: 10, provider: "anthropic" },
+  "claude-opus-5":              { inputPer1M:  5.00, outputPer1M: 25.00, tier: 5, minComplexity: 6, maxComplexity: 10, provider: "anthropic" },
+  "claude-sonnet-5":            { inputPer1M:  2.00, outputPer1M: 10.00, tier: 4, minComplexity: 3, maxComplexity: 10, provider: "anthropic" },
+  "claude-haiku-4-5":           { inputPer1M:  1.00, outputPer1M:  5.00, tier: 2, minComplexity: 1, maxComplexity: 6, provider: "anthropic" },
 
   // â”€â”€ Google â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   "gemini-flash-latest":       { inputPer1M: 0.15, outputPer1M: 0.60, tier: 1, minComplexity: 1, maxComplexity: 6, provider: "google" },
   "gemini-2.5-pro":            { inputPer1M: 1.25, outputPer1M: 5.00, tier: 3, minComplexity: 3, maxComplexity: 8, provider: "google" },
   "gemini-3-flash-preview":    { inputPer1M: 0.20, outputPer1M: 0.80, tier: 2, minComplexity: 1, maxComplexity: 7, provider: "google" },
-  "gemini-3-pro-preview":      { inputPer1M: 2.50, outputPer1M: 10.00, tier: 4, minComplexity: 4, maxComplexity: 9, provider: "google" },
+  // gemini-3-pro-preview is shut down; removed so routing cannot pick it.
+  // Current lineup — Google's Gemini pricing page, 2026-09-15.
+  "gemini-3.8-flash":          { inputPer1M: 0.75, outputPer1M: 3.75, tier: 2, minComplexity: 1, maxComplexity: 8, provider: "google" },
+  "gemini-3.1-pro-preview":    { inputPer1M: 2.00, outputPer1M: 12.00, tier: 4, minComplexity: 4, maxComplexity: 9, provider: "google" },
+  "gemini-3.5-flash-lite":     { inputPer1M: 0.30, outputPer1M: 2.50, tier: 1, minComplexity: 1, maxComplexity: 5, provider: "google" },
 
   // â”€â”€ xAI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   "grok-code-fast-1":          { inputPer1M: 0.30, outputPer1M: 1.20, tier: 2, minComplexity: 1, maxComplexity: 6, provider: "xai" },
+  // Current lineup — OpenRouter's live list, 2026-09-15.
+  "grok-4.6":                  { inputPer1M: 2.00, outputPer1M: 6.00, tier: 4, minComplexity: 4, maxComplexity: 9, provider: "xai" },
+  "grok-build-0.1":            { inputPer1M: 1.00, outputPer1M: 2.00, tier: 2, minComplexity: 1, maxComplexity: 7, provider: "xai" },
 };
 
 
@@ -175,18 +199,18 @@ export type TaskModelRouting = Record<TaskModule, TaskModelRoute>;
  *  - Data / deploy / marketplace â†’ DeepSeek (simple structured tasks)
  */
 export const DEFAULT_TASK_ROUTING: TaskModelRouting = {
-  code:         { model: "claude-sonnet-4-5",     provider: "anthropic",   reason: "Best for code generation and reasoning" },
-  agent:        { model: "claude-sonnet-4-5",     provider: "anthropic",   reason: "Best for agent logic and tool use" },
-  image:        { model: "gemini-3-flash-preview",       provider: "google",      reason: "Fast vision + image understanding at low cost" },
-  video:        { model: "gemini-3-flash-preview",       provider: "google",      reason: "Multimodal + cost-effective" },
-  document:     { model: "deepseek/deepseek-chat-v3.1",  provider: "openrouter",  reason: "Great writing quality at very low cost" },
-  workflow:     { model: "deepseek/deepseek-chat-v3.1",  provider: "openrouter",  reason: "Good structured output for workflow JSON" },
-  email:        { model: "deepseek/deepseek-chat-v3.1",  provider: "openrouter",  reason: "Natural writing at low cost" },
-  chat:         { model: "deepseek/deepseek-chat-v3.1",  provider: "openrouter",  reason: "Fast conversational responses at lowest cost" },
-  planning:     { model: "gemini-flash-latest",          provider: "google",      reason: "Fast JSON planning at very low cost" },
-  data:         { model: "deepseek/deepseek-chat-v3.1",  provider: "openrouter",  reason: "Structured data tasks, cost-effective" },
-  deploy:       { model: "deepseek/deepseek-chat-v3.1",  provider: "openrouter",  reason: "Simple command orchestration" },
-  marketplace:  { model: "gemini-flash-latest",          provider: "google",      reason: "Quick lookups, low cost" },
+  code:         { model: "claude-sonnet-5",     provider: "anthropic",   reason: "Best for code generation and reasoning" },
+  agent:        { model: "claude-sonnet-5",     provider: "anthropic",   reason: "Best for agent logic and tool use" },
+  image:        { model: "gemini-3.8-flash",       provider: "google",      reason: "Fast vision + image understanding at low cost" },
+  video:        { model: "gemini-3.8-flash",       provider: "google",      reason: "Multimodal + cost-effective" },
+  document:     { model: "deepseek/deepseek-v4.1-flash",  provider: "openrouter",  reason: "Great writing quality at very low cost" },
+  workflow:     { model: "deepseek/deepseek-v4.1-flash",  provider: "openrouter",  reason: "Good structured output for workflow JSON" },
+  email:        { model: "deepseek/deepseek-v4.1-flash",  provider: "openrouter",  reason: "Natural writing at low cost" },
+  chat:         { model: "deepseek/deepseek-v4.1-flash",  provider: "openrouter",  reason: "Fast conversational responses at lowest cost" },
+  planning:     { model: "gemini-3.8-flash",          provider: "google",      reason: "Fast JSON planning at very low cost" },
+  data:         { model: "deepseek/deepseek-v4.1-flash",  provider: "openrouter",  reason: "Structured data tasks, cost-effective" },
+  deploy:       { model: "deepseek/deepseek-v4.1-flash",  provider: "openrouter",  reason: "Simple command orchestration" },
+  marketplace:  { model: "gemini-3.8-flash",          provider: "google",      reason: "Quick lookups, low cost" },
 };
 
 /**
@@ -411,7 +435,7 @@ export class OpenClawCostEngine extends EventEmitter {
       if (r.totalCost === 0 && r.totalTokens > 0) {
         // If this were processed on a mid-tier cloud model instead
         const hypotheticalCost = this.calculateCost(
-          "claude-sonnet-4-5",
+          "claude-sonnet-5",
           r.inputTokens,
           r.outputTokens,
         ).totalCost;
@@ -560,7 +584,7 @@ export class OpenClawCostEngine extends EventEmitter {
     for (const step of steps) {
       const tokens = step.estimatedTokens ?? 1500;
       // Most actions use a mid-tier model
-      executionCost += this.estimateCost("gemini-flash-latest", tokens, 1000);
+      executionCost += this.estimateCost("gemini-3.8-flash", tokens, 1000);
     }
 
     // Budget 20% extra for potential self-correction retries

@@ -6,7 +6,9 @@
  * browse, buy, list, and sell marketplace assets.
  *
  * Chain: Polygon Amoy Testnet (80002)
- * Contract: JoyLicenseToken ERC-1155 @ 0xb099296fe65a2185731aC8B1411A56175e6Be47a
+ * Contract: the per-store DropERC1155 clone each token lives on, or the shared
+ * platform drop for pre-per-store assets. (Was the retired Polygon Amoy
+ * JoyLicenseToken, hardcoded.)
  * Subgraphs: joy-marketplace-amoy, joy-stores-amoy, joy-drop-amoy (Goldsky)
  */
 
@@ -15,12 +17,10 @@ import * as fs from "fs-extra";
 import * as path from "path";
 import log from "electron-log";
 import type { Asset, AssetType } from "@/types/asset_types";
+import { ARB_SEPOLIA_ENS_CONTRACTS } from "@/config/joymarketplace";
 import {
   getUserBalances,
   getMarketplaceAssets,
-  getMarketplaceListings,
-  getAIModels,
-  getUserLicenses,
   getUserPurchases,
 } from "@/lib/subgraph_client";
 
@@ -322,7 +322,7 @@ export function registerOnchainAssetBridgeHandlers() {
 
       // Convert to local asset
       const asset = tokenToLocalAsset(tokenId, metadata, {
-        contractAddress: "0xb099296fe65a2185731aC8B1411A56175e6Be47a",
+        contractAddress: ARB_SEPOLIA_ENS_CONTRACTS.platformDrop,
         owner: walletAddress,
       });
 
@@ -380,9 +380,9 @@ export function registerOnchainAssetBridgeHandlers() {
 
           // Invoke the single import handler logic inline
           const asset = tokenToLocalAsset(balance.tokenId, metadata, {
-            contractAddress: "0xb099296fe65a2185731aC8B1411A56175e6Be47a",
+            contractAddress: ARB_SEPOLIA_ENS_CONTRACTS.platformDrop,
             owner: walletAddress,
-            price: balance.token?.pricePerToken,
+            price: balance.token?.pricePerToken ?? undefined,
             totalClaimed: balance.totalClaimed,
           });
 
@@ -456,48 +456,50 @@ export function registerOnchainAssetBridgeHandlers() {
     ) => {
       logger.info(`Agent ${params.agentId} browsing marketplace`, params);
 
-      const listings = await getMarketplaceListings({
-        activeOnly: true,
-        first: params.first ?? 50,
-      });
+      // Reads the live drop subgraph. This used to call getMarketplaceListings,
+      // an entity of the retired MarketplaceV3 subgraph on Polygon Amoy — the
+      // endpoint 404s and nothing on Arbitrum indexes `listings`.
+      //
+      // The on-chain catalogue carries no name or asset type; those live in the
+      // token's IPFS metadata. Name/type filtering therefore cannot be done
+      // here, and asking for it returns an explicit note rather than silently
+      // ignoring the filter and implying the result set was filtered.
+      const { listDrops } = await import("@/lib/joymarketplace/drop_subgraph");
+      const { items } = await listDrops({ pageSize: Math.min(params.first ?? 50, 100) });
 
-      // Filter by query and asset type
-      let filtered = listings;
-      if (params.assetType) {
-        filtered = filtered.filter(
-          (l) => l.asset?.assetType?.toLowerCase() === params.assetType!.toLowerCase(),
-        );
-      }
-      if (params.query) {
-        const q = params.query.toLowerCase();
-        filtered = filtered.filter(
-          (l) =>
-            l.asset?.name?.toLowerCase().includes(q) ||
-            l.asset?.assetType?.toLowerCase().includes(q),
-        );
-      }
-      if (params.maxPrice !== undefined) {
-        filtered = filtered.filter(
-          (l) => parseFloat(l.effectivePrice || l.pricePerItem || "0") / 1e18 <= params.maxPrice!,
-        );
-      }
+      const priced = items.map((t) => ({
+        id: t.id,
+        tokenId: t.tokenId,
+        contract: (t as { contract?: string }).contract,
+        baseURI: t.baseURI,
+        // pricePerToken is in the smallest unit of `currency`; USDC is 6dp.
+        pricePerToken: t.pricePerToken,
+        currency: t.currency,
+        maxClaimableSupply: t.maxClaimableSupply,
+        supplyClaimed: t.supplyClaimed,
+        totalPurchases: t.totalPurchases,
+        lazyMintedAt: t.lazyMintedAt,
+      }));
+
+      const filtered =
+        params.maxPrice !== undefined
+          ? priced.filter(
+              (t) => Number(t.pricePerToken ?? "0") / 1e6 <= params.maxPrice!,
+            )
+          : priced;
 
       return {
         agentId: params.agentId,
         resultCount: filtered.length,
-        listings: filtered.map((l) => ({
-          listingId: l.listingId,
-          tokenId: l.tokenId,
-          seller: l.seller,
-          price: parseFloat(l.pricePerItem || "0") / 1e18,
-          effectivePrice: parseFloat(l.effectivePrice || l.pricePerItem || "0") / 1e18,
-          hasDiscount: l.hasDiscount,
-          assetName: l.asset?.name,
-          assetType: l.asset?.assetType,
-          creator: l.asset?.creator,
-          verificationScore: l.asset?.verificationScore,
-          publisherReputation: l.asset?.publisher?.reputationScore,
-        })),
+        listings: filtered,
+        ...(params.query || params.assetType
+          ? {
+              note:
+                "query/assetType filters were not applied: the drop subgraph indexes " +
+                "no name or type — both live in each token's IPFS metadata. Fetch " +
+                "baseURI to filter client-side.",
+            }
+          : {}),
       };
     },
   );
@@ -680,25 +682,33 @@ export function registerOnchainAssetBridgeHandlers() {
   ipcMain.handle(
     "agent-market:browse-models",
     async (_, params?: { verified?: boolean; first?: number }) => {
-      const models = await getAIModels({
-        verified: params?.verified,
-        first: params?.first ?? 50,
+      // Same repoint as agent-market:browse. `getAIModels` read an `aimodels`
+      // entity that only ever existed on the retired MarketplaceV3 subgraph;
+      // Arbitrum indexes tokens, not typed models. Verification status and
+      // quality scores were properties of that schema and have no on-chain
+      // equivalent here, so they are omitted rather than faked.
+      const { listDrops } = await import("@/lib/joymarketplace/drop_subgraph");
+      const { items } = await listDrops({
+        pageSize: Math.min(params?.first ?? 50, 100),
+        orderBy: "totalPurchases",
+        orderDirection: "desc",
       });
 
       return {
-        count: models.length,
-        models: models.map((m) => ({
-          tokenId: m.tokenId,
-          name: m.name,
-          creator: m.creator,
-          category: m.category,
-          licenseType: m.licenseType,
-          verified: m.verified,
-          qualityScore: m.qualityScore,
-          usageCount: m.usageCount,
-          totalRevenue: m.totalLicenseRevenue,
-          recentLicenses: m.licenses?.length || 0,
+        count: items.length,
+        models: items.map((t) => ({
+          tokenId: t.tokenId,
+          contract: (t as { contract?: string }).contract,
+          baseURI: t.baseURI,
+          pricePerToken: t.pricePerToken,
+          currency: t.currency,
+          totalPurchases: t.totalPurchases,
+          supplyClaimed: t.supplyClaimed,
         })),
+        note:
+          "Asset type, verification and quality score are not indexed on-chain — " +
+          "read each token's baseURI metadata for those. Results are ordered by " +
+          "purchase count.",
       };
     },
   );
@@ -710,17 +720,19 @@ export function registerOnchainAssetBridgeHandlers() {
     "agent-market:my-licenses",
     async (_, walletAddress: string) => {
       if (!walletAddress) throw new Error("walletAddress required");
-      const licenses = await getUserLicenses(walletAddress);
+      // A "licence" is a claimed edition. The old `getUserLicenses` read a
+      // MarketplaceV3 entity that no longer exists; claims are what the drop
+      // subgraph actually records.
+      const { listClaimsByBuyer } = await import("@/lib/joymarketplace/drop_subgraph");
+      const claims = await listClaimsByBuyer({ buyer: walletAddress, pageSize: 100 });
       return {
-        count: licenses.length,
-        licenses: licenses.map((l) => ({
-          modelTokenId: l.model?.tokenId,
-          modelName: l.model?.name,
-          licenseType: l.licenseType,
-          amount: l.amount,
-          expiresAt: l.expiresAt,
-          modelCategory: l.model?.category,
-          modelVerified: l.model?.verified,
+        count: claims.length,
+        licenses: claims.map((c) => ({
+          tokenId: c.tokenId,
+          contract: (c as { contract?: string }).contract,
+          quantity: c.quantity,
+          claimedAt: c.timestamp,
+          txHash: c.txHash,
         })),
       };
     },

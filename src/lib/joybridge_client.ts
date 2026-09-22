@@ -87,6 +87,10 @@ export interface PublishAssetInput {
   license?: string;
   /** Tier index (matches the publish-asset edge function). */
   tier?: number;
+  /** Maximum number of licenses claimable from the edition. */
+  quantity?: number;
+  /** Additional on-chain metadata, including the selected store slug. */
+  properties?: Record<string, unknown>;
 }
 
 export interface Asset {

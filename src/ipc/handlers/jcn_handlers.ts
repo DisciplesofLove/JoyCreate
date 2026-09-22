@@ -750,7 +750,10 @@ export function registerJcnHandlers(): void {
       return jcnPublishStateMachine.retry(params.id);
     }
     
-    throw new Error("Job recovery not implemented");
+    throw new Error(
+      "Job recovery is not implemented yet (experimental). " +
+        "Re-submit the job instead; publish recovery is supported via type=\"publish\".",
+    );
   });
   
   // =========================================================================

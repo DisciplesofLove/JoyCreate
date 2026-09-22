@@ -14,9 +14,13 @@ import {
   getStoredInfo,
   type JoyWalletInfo,
 } from "../../joy_wallet";
-import type { WalletAdapter } from "./joy_wallet_connector";
+// `../joy_wallet_connector`, not `./` — the connector lives one level up, in
+// `lib/wallet/`. Its sibling `coinbase_adapter.ts` has always had this right;
+// this one resolved to nothing, so the adapter's `WalletAdapter` type was `any`
+// and none of its conformance was ever actually checked.
+import type { WalletAdapter } from "../joy_wallet_connector";
 
-const DEFAULT_CHAIN_ID = 80002; // Polygon Amoy
+const DEFAULT_CHAIN_ID = 421614; // Arbitrum Sepolia
 
 export const joyWalletAdapter: WalletAdapter = {
   id: "joywallet",

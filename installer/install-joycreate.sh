@@ -21,6 +21,8 @@ SILENT=0
 FULL=0
 NO_COMPANIONS=0
 SKIP_MODEL=0
+FORCE_APPIMAGE=0
+INSTALLED_BIN=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -28,9 +30,13 @@ for arg in "$@"; do
     --full)           FULL=1 ;;
     --no-companions)  NO_COMPANIONS=1 ;;
     --skip-model)     SKIP_MODEL=1 ;;
+    --appimage)       FORCE_APPIMAGE=1 ;;
     -h|--help)
       cat <<EOF
-Usage: ./install-joycreate.sh [--full|--no-companions|--silent] [--skip-model]
+Usage: ./install-joycreate.sh [--full|--no-companions|--silent] [--skip-model] [--appimage]
+
+  --appimage   Install the AppImage into your home directory instead of the
+               .deb/.rpm. Needs no root and works on any distro.
 EOF
       exit 0
       ;;
@@ -85,12 +91,11 @@ cat <<'BANNER'
 
 BANNER
 
-if [ -z "$PM" ]; then
-  fail "Could not detect a supported package manager (apt/dnf/yum/zypper/pacman)."
-  echo "   Install the .deb or .rpm in this folder manually."
-  exit 1
+if [ -n "$PM" ]; then
+  echo "    Detected package manager: $PM"
+else
+  echo "    No apt/dnf/yum/zypper found -- will use the AppImage."
 fi
-echo "    Detected package manager: $PM"
 
 # ---------------------------------------------------------------------------
 # 1. Install JoyCreate package
@@ -99,34 +104,76 @@ step "Installing JoyCreate..."
 
 DEB_PKG=$(ls "$SCRIPT_DIR"/joycreate*.deb 2>/dev/null | head -n1 || true)
 RPM_PKG=$(ls "$SCRIPT_DIR"/joycreate*.rpm 2>/dev/null | head -n1 || true)
+APPIMAGE=$(ls "$SCRIPT_DIR"/*.AppImage 2>/dev/null | head -n1 || true)
 
-case "$PM" in
-  apt)
-    [ -z "$DEB_PKG" ] && { fail "No joycreate*.deb found next to this script."; exit 1; }
-    $SUDO apt-get update -qq || true
-    $SUDO apt-get install -y "$DEB_PKG"
-    ;;
-  dnf)
-    [ -z "$RPM_PKG" ] && { fail "No joycreate*.rpm found next to this script."; exit 1; }
-    $SUDO dnf install -y "$RPM_PKG"
-    ;;
-  yum)
-    [ -z "$RPM_PKG" ] && { fail "No joycreate*.rpm found next to this script."; exit 1; }
-    $SUDO yum install -y "$RPM_PKG"
-    ;;
-  zypper)
-    [ -z "$RPM_PKG" ] && { fail "No joycreate*.rpm found next to this script."; exit 1; }
-    $SUDO zypper --non-interactive install --allow-unsigned-rpm "$RPM_PKG"
-    ;;
-  pacman)
-    if [ -n "$DEB_PKG" ] || [ -n "$RPM_PKG" ]; then
-      warn "Arch/pacman detected. Convert the .deb/.rpm with 'debtap' or 'rpmextract' or build an AUR package."
-    fi
-    fail "No native Arch package shipped. Aborting."
+# The AppImage is the fallback for every distro the .deb and .rpm do not cover
+# (Arch, Gentoo, NixOS, Void...). It installs into the home directory, so it
+# needs no root either. Previously the script simply aborted on those systems.
+install_appimage() {
+  if [ -z "$APPIMAGE" ]; then
+    fail "No package for this system: no matching .deb/.rpm and no .AppImage in $SCRIPT_DIR."
     exit 1
-    ;;
-esac
-ok "JoyCreate installed."
+  fi
+  local bin_dir="$HOME/.local/bin" app_dir="$HOME/.local/share/applications"
+  mkdir -p "$bin_dir" "$app_dir"
+  cp "$APPIMAGE" "$bin_dir/JoyCreate.AppImage"
+  chmod +x "$bin_dir/JoyCreate.AppImage"
+  cat > "$app_dir/joycreate.desktop" <<DESKTOP
+[Desktop Entry]
+Name=JoyCreate
+Comment=Free, local, open-source AI app builder
+Exec="$bin_dir/JoyCreate.AppImage" %U
+Terminal=false
+Type=Application
+Categories=Development;
+MimeType=x-scheme-handler/joycreate;
+DESKTOP
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$app_dir" 2>/dev/null || true
+  fi
+  if ! command -v fusermount >/dev/null 2>&1 && ! command -v fusermount3 >/dev/null 2>&1; then
+    warn "FUSE is not installed, and AppImages need it to start."
+    warn "Install it (Debian/Ubuntu: sudo apt-get install -y libfuse2  Arch: sudo pacman -S fuse2),"
+    warn "or launch with:  APPIMAGE_EXTRACT_AND_RUN=1 $bin_dir/JoyCreate.AppImage"
+  fi
+  INSTALLED_BIN="$bin_dir/JoyCreate.AppImage"
+  ok "JoyCreate AppImage installed to $INSTALLED_BIN"
+}
+
+if [ "$FORCE_APPIMAGE" = 1 ]; then
+  install_appimage
+else
+  case "$PM" in
+    apt)
+      if [ -n "$DEB_PKG" ]; then
+        $SUDO apt-get update -qq || true
+        $SUDO apt-get install -y "$DEB_PKG"
+        ok "JoyCreate installed."
+      else
+        install_appimage
+      fi
+      ;;
+    dnf|yum)
+      if [ -n "$RPM_PKG" ]; then
+        $SUDO "$PM" install -y "$RPM_PKG"
+        ok "JoyCreate installed."
+      else
+        install_appimage
+      fi
+      ;;
+    zypper)
+      if [ -n "$RPM_PKG" ]; then
+        $SUDO zypper --non-interactive install --allow-unsigned-rpm "$RPM_PKG"
+        ok "JoyCreate installed."
+      else
+        install_appimage
+      fi
+      ;;
+    *)
+      install_appimage
+      ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Optional companions
@@ -182,7 +229,9 @@ fi
 # 3. Launch
 # ---------------------------------------------------------------------------
 step "Launching JoyCreate..."
-if command -v joycreate >/dev/null 2>&1; then
+if [ -n "$INSTALLED_BIN" ]; then
+  ("$INSTALLED_BIN" >/dev/null 2>&1 &) || true
+elif command -v joycreate >/dev/null 2>&1; then
   (joycreate >/dev/null 2>&1 &) || true
 elif command -v JoyCreate >/dev/null 2>&1; then
   (JoyCreate >/dev/null 2>&1 &) || true

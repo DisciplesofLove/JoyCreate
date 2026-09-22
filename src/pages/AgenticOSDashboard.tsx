@@ -15,7 +15,16 @@ import {
   useStartAllServices,
   useStopAllServices,
 } from "@/hooks/use_system_dashboard";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCreatorOverview } from "@/hooks/use_creator_dashboard";
+import { IpcClient } from "@/ipc/ipc_client";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +64,7 @@ import {
   BarChart3,
   Target,
   Rocket,
+  Loader2,
 } from "lucide-react";
 
 interface Agent {
@@ -136,6 +146,46 @@ export function AgenticOSDashboard() {
       { agentId: id, status: 'active' },
       { onSuccess: () => toast.success("Agent activated") },
     );
+  };
+
+  /**
+   * Activate every dormant agent.
+   *
+   * The Quick Action for this used to raise "Activating all dormant agents..."
+   * and stop there, with a comment saying the real call belonged in production
+   * — while `setAgentStatus`, the mutation it needed, was already in this
+   * component and already used by the per-agent button two lines up. The toast
+   * was the only part that ever ran, so the count afterwards never changed.
+   */
+  const handleActivateAllDormant = () => {
+    const dormant = agents.filter((a) => a.status === 'dormant');
+    if (dormant.length === 0) {
+      toast.info("No dormant agents to activate");
+      return;
+    }
+    let done = 0;
+    let failed = 0;
+    for (const agent of dormant) {
+      setAgentStatus.mutate(
+        { agentId: agent.id, status: 'active' },
+        {
+          onSuccess: () => {
+            done++;
+            // Report once, when the last one settles, rather than firing a
+            // toast per agent and burying the screen on a large fleet.
+            if (done + failed === dormant.length) {
+              toast.success(`Activated ${done} agent${done === 1 ? "" : "s"}`);
+            }
+          },
+          onError: () => {
+            failed++;
+            if (done + failed === dormant.length) {
+              toast.error(`Activated ${done}, failed ${failed}`);
+            }
+          },
+        },
+      );
+    }
   };
 
   const activeAgents = agents.filter(a => a.status === 'active').length;
@@ -397,10 +447,8 @@ export function AgenticOSDashboard() {
                 <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
                   <Button 
                     className="h-auto p-4 flex flex-col items-center gap-2 bg-gradient-to-br from-green-500 to-emerald-500 text-white"
-                    onClick={() => {
-                      toast.success("Activating all dormant agents...");
-                      // In production, this would call the actual activation API
-                    }}
+                    onClick={handleActivateAllDormant}
+                    disabled={setAgentStatus.isPending}
                   >
                     <Play className="h-5 w-5" />
                     <span>Activate All Agents</span>
@@ -826,76 +874,170 @@ function MarketplaceManagement() {
 }
 
 // CI/CD Management Component
+/**
+ * Deployments.
+ *
+ * This panel used to describe a CI/CD system JoyCreate does not have:
+ * hardcoded "Passed" badges for build tests, a security scan and a Docker
+ * build that never ran, three environments at invented URLs, and a "Deploy to
+ * Production" button whose handler was a toast plus a comment saying the real
+ * call belonged in production. Every value on it was written by hand.
+ *
+ * What the app really does is deploy built apps to decentralized hosts —
+ * 4everland, Fleek, IPFS, Arweave — through `decentralized:deploy`, keeping a
+ * record of each one. That is what this shows: real deployments, the CIDs and
+ * URLs they produced, and a button that performs one.
+ */
 function CICDManagement() {
+  const ipc = IpcClient.getInstance();
+  const queryClient = useQueryClient();
+
+  const { data: apps } = useQuery({
+    queryKey: ["apps-for-deploy"],
+    queryFn: () => ipc.listApps(),
+  });
+
+  const { data: deployments = [], isLoading } = useQuery({
+    queryKey: ["decentralized-deployments"],
+    queryFn: () => ipc.invoke("decentralized:get-deployments"),
+  });
+
+  const [deployAppId, setDeployAppId] = useState<string>("");
+  const [platform, setPlatform] = useState<string>("ipfs");
+
+  const deployMut = useMutation({
+    mutationFn: (input: { appId: number; platform: string }) =>
+      ipc.invoke("decentralized:deploy", input),
+    onSuccess: (d: any) => {
+      toast.success(`Deployed to ${d?.platform ?? platform}`, {
+        description: d?.url,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["decentralized-deployments"],
+      });
+    },
+    onError: (err: unknown) =>
+      toast.error(
+        `Deploy failed: ${err instanceof Error ? err.message : String(err)}`,
+      ),
+  });
+
+  // `listApps` returns { apps, appBasePath }, not a bare array.
+  const appList: Array<{ id: number; name: string }> =
+    (apps as { apps?: Array<{ id: number; name: string }> } | undefined)?.apps ?? [];
+  const rows: any[] = Array.isArray(deployments) ? deployments : [];
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold">CI/CD Pipeline</h2>
+          <h2 className="text-lg font-semibold">Deployments</h2>
           <p className="text-sm text-muted-foreground">
-            Production deployment with GitHub Actions, Docker, and blue-green deployment
+            Publish a built app to a decentralized host (IPFS, 4everland, Fleek, Arweave)
           </p>
         </div>
-        <Button 
-          className="bg-gradient-to-r from-blue-500 to-indigo-500 text-white"
-          onClick={() => {
-            toast.success("Deployment pipeline initiated");
-            // In production, this would trigger the actual deployment
-          }}
-        >
-          <Rocket className="h-4 w-4 mr-1" />
-          Deploy to Production
-        </Button>
+        <div className="flex items-center gap-2">
+          <Select value={deployAppId} onValueChange={setDeployAppId}>
+            <SelectTrigger className="w-[180px] h-9 text-xs">
+              <SelectValue placeholder="Choose an app" />
+            </SelectTrigger>
+            <SelectContent>
+              {appList.map((a) => (
+                <SelectItem key={a.id} value={String(a.id)}>
+                  {a.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={platform} onValueChange={setPlatform}>
+            <SelectTrigger className="w-[140px] h-9 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ipfs">IPFS</SelectItem>
+              <SelectItem value="4everland">4everland</SelectItem>
+              <SelectItem value="fleek">Fleek</SelectItem>
+              <SelectItem value="arweave">Arweave</SelectItem>
+            </SelectContent>
+          </Select>
+          {/* Disabled until an app is chosen, rather than deploying "something"
+              and reporting success for a target the user never picked. */}
+          <Button
+            className="bg-gradient-to-r from-blue-500 to-indigo-500 text-white"
+            disabled={!deployAppId || deployMut.isPending}
+            onClick={() =>
+              deployMut.mutate({ appId: Number(deployAppId), platform })
+            }
+          >
+            {deployMut.isPending ? (
+              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+            ) : (
+              <Rocket className="h-4 w-4 mr-1" />
+            )}
+            Deploy
+          </Button>
+        </div>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Deployment Status</CardTitle>
+          <CardTitle className="text-sm">
+            Deployment History
+            {!isLoading && (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                {rows.length}
+              </span>
+            )}
+          </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm">Build Tests</span>
-              <Badge variant="default">✓ Passed</Badge>
+          {isLoading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading...
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm">Security Scan</span>
-              <Badge variant="default">✓ Passed</Badge>
+          ) : rows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nothing deployed yet. Build an app in the App Builder, then deploy it here.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {rows.map((d) => (
+                <div
+                  key={d.id}
+                  className="flex items-center justify-between gap-3 p-2 border rounded-lg"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium capitalize">
+                        {d.platform}
+                      </span>
+                      <Badge
+                        variant={d.status === "deployed" ? "default" : "secondary"}
+                      >
+                        {d.status}
+                      </Badge>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground font-mono truncate max-w-[420px]">
+                      {d.cid ?? d.txId ?? d.url}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground/60">
+                      app #{d.appId} — {new Date(d.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                  {d.url && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-[10px] shrink-0"
+                      onClick={() => window.open(d.url, "_blank")}
+                    >
+                      Open
+                    </Button>
+                  )}
+                </div>
+              ))}
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm">Docker Build</span>
-              <Badge variant="default">✓ Ready</Badge>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm">Production Deploy</span>
-              <Badge variant="secondary">Ready</Badge>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Environment Status</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="p-3 border rounded-lg">
-              <h3 className="font-medium">Development</h3>
-              <Badge variant="default" className="mt-1">Active</Badge>
-              <p className="text-xs text-muted-foreground mt-1">localhost:18793</p>
-            </div>
-            <div className="p-3 border rounded-lg">
-              <h3 className="font-medium">Staging</h3>
-              <Badge variant="secondary" className="mt-1">Ready</Badge>
-              <p className="text-xs text-muted-foreground mt-1">staging.joycreate.ai</p>
-            </div>
-            <div className="p-3 border rounded-lg">
-              <h3 className="font-medium">Production</h3>
-              <Badge variant="secondary" className="mt-1">Ready</Badge>
-              <p className="text-xs text-muted-foreground mt-1">app.joycreate.ai</p>
-            </div>
-          </div>
+          )}
         </CardContent>
       </Card>
     </div>

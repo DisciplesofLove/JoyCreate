@@ -705,6 +705,7 @@ function InferencePlayground() {
     queryKey: ["trustless-models"],
     queryFn: () => trustlessInferenceClient.listModels(),
   });
+  const providerModels = availableModels.filter((model) => model.provider === provider);
 
   // Active conversation query
   const { data: activeConversation } = useQuery({
@@ -1011,7 +1012,7 @@ function InferencePlayground() {
                     <SelectValue placeholder="Select model" />
                   </SelectTrigger>
                   <SelectContent>
-                    {availableModels.map((m) => (
+                    {providerModels.map((m) => (
                       <SelectItem key={m.id} value={m.id}>
                         {m.name}
                       </SelectItem>

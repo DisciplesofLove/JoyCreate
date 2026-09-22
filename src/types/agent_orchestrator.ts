@@ -571,7 +571,7 @@ export const DEFAULT_EXECUTION_CONFIG: ExecutionConfig = {
   apiEndpoints: {},
   useN8n: true,
   localModel: "llama3.2",
-  cloudModel: "claude-sonnet-4-5",
+  cloudModel: "claude-sonnet-5",
 };
 
 export const DEFAULT_COMMUNICATION_CONFIG: CommunicationConfig = {
@@ -579,7 +579,7 @@ export const DEFAULT_COMMUNICATION_CONFIG: CommunicationConfig = {
   cns: {
     preferLocal: true,
     localModel: "llama3.2",
-    cloudModel: "claude-sonnet-4-5",
+    cloudModel: "claude-sonnet-5",
   },
   n8n: {
     enabled: true,

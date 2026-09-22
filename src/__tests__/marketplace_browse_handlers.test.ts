@@ -38,23 +38,21 @@ const baseToken: DropToken = {
 
 // ── tokenMetadataUri ───────────────────────────────────────────────────────
 //
-// ERC-1155 baseURI → per-token metadata URL. baseURI may or may not have a
-// trailing slash; we must produce `<baseURI>/<tokenId>` either way. This is
-// the regression that broke every marketplace page (no metadata loaded →
-// every card showed "Drop #N" with no name/image/description).
+// A trailing slash denotes an ERC-1155 metadata directory. Without one, the
+// URI points directly to the metadata JSON pinned by JoyCreate.
 
 describe("tokenMetadataUri", () => {
   it("appends tokenId to a baseURI that already ends with a slash", () => {
     expect(tokenMetadataUri("ipfs://QmAbc/", "11")).toBe("ipfs://QmAbc/11");
   });
 
-  it("appends tokenId to a baseURI that does NOT end with a slash", () => {
-    expect(tokenMetadataUri("ipfs://QmAbc", "11")).toBe("ipfs://QmAbc/11");
+  it("preserves a direct IPFS metadata URI without a trailing slash", () => {
+    expect(tokenMetadataUri("ipfs://QmAbc", "11")).toBe("ipfs://QmAbc");
   });
 
-  it("works with https baseURIs (with and without trailing slash)", () => {
+  it("preserves direct https URIs and expands directory URIs", () => {
     expect(tokenMetadataUri("https://example.com/meta", "7")).toBe(
-      "https://example.com/meta/7",
+      "https://example.com/meta",
     );
     expect(tokenMetadataUri("https://example.com/meta/", "7")).toBe(
       "https://example.com/meta/7",
@@ -136,7 +134,7 @@ describe("toBrowseItem", () => {
     expect(item.category).toBe("ai-workflow");
     expect(item.pricingModel).toBe("one-time");
     expect(item.price).toBe(1);
-    expect(item.currency).toBe("MATIC");
+    expect(item.currency).toBe("ETH");
     expect(item.downloads).toBe(5);
     expect(item.publisherName).toBe("Joy Creator");
     expect(item.publisherId).toBe("");
@@ -146,6 +144,19 @@ describe("toBrowseItem", () => {
   it("derives free pricing when pricePerToken is null/0", () => {
     expect(toBrowseItem({ ...baseToken, pricePerToken: null }, null).pricingModel).toBe("free");
     expect(toBrowseItem({ ...baseToken, pricePerToken: "0" }, null).pricingModel).toBe("free");
+  });
+
+  it("formats canonical Arbitrum Sepolia USDC with six decimals", () => {
+    const item = toBrowseItem(
+      {
+        ...baseToken,
+        pricePerToken: "1500000",
+        currency: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+      },
+      null,
+    );
+    expect(item.price).toBe(1.5);
+    expect(item.currency).toBe("USDC");
   });
 
   it("uses metadata fields when present", () => {
@@ -224,6 +235,14 @@ describe("toAssetDetail", () => {
     expect(detail.changelog).toBe("Initial release");
     // screenshots must be rewritten through the IPFS gateway
     expect(detail.screenshotUrls[0]).toBe("https://ipfs.io/ipfs/QmShot1");
+  });
+
+  it("normalizes the publish wizard's top-level SPDX license", () => {
+    const detail = toAssetDetail(baseToken, {
+      name: "Licensed Asset",
+      license: "CC-BY-4.0",
+    });
+    expect(detail.license).toBe("cc-by-4.0");
   });
 
   it("falls back to safe defaults when metadata is null", () => {

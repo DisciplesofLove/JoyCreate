@@ -45,9 +45,17 @@ export interface DiscordBotStatus {
 // Service
 // ---------------------------------------------------------------------------
 
-class DiscordBotService extends EventEmitter {
-  private static instance: DiscordBotService;
+/**
+ * Process-global singleton key. See the note in telegram_bot_service.ts: the
+ * main-process bundle can load this module under two chunk identities (static
+ * `import` vs dynamic `await import()`), and electron-forge's Vite build does
+ * NOT dedupe them. A `private static instance` field would then exist twice,
+ * producing two Discord clients logging in on the same token. Pinning the
+ * instance on `globalThis` guarantees a single bot.
+ */
+const DISCORD_BOT_SINGLETON = Symbol.for("joycreate.discordBotService");
 
+class DiscordBotService extends EventEmitter {
   private config: DiscordBotConfig = { token: "", enabled: false };
   private client: any = null; // discord.js Client — lazy loaded
   private running = false;
@@ -68,10 +76,11 @@ class DiscordBotService extends EventEmitter {
   }
 
   static getInstance(): DiscordBotService {
-    if (!DiscordBotService.instance) {
-      DiscordBotService.instance = new DiscordBotService();
+    const g = globalThis as Record<symbol, DiscordBotService | undefined>;
+    if (!g[DISCORD_BOT_SINGLETON]) {
+      g[DISCORD_BOT_SINGLETON] = new DiscordBotService();
     }
-    return DiscordBotService.instance;
+    return g[DISCORD_BOT_SINGLETON]!;
   }
 
   // =========================================================================

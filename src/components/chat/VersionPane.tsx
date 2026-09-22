@@ -2,7 +2,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { selectedAppIdAtom, selectedVersionIdAtom } from "@/atoms/appAtoms";
 import { useVersions } from "@/hooks/useVersions";
 import { formatDistanceToNow } from "date-fns";
-import { RotateCcw, X, Database, Loader2 } from "lucide-react";
+import { RotateCcw, X, Database, Loader2, FileDiff } from "lucide-react";
 import type { Version } from "@/ipc/ipc_types";
 import { cn } from "@/lib/utils";
 import { useEffect, useRef, useState } from "react";
@@ -13,6 +13,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { VersionDiffDialog } from "./VersionDiffDialog";
 
 import { useRunApp } from "@/hooks/useRunApp";
 
@@ -38,6 +39,10 @@ export function VersionPane({ isVisible, onClose }: VersionPaneProps) {
   const { checkoutVersion, isCheckingOutVersion } = useCheckoutVersion();
   const wasVisibleRef = useRef(false);
   const [cachedVersions, setCachedVersions] = useState<Version[]>([]);
+  const [diffVersion, setDiffVersion] = useState<{
+    oid: string;
+    label: string;
+  } | null>(null);
 
   useEffect(() => {
     async function updatePaneState() {
@@ -103,7 +108,8 @@ export function VersionPane({ isVisible, onClose }: VersionPaneProps) {
   const versions = cachedVersions.length > 0 ? cachedVersions : liveVersions;
 
   return (
-    <div className="h-full border-t border-2 border-border w-full">
+    <>
+      <div className="h-full border-t border-2 border-border w-full">
       <div className="p-2 border-b border-border flex items-center justify-between">
         <h2 className="text-base font-medium pl-2">Version History</h2>
         <div className="flex items-center gap-2">
@@ -220,6 +226,25 @@ export function VersionPane({ isVisible, onClose }: VersionPaneProps) {
                   )}
 
                   <div className="flex items-center gap-1">
+                    {/* View diff button */}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDiffVersion({
+                              oid: version.oid,
+                              label: `Version ${versions.length - index} (${version.oid.slice(0, 7)})`,
+                            });
+                          }}
+                          className="mt-1 flex items-center gap-1 px-2 py-0.5 text-sm font-medium hover:bg-(--background-lightest) rounded-md transition-colors"
+                          aria-label="View changes in this version"
+                        >
+                          <FileDiff size={12} />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>View changes in this version</TooltipContent>
+                    </Tooltip>
                     {/* Restore button */}
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -270,5 +295,15 @@ export function VersionPane({ isVisible, onClose }: VersionPaneProps) {
         )}
       </div>
     </div>
+      <VersionDiffDialog
+        appId={appId}
+        versionId={diffVersion?.oid ?? null}
+        versionLabel={diffVersion?.label}
+        open={diffVersion !== null}
+        onOpenChange={(o) => {
+          if (!o) setDiffVersion(null);
+        }}
+      />
+    </>
   );
 }

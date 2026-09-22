@@ -10,8 +10,11 @@ import {
   type WalletAdapter,
 } from "../joy_wallet_connector";
 
-const POLYGON_AMOY_ID = 80002;
-const POLYGON_AMOY_RPC = "https://rpc-amoy.polygon.technology";
+// Arbitrum Sepolia is the only chain this app transacts on. This used to
+// default to Polygon Amoy (80002), so a freshly connected wallet landed on a
+// chain the marketplace no longer uses.
+const ARBITRUM_SEPOLIA_ID = 421614;
+const ARBITRUM_SEPOLIA_RPC = "https://sepolia-rollup.arbitrum.io/rpc";
 
 type CbProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -28,7 +31,7 @@ function getProviderInstance(): CbProvider {
     sdk = new CoinbaseWalletSDK({
       appName: "JoyCreate",
       appLogoUrl: "https://joycreate.io/icon.png",
-      appChainIds: [POLYGON_AMOY_ID, 1, 137],
+      appChainIds: [ARBITRUM_SEPOLIA_ID],
     });
   }
   // makeWeb3Provider returns the EIP-1193 provider.
@@ -51,7 +54,7 @@ export const coinbaseAdapter: WalletAdapter = {
     if (!accounts || accounts.length === 0) {
       throw new Error("Coinbase Wallet returned no accounts");
     }
-    let chainId = POLYGON_AMOY_ID;
+    let chainId = ARBITRUM_SEPOLIA_ID;
     try {
       const cidHex = (await eip.request({ method: "eth_chainId" })) as string;
       chainId = parseInt(cidHex, 16);
@@ -92,4 +95,4 @@ export const coinbaseAdapter: WalletAdapter = {
 };
 
 // Silence unused-rpc warning.
-void POLYGON_AMOY_RPC;
+void ARBITRUM_SEPOLIA_RPC;

@@ -152,7 +152,7 @@ const realInvoker: AgentInvoker = async ({
   ).selectedChatModel;
   const llm: LargeLanguageModel = {
     provider: (selectedRaw?.provider ?? "auto") as LargeLanguageModel["provider"],
-    name: modelId ?? selectedRaw?.name ?? "claude-sonnet-4-5",
+    name: modelId ?? selectedRaw?.name ?? "claude-sonnet-5",
   };
   const { modelClient } = await getModelClient(llm, settings);
 

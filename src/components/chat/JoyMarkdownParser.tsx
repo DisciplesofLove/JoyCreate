@@ -11,6 +11,9 @@ import { JoyEdit } from "./JoyEdit";
 import { JoySearchReplace } from "./JoySearchReplace";
 import { JoyCodebaseContext } from "./JoyCodebaseContext";
 import { JoyThink } from "./JoyThink";
+import { JoyTodos } from "./JoyTodos";
+import { JoyCopy } from "./JoyCopy";
+import { JoyExplore } from "./JoyExplore";
 import { CodeHighlight } from "./CodeHighlight";
 import { useAtomValue } from "jotai";
 import { isStreamingByIdAtom, selectedChatIdAtom } from "@/atoms/chatAtoms";
@@ -39,16 +42,19 @@ import { FixAllErrorsButton } from "./FixAllErrorsButton";
 const CUSTOM_TAG_NAMES = [
   "joy-write",
   "joy-rename",
+  "joy-copy",
   "joy-delete",
   "joy-add-dependency",
   "joy-execute-sql",
   "joy-add-integration",
   "joy-output",
+  "joy-todos",
   "joy-problem-report",
   "joy-chat-summary",
   "joy-edit",
   "joy-search-replace",
   "joy-codebase-context",
+  "joy-explore",
   "joy-web-search-result",
   "joy-web-search",
   "joy-web-crawl",
@@ -407,6 +413,44 @@ function renderCustomTag(
         >
           {content}
         </JoyThink>
+      );
+    case "joy-todos":
+      return (
+        <JoyTodos
+          node={{
+            properties: {
+              state: getState({ isStreaming, inProgress }),
+            },
+          }}
+        >
+          {content}
+        </JoyTodos>
+      );
+    case "joy-copy":
+      return (
+        <JoyCopy
+          node={{
+            properties: {
+              from: attributes.from || "",
+              to: attributes.to || "",
+            },
+          }}
+        >
+          {content}
+        </JoyCopy>
+      );
+    case "joy-explore":
+      return (
+        <JoyExplore
+          node={{
+            properties: {
+              query: attributes.query || "",
+              state: getState({ isStreaming, inProgress }),
+            },
+          }}
+        >
+          {content}
+        </JoyExplore>
       );
     case "joy-write":
       return (

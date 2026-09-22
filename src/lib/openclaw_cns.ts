@@ -128,9 +128,14 @@ export interface AIResponse {
 // OPENCLAW CENTRAL NERVOUS SYSTEM
 // =============================================================================
 
+/**
+ * Process-global singleton key. See telegram_bot_service.ts: guards against the
+ * Vite static-vs-dynamic-import chunk-duplication bug that would otherwise fork
+ * the CNS "brain" into two instances with divergent stats and routing state.
+ */
+const OPENCLAW_CNS_SINGLETON = Symbol.for("joycreate.openclawCNS");
+
 export class OpenClawCNS extends EventEmitter {
-  private static instance: OpenClawCNS;
-  
   private config: CNSConfig = {
     enabled: true,
     ollama: {},
@@ -161,10 +166,11 @@ export class OpenClawCNS extends EventEmitter {
   }
   
   static getInstance(): OpenClawCNS {
-    if (!OpenClawCNS.instance) {
-      OpenClawCNS.instance = new OpenClawCNS();
+    const g = globalThis as Record<symbol, OpenClawCNS | undefined>;
+    if (!g[OPENCLAW_CNS_SINGLETON]) {
+      g[OPENCLAW_CNS_SINGLETON] = new OpenClawCNS();
     }
-    return OpenClawCNS.instance;
+    return g[OPENCLAW_CNS_SINGLETON]!;
   }
   
   // ===========================================================================
@@ -548,7 +554,7 @@ export class OpenClawCNS extends EventEmitter {
     
     // Check if local is available
     if (!ollamaBridge.isOllamaAvailable()) {
-      return { useLocal: false, model: "claude-sonnet-4-5", provider: "cloud" };
+      return { useLocal: false, model: "claude-sonnet-5", provider: "cloud" };
     }
     
     // Check channel routing
@@ -558,7 +564,7 @@ export class OpenClawCNS extends EventEmitter {
         return { useLocal: true, model: this.getLocalModel(request), provider: "ollama" };
       }
       if (channelRoute === "cloud") {
-        return { useLocal: false, model: "claude-sonnet-4-5", provider: "cloud" };
+        return { useLocal: false, model: "claude-sonnet-5", provider: "cloud" };
       }
     }
     
@@ -568,7 +574,7 @@ export class OpenClawCNS extends EventEmitter {
         useLocal: request.options.preferLocal,
         model: request.options.preferLocal
           ? this.getLocalModel(request)
-          : "claude-sonnet-4-5",
+          : "claude-sonnet-5",
         provider: request.options.preferLocal ? "ollama" : "cloud",
       };
     }

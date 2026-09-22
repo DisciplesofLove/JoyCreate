@@ -74,6 +74,7 @@ export default function JoyPublishPage() {
   const [description, setDescription] = useState("");
   const [license, setLicense] = useState<string>("CC-BY-4.0");
   const [priceDollars, setPriceDollars] = useState<string>("0");
+  const [licenseSupply, setLicenseSupply] = useState<string>("1000");
   const [royaltyPct, setRoyaltyPct] = useState<string>("5");
   const [tier, setTier] = useState<string>("0");
   const [contentCid, setContentCid] = useState<string>(
@@ -167,6 +168,7 @@ export default function JoyPublishPage() {
     setError(null);
     try {
       const ipc = IpcClient.getInstance();
+      const selectedStore = stores.find((store) => store.id === storeId);
       const input: PublishAssetInput = {
         storeId,
         assetType,
@@ -177,6 +179,13 @@ export default function JoyPublishPage() {
         royaltyBps: Math.round(Number(royaltyPct) * 100),
         license,
         tier: Number(tier) || 0,
+        quantity: Math.min(Math.max(Math.floor(Number(licenseSupply) || 1), 1), 1_000_000),
+        properties: {
+          storeSlug: selectedStore?.slug,
+          storeNode: /^0x[0-9a-fA-F]{64}$/.test(selectedStore?.id ?? "")
+            ? selectedStore?.id
+            : undefined,
+        },
       };
       const res = (await ipc.invoke(
         "joybridge:publish-asset",
@@ -377,7 +386,7 @@ export default function JoyPublishPage() {
           )}
 
           {step === 3 && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
                 <Label>Price (USDC)</Label>
                 <Input
@@ -390,6 +399,17 @@ export default function JoyPublishPage() {
                 <p className="text-xs text-muted-foreground mt-1">
                   0 = free
                 </p>
+              </div>
+              <div>
+                <Label>License supply</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={1_000_000}
+                  step={1}
+                  value={licenseSupply}
+                  onChange={(e) => setLicenseSupply(e.target.value)}
+                />
               </div>
               <div>
                 <Label>Royalty %</Label>

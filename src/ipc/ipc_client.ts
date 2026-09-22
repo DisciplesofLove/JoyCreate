@@ -60,6 +60,8 @@ import type {
   GetNeonProjectResponse,
   RevertVersionResponse,
   RevertVersionParams,
+  GetVersionDiffParams,
+  GitDiffResult,
   RespondToAppInputParams,
   PromptDto,
   CreatePromptParamsDto,
@@ -86,6 +88,8 @@ import type {
   VideoStudioVideo,
   VideoStudioProvider,
   VideoProject,
+  SubscriptionCliInfo,
+  SubscriptionCliDetection,
 } from "./ipc_types";
 import type { VideoTimeline } from "@/lib/video/timeline_types";
 import type { ConsoleEntry } from "../atoms/appAtoms";
@@ -103,8 +107,6 @@ import type {
 import { showError } from "@/lib/toast";
 import { DeepLinkData } from "./deep_link_data";
 import type {
-  CollectionId,
-  ModelId,
   VectorCollection,
   VectorDocument,
   VectorSearchRequest,
@@ -134,6 +136,8 @@ import type {
   MyClaimsParams,
   OwnershipParams,
   CreatorRevenueSummary,
+  ClaimMarketplaceAssetRequest,
+  ClaimMarketplaceAssetResult,
 } from "@/types/publish_types";
 
 export interface ChatStreamCallbacks {
@@ -289,39 +293,129 @@ interface DeleteCustomModelParams {
   modelApiName: string;
 }
 
-export type StudioJobKind = "generate-video" | "render" | "voiceover";
-export type StudioJobStatus =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "canceled";
+export type BackupKind = "full" | "database" | "config";
 
-/** Lifecycle event pushed over `studio:job-progress`. */
-export interface StudioJobEvent {
+export interface BackupEntry {
   id: string;
-  kind: StudioJobKind;
-  provider?: string | null;
-  status: StudioJobStatus;
-  progress: number;
-  result?: Record<string, unknown> | null;
-  error?: string | null;
+  name: string;
+  kind: BackupKind;
+  createdAt: string;
+  sizeBytes: number;
+  includes: string[];
+  databaseSha256?: string;
+  appVersion?: string;
+  /** Written automatically on a version upgrade rather than by the user. */
+  legacy?: boolean;
+  error?: string;
 }
 
-/** Persisted studio job row returned by the query handlers. */
-export interface StudioJobDto {
+export interface PendingRestore {
+  backupId: string;
+  requestedAt: string;
+}
+
+export interface AuditQuery {
+  search?: string;
+  actorType?: "user" | "system" | "admin";
+  targetType?: "publish" | "job" | "bundle" | "license" | "key" | "config";
+  startTime?: number;
+  endTime?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface AuditRow {
   id: string;
-  kind: StudioJobKind;
-  provider: string | null;
-  status: StudioJobStatus;
-  progress: number;
-  params: Record<string, unknown> | null;
-  result: Record<string, unknown> | null;
-  error: string | null;
-  createdAt: number;
-  updatedAt: number;
-  startedAt: number | null;
-  finishedAt: number | null;
+  timestamp: string;
+  action: string;
+  actorType: "user" | "system" | "admin";
+  actorId: string;
+  actorWallet: string | null;
+  targetType: string;
+  targetId: string;
+  oldStateJson: unknown;
+  newStateJson: unknown;
+  requestId: string | null;
+  traceId: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+}
+
+export interface AuditStats {
+  total: number;
+  byActor: Record<string, number>;
+  byTarget: Record<string, number>;
+  newest: string | null;
+  oldest: string | null;
+}
+
+export type PublishAssetType =
+  | "app"
+  | "agent"
+  | "document"
+  | "image"
+  | "video"
+  | "model"
+  | "blueprint"
+  | "workflow"
+  | "dataset";
+
+export interface StoreCheck {
+  publishable: boolean;
+  store: string;
+  storeDomain: string;
+  /** Per-store DropERC1155 clone the edition will be minted on. */
+  dropAddress: string;
+  /** `uri(N)` is `baseURI + N`, so this is the id the next mint takes. */
+  nextTokenId: string;
+}
+
+export interface PublishAssetRequest {
+  assetType: PublishAssetType;
+  name: string;
+  description?: string;
+  /** Base64 of the bytes to encrypt and pin. */
+  contentBase64?: string;
+  contentMimeType?: string;
+  coverImageBase64?: string;
+  coverImageMimeType?: string;
+  coverImageFileName?: string;
+  priceUsdc?: number;
+  royaltyBps?: number;
+  quantity?: number;
+  license?: string;
+  extraAttributes?: Array<{ trait_type: string; value: string }>;
+  /** `storeSlug` here is the ENS label the drop is derived from. */
+  properties?: Record<string, unknown>;
+  storeId?: string;
+  dryRun?: boolean;
+}
+
+export interface PublishOutcomeSummary {
+  ok: boolean;
+  dryRun: boolean;
+  contentCid?: string;
+  metadataCid?: string;
+  metadataUri?: string;
+  tokenId?: string;
+  mintTxHash?: string;
+  marketplaceUrl?: string;
+  errors?: string[];
+  blockedAt?: string;
+  dropAddress?: string;
+  storeLabel?: string;
+  /** CID of the `chunked-aes-lit-v2` decryption envelope. */
+  envelopeCid?: string;
+  chunkCount?: number;
+  merkleRoot?: string;
+  contentHash?: string;
+}
+
+export interface PublishAssetResult {
+  ok: boolean;
+  error?: string;
+  data?: { id: string; tokenId?: string; contentUrl?: string };
+  outcome?: PublishOutcomeSummary;
 }
 
 export class IpcClient {
@@ -684,6 +778,132 @@ export class IpcClient {
   public async invoke(channel: string, ...args: unknown[]): Promise<any> {
     return this.ipcRenderer.invoke(channel, ...args);
   }
+
+  // ─── Marketplace publishing (canonical pipeline) ─────────────────────
+
+  /**
+   * Check that a store resolves and report the token id the next publish
+   * would take. Pure RPC reads — spends no gas, pins nothing, encrypts
+   * nothing. Deliberately NOT routed through the publish path, which loads a
+   * signer as its first step and so fails before it can tell you anything.
+   */
+  public async checkStore(storeSlug: string): Promise<StoreCheck> {
+    return this.ipcRenderer.invoke("joybridge:check-store", { storeSlug });
+  }
+
+  /**
+   * Publish through the canonical pipeline: encrypt with Lit, pin the chunks
+   * and envelope, write metadata into a tokenId-named directory, then lazyMint
+   * on the store's own drop contract.
+   *
+   * Pass `dryRun: true` to run every check without spending gas or pinning.
+   */
+  public async publishAsset(
+    input: PublishAssetRequest,
+  ): Promise<PublishAssetResult> {
+    return this.ipcRenderer.invoke("joybridge:publish-asset", input);
+  }
+
+  // ─── Backup & restore ────────────────────────────────────────────────
+
+  // ── Subscription CLIs ─────────────────────────────────────────────────────
+  // Claude Pro/Max, ChatGPT Plus/Pro, Google AI Pro and GitHub Copilot, used
+  // through the vendor's own signed-in CLI rather than a metered API key.
+
+  public async listSubscriptionClis(): Promise<SubscriptionCliInfo[]> {
+    return this.ipcRenderer.invoke("subscription-cli:list");
+  }
+
+  public async detectSubscriptionClis(
+    force = false,
+  ): Promise<SubscriptionCliDetection[]> {
+    return this.ipcRenderer.invoke("subscription-cli:detect", { force });
+  }
+
+  public async getSubscriptionCliStatus(
+    id: string,
+  ): Promise<SubscriptionCliDetection> {
+    return this.ipcRenderer.invoke("subscription-cli:status", { id });
+  }
+
+  /** Runs a real prompt — the only check that proves the plan works. */
+  public async testSubscriptionCli(
+    id: string,
+    model?: string,
+  ): Promise<{
+    ok: true;
+    reply: string;
+    costUsd: number;
+    durationMs: number;
+  }> {
+    return this.ipcRenderer.invoke("subscription-cli:test", { id, model });
+  }
+
+  public async refreshSubscriptionClis(): Promise<SubscriptionCliDetection[]> {
+    return this.ipcRenderer.invoke("subscription-cli:refresh");
+  }
+
+  public async openSubscriptionCliDocs(id: string): Promise<{ opened: string }> {
+    return this.ipcRenderer.invoke("subscription-cli:open-docs", { id });
+  }
+
+  public async listBackups(): Promise<BackupEntry[]> {
+    return this.ipcRenderer.invoke("backup:list");
+  }
+
+  public async createBackup(params?: {
+    name?: string;
+    kind?: BackupKind;
+  }): Promise<BackupEntry> {
+    return this.ipcRenderer.invoke("backup:create", params ?? {});
+  }
+
+  public async deleteBackup(id: string): Promise<{ id: string; deleted: boolean }> {
+    return this.ipcRenderer.invoke("backup:delete", { id });
+  }
+
+  /**
+   * Stage a restore. Returns once the snapshot is verified and staged — the
+   * swap itself happens on the next start, because the running process holds
+   * the database open.
+   */
+  public async restoreBackup(id: string): Promise<{
+    staged: true;
+    backupId: string;
+    preRestoreBackupId: string;
+    requiresRestart: true;
+  }> {
+    return this.ipcRenderer.invoke("backup:restore", { id });
+  }
+
+  public async getPendingRestore(): Promise<PendingRestore | null> {
+    return this.ipcRenderer.invoke("backup:pending-restore");
+  }
+
+  public async cancelPendingRestore(): Promise<{ cancelled: boolean }> {
+    return this.ipcRenderer.invoke("backup:cancel-restore");
+  }
+
+  public async revealBackup(id?: string): Promise<{ path: string }> {
+    return this.ipcRenderer.invoke("backup:reveal", id ? { id } : {});
+  }
+
+  // ─── Audit log (local, read-only) ────────────────────────────────────
+
+  public async queryAuditLog(params?: AuditQuery): Promise<AuditRow[]> {
+    return this.ipcRenderer.invoke("audit:query", params ?? {});
+  }
+
+  public async getAuditStats(): Promise<AuditStats> {
+    return this.ipcRenderer.invoke("audit:stats");
+  }
+
+  public async exportAuditLog(
+    params: AuditQuery & { format?: "csv" | "json" },
+  ): Promise<{ format: string; rowCount: number; content: string }> {
+    return this.ipcRenderer.invoke("audit:export", params);
+  }
+
 
   /**
    * Neural Guard wrapper: wallet-signs the payload, then invokes the channel
@@ -1232,6 +1452,14 @@ export class IpcClient {
     return this.ipcRenderer.invoke("get-current-branch", {
       appId,
     });
+  }
+
+  // Get the diff for a specific version (what the commit changed, or a diff
+  // between two commits when previousVersionId is provided).
+  public async getVersionDiff(
+    params: GetVersionDiffParams,
+  ): Promise<GitDiffResult> {
+    return this.ipcRenderer.invoke("get-version-diff", params);
   }
 
   // Get user settings
@@ -3856,6 +4084,12 @@ export class IpcClient {
     return this.ipcRenderer.invoke("project:delete", params);
   }
 
+  public async assignAppToProject(
+    params: import("../types/project_types").AssignAppToProjectParams
+  ): Promise<void> {
+    return this.ipcRenderer.invoke("project:assign-app", params);
+  }
+
   // ==========================================================================
   // Model Factory Methods (LoRA/QLoRA Training)
   // ==========================================================================
@@ -4606,7 +4840,9 @@ export class IpcClient {
 
   /** Stop a running scraping job */
   public async scrapingStopJob(jobId: string): Promise<void> {
-    return this.ipcRenderer.invoke("scraping:stop-job", jobId);
+    // The handler is registered as `cancel-job`; `stop-job` was never
+    // registered, so this call was rejected by the preload allowlist.
+    return this.ipcRenderer.invoke("scraping:cancel-job", jobId);
   }
 
   /** List all scraping jobs */
@@ -5983,6 +6219,12 @@ export class IpcClient {
     return this.ipcRenderer.invoke("marketplace:categories");
   }
 
+  public async marketplaceClaimAsset(
+    request: ClaimMarketplaceAssetRequest,
+  ): Promise<ClaimMarketplaceAssetResult> {
+    return this.ipcRenderer.invoke("marketplace:claim-asset", request);
+  }
+
   // ── Marketplace reads (wallet-scoped) ─────────────────────────────
   //
   // All four endpoints route through the DropERC1155 + Stores Goldsky
@@ -6901,7 +7143,7 @@ export class IpcClient {
   // ── X402 pay-per-prompt ─────────────────────────────────────────────────
   public async x402Status(
     args?: { chain?: X402ChainId },
-  ): Promise<{ chain: X402ChainId; ready: boolean }> {
+  ): Promise<X402Status> {
     return this.ipcRenderer.invoke("x402:status", args ?? {});
   }
   public async x402CreateChallenge(
@@ -7286,6 +7528,22 @@ export interface GlueMandateRecord {
 // ── X402 pay-per-prompt types ──────────────────────────────────────────────
 export type X402ChainId = "arbitrumSepolia" | "arbitrumOne";
 export type X402Network = "arbitrum-sepolia" | "arbitrum-one";
+
+export interface X402Status {
+  chain: X402ChainId;
+  /** True when both USDC and the RevenueSplitter are deployed on the chain. */
+  ready: boolean;
+  /** RevenueSplitter address (zero address when not deployed). */
+  splitter: string;
+  usdc: string;
+  /** Configured split (must match the on-chain contract config). */
+  splitBps: { creator: number; platform: number; protocol: number };
+  /** On-chain fee wallets from getConfig(); null when unavailable. */
+  platformWallet: string | null;
+  protocolWallet: string | null;
+  /** Creator's intended Seller payout address from settings; null when unset. */
+  payoutAddress: string | null;
+}
 
 export interface X402PaymentRequirements {
   scheme: "exact";

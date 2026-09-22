@@ -123,19 +123,25 @@ async function generateWithOpenAI(params: GenerateImageParams): Promise<string> 
   const apiKey = await getApiKeyAsync("openai");
   const openai = new OpenAI({ apiKey });
 
-  const validSizes = ["256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"] as const;
+  // dall-e-3 was shut down on 2026-05-12; OpenAI names gpt-image-2 as its replacement.
+  const model = params.model || "gpt-image-2";
+  // The gpt-image models always return base64, reject `response_format` and
+  // DALL-E's `style`, and accept a different set of sizes. Sending the DALL-E
+  // parameters to them fails the whole request.
+  const isDallE = model.startsWith("dall-e");
+  const validSizes: readonly string[] = isDallE
+    ? ["256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"]
+    : ["1024x1024", "1536x1024", "1024x1536"];
   const sizeStr = `${params.width}x${params.height}`;
-  const size = validSizes.includes(sizeStr as (typeof validSizes)[number])
-    ? (sizeStr as (typeof validSizes)[number])
-    : "1024x1024";
+  const size = (validSizes.includes(sizeStr) ? sizeStr : "1024x1024") as "1024x1024";
 
   const response = await openai.images.generate({
-    model: params.model || "dall-e-3",
+    model,
     prompt: params.prompt,
     n: 1,
     size,
-    response_format: "b64_json",
-    ...(params.style ? { style: params.style as "vivid" | "natural" } : {}),
+    ...(isDallE ? { response_format: "b64_json" as const } : {}),
+    ...(isDallE && params.style ? { style: params.style as "vivid" | "natural" } : {}),
   });
 
   const b64 = response.data?.[0]?.b64_json ?? null;
@@ -145,7 +151,8 @@ async function generateWithOpenAI(params: GenerateImageParams): Promise<string> 
 
 async function generateWithGoogle(params: GenerateImageParams): Promise<string> {
   const apiKey = await getApiKeyAsync("google");
-  const model = params.model || "imagen-4.0-generate-001";
+  // Imagen 4 is deprecated; Nano Banana 2 goes through generateContent below.
+  const model = params.model || "gemini-3.1-flash-image";
 
   // Gemini native image generation models use generateContent (multimodal) — different shape than Imagen.
   if (model.startsWith("gemini-")) {
@@ -532,7 +539,7 @@ async function generateWithXai(params: GenerateImageParams): Promise<string> {
   const apiKey = await getApiKeyAsync("xai");
   const xai = new OpenAI({ apiKey, baseURL: "https://api.x.ai/v1" });
   const response = await xai.images.generate({
-    model: params.model || "grok-2-image-1212",
+    model: params.model || "grok-imagine-image",
     prompt: params.prompt,
     n: 1,
     response_format: "b64_json",
@@ -940,13 +947,13 @@ export function registerImageStudioHandlers() {
     const cloudProviders: ProviderInfo[] = [
       {
         id: "openai",
-        label: "DALL-E (OpenAI)",
+        label: "GPT Image (OpenAI)",
         kind: "cloud",
         website: "https://platform.openai.com/api-keys",
         apiKeyEnvVars: ["OPENAI_API_KEY"],
         models: [
-          { id: "dall-e-3", label: "DALL-E 3" },
-          { id: "gpt-image-1", label: "GPT Image 1" },
+          { id: "gpt-image-2", label: "GPT Image 2" },
+          { id: "gpt-image-1-mini", label: "GPT Image 1 Mini" },
           { id: "dall-e-2", label: "DALL-E 2", supportsImg2Img: true },
         ],
       },
@@ -957,13 +964,11 @@ export function registerImageStudioHandlers() {
         website: "https://aistudio.google.com/app/apikey",
         apiKeyEnvVars: ["GOOGLE_AI_API_KEY", "GEMINI_API_KEY"],
         models: [
-          { id: "imagen-4.0-generate-001", label: "Imagen 4" },
-          { id: "imagen-4.0-fast-generate-001", label: "Imagen 4 Fast" },
-          { id: "imagen-4.0-ultra-generate-001", label: "Imagen 4 Ultra" },
-          { id: "imagen-3.0-generate-002", label: "Imagen 3" },
-          { id: "imagen-3.0-fast-generate-001", label: "Imagen 3 Fast" },
-          { id: "gemini-2.5-flash-image-preview", label: "Gemini 2.5 Flash Image (Nano-Banana)", supportsImg2Img: true },
-          { id: "gemini-2.0-flash-preview-image-generation", label: "Gemini 2.0 Flash Image", supportsImg2Img: true },
+          { id: "gemini-3.1-flash-image", label: "Gemini 3.1 Flash Image (Nano Banana 2)", supportsImg2Img: true },
+          { id: "gemini-3-pro-image", label: "Gemini 3 Pro Image (Nano Banana Pro)", supportsImg2Img: true },
+          { id: "gemini-3.1-flash-lite-image", label: "Gemini 3.1 Flash-Lite Image (Nano Banana 2 Lite)", supportsImg2Img: true },
+          { id: "gemini-2.5-flash-image", label: "Gemini 2.5 Flash Image (Nano Banana)", supportsImg2Img: true },
+          { id: "imagen-4.0-generate-001", label: "Imagen 4 (deprecated)" },
         ],
       },
       {
@@ -1026,7 +1031,8 @@ export function registerImageStudioHandlers() {
         website: "https://console.x.ai/",
         apiKeyEnvVars: ["XAI_API_KEY"],
         models: [
-          { id: "grok-2-image-1212", label: "Grok 2 Image (Aurora)" },
+          { id: "grok-imagine-image", label: "Grok Imagine Image" },
+          { id: "grok-imagine-image-quality", label: "Grok Imagine Image (Quality)" },
         ],
       },
       {

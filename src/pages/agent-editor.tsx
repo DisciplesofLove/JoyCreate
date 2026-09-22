@@ -1019,27 +1019,28 @@ export default function AgentEditorPage() {
                           <SelectValue placeholder="Select a model" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="gpt-5.1">GPT 5.1</SelectItem>
-                          <SelectItem value="gpt-5-mini">
-                            GPT 5 Mini
+                          <SelectItem value="gpt-6-astra">GPT-6 Astra</SelectItem>
+                          <SelectItem value="gpt-5.6-sol">GPT-5.6 Sol</SelectItem>
+                          <SelectItem value="gpt-5.6-luna">GPT-5.6 Luna</SelectItem>
+                          <SelectItem value="claude-fable-5-1">
+                            Claude Fable 5.1
                           </SelectItem>
+                          <SelectItem value="claude-opus-5">
+                            Claude Opus 5
                           <SelectItem value="claude-opus-4-8">
                             Claude Opus 4.8 (Latest)
                           </SelectItem>
                           <SelectItem value="claude-opus-4-7">
                             Claude Opus 4.7
                           </SelectItem>
-                          <SelectItem value="claude-sonnet-4-6">
-                            Claude Sonnet 4.6 (Latest)
+                          <SelectItem value="claude-sonnet-5">
+                            Claude Sonnet 5
                           </SelectItem>
-                          <SelectItem value="claude-opus-4-6">
-                            Claude Opus 4.6
+                          <SelectItem value="claude-haiku-4-5">
+                            Claude Haiku 4.5
                           </SelectItem>
-                          <SelectItem value="claude-sonnet-4-5">
-                            Claude Sonnet 4
-                          </SelectItem>
-                          <SelectItem value="gemini-3-pro-preview">Gemini 3 Pro</SelectItem>
-                          <SelectItem value="gemini-3-flash-preview">Gemini 3 Flash</SelectItem>
+                          <SelectItem value="gemini-3.1-pro-preview">Gemini 3.1 Pro</SelectItem>
+                          <SelectItem value="gemini-3.8-flash">Gemini 3.8 Flash</SelectItem>
                           <SelectItem value="llama3.2:8b">
                             Llama 3.2 8B (Local)
                           </SelectItem>

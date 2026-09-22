@@ -38,7 +38,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useMarketplaceBrowse } from "@/hooks/use_marketplace_browse";
+import {
+  useClaimMarketplaceAsset,
+  useMarketplaceBrowse,
+} from "@/hooks/use_marketplace_browse";
 import { useMutation } from "@tanstack/react-query";
 import { IpcClient } from "@/ipc/ipc_client";
 import { showSuccess, showError } from "@/lib/toast";
@@ -103,6 +106,7 @@ export default function JoyMarketplacePage() {
 
   const { data, isLoading, error } = useMarketplaceBrowse(params);
   const items: MarketplaceBrowseItem[] = data?.items ?? [];
+  const claimAsset = useClaimMarketplaceAsset();
 
   function applyFilters(): void {
     setAppliedSearch(searchText.trim());
@@ -266,6 +270,31 @@ export default function JoyMarketplacePage() {
                   <span>{priceLabel(a)}</span>
                   <Badge variant="outline">published</Badge>
                 </div>
+                <Button
+                  size="sm"
+                  className="w-full mt-2"
+                  disabled={
+                    claimAsset.isPending &&
+                    claimAsset.variables?.tokenId === a.id
+                  }
+                  onClick={() =>
+                    claimAsset.mutate(
+                      { tokenId: a.id },
+                      {
+                        onSuccess: (result) =>
+                          showSuccess(
+                            `License acquired in transaction ${result.txHash.slice(0, 10)}…`,
+                          ),
+                      },
+                    )
+                  }
+                >
+                  {claimAsset.isPending && claimAsset.variables?.tokenId === a.id
+                    ? "Confirming…"
+                    : (a.price ?? 0) === 0
+                      ? "Get License"
+                      : "Buy License"}
+                </Button>
                 {a.assetType === "agent" && (
                   <Button
                     size="sm"

@@ -136,6 +136,16 @@ export interface CrawlPageResult {
   linksFound: number;
   extractedRecords: number;
   error?: string;
+  /**
+   * The page the crawler actually fetched.
+   *
+   * Without this the crawler was a link discoverer and nothing more: it threw
+   * the HTML away, and `extractedRecords` carried the comment "filled by
+   * orchestrator" for a caller that had no way to fill it. The only alternative
+   * was re-fetching every crawled URL — doubling the load on the site being
+   * crawled, which is the exact thing the politeness engine exists to avoid.
+   */
+  result?: ScrapeResult;
 }
 
 export interface CrawlSession {

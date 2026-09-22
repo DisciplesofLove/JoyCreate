@@ -5,14 +5,18 @@
  * Architecture: fire-and-forget
  *   1. Verify API key via Supabase edge function (joy-create-verify)
  *   2. Pin to IPFS (Pinata / Helia)
- *   3. Lazy-mint DropERC1155 on Polygon Amoy
- *   4. List on MarketplaceV3
+ *   3. Lazy-mint a per-store DropERC1155 on Arbitrum Sepolia
+ *   4. Install the claim condition (price) on the minted token
  *   5. Goldsky subgraphs index → marketplace UI picks up
  */
 
 // =============================================================================
 // NETWORK & CHAIN CONFIGURATION
 // =============================================================================
+
+// Polygon Amoy (POLYGON_AMOY) and its ENS deployment (AMOY_ENS_CONTRACTS) were
+// removed: the marketplace is single-chain on Arbitrum Sepolia and every Amoy
+// subgraph returned HTTP 404. Nothing referenced them by the time they went.
 
 export const POLYGON_MAINNET = {
   chainId: 137,
@@ -27,18 +31,6 @@ export const POLYGON_MAINNET = {
   },
 };
 
-export const POLYGON_AMOY = {
-  chainId: 80002,
-  chainIdHex: "0x13882",
-  name: "Polygon Amoy Testnet",
-  rpcUrl: "https://rpc-amoy.polygon.technology",
-  blockExplorer: "https://amoy.polygonscan.com",
-  nativeCurrency: {
-    name: "MATIC",
-    symbol: "MATIC",
-    decimals: 18,
-  },
-};
 
 // =============================================================================
 // CONTRACT ADDRESSES (Polygon Mainnet - Chain ID 137)
@@ -83,29 +75,8 @@ export const CONTRACT_ADDRESSES = {
   DATA_ENCRYPTION_ESCROW: "0x2B3C4D5E6F7A8B9C0D1E2F3A4B5C6D7E8F9A0B1C",
   AGENT_PERMISSION_MANAGER: "0x3C4D5E6F7A8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D",
   USAGE_METERING: "0x4D5E6F7A8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D3E",
-  REVENUE_SPLITTER: "0x5E6F7A8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D3E4F",
+  // Revenue splitting moved to the Arbitrum RevenueSplitter — see src/config/x402.ts.
 };
-
-// =============================================================================
-// ENS / IDENTITY CONTRACTS (Polygon Amoy – Chain ID 80002)
-// =============================================================================
-
-export const AMOY_ENS_CONTRACTS = {
-  /** ENS core registry — maps namehash → owner/resolver/ttl */
-  ENSRegistry: "0xc3a9e8066d1503d844bcf3b3be22ff4447256880" as const,
-  /** ERC-721 registrar — owns .joy 2LD tokens, handles expiry */
-  BaseRegistrar: "0x21df5f005531f028dbb39db59c69d3c5092c9aa7" as const,
-  /** CCIP-read resolver — stores creator text records */
-  JoyResolver: "0x38019fbf352f6027653eb63d1fe8c9e54b8e4a50" as const,
-  /** Public registration controller — name + duration + resolver data */
-  JoyRegistrarController: "0x40ccae3dbb263369b482588467116bed446eac7a" as const,
-  /** Gates platform mints: requires caller to own a .joy name */
-  JoyCreatorGate: "0x3af616adedf31cb2d959ece10aa4fed185853a40" as const,
-  /** ERC-1155 platform drop — lazy-minted tokens listed on MarketplaceV3 */
-  platformDrop: "0x541DbAc03B10352890E33A39b1107B0161474402" as const,
-  /** Verida DID ↔ wallet linkage SBT */
-  VeridaDIDLinkage: "0x2EF94B74319863c8Baf14A4FC75E640421DAD81A" as const,
-} as const;
 
 /** Duration constants for ENS registration (seconds) */
 export const ENS_DURATION = {
@@ -464,25 +435,6 @@ export const CONTRACT_ABIS = {
     // Events
     "event UsageRecorded(uint256 indexed recordId, uint256 indexed tokenId, uint256 inputTokens, uint256 outputTokens, bytes32 receiptHash)",
   ],
-  
-  // Revenue Splitter Contract ABI
-  REVENUE_SPLITTER: [
-    // Revenue distribution
-    "function distributeRevenue(uint256 tokenId, uint256 amount) returns (bool)",
-    "function getShares(uint256 tokenId) view returns (address[] recipients, uint256[] shares)",
-    "function setShares(uint256 tokenId, address[] recipients, uint256[] shares) returns (bool)",
-    // Withdrawals
-    "function withdraw() returns (uint256)",
-    "function getBalance(address recipient) view returns (uint256)",
-    "function getPendingRevenue(address recipient) view returns (uint256)",
-    // Stats
-    "function getTotalDistributed(uint256 tokenId) view returns (uint256)",
-    "function getCreatorEarnings(address creator) view returns (uint256 total, uint256 pending, uint256 withdrawn)",
-    // Events
-    "event RevenueDistributed(uint256 indexed tokenId, uint256 amount, uint256 creatorShare, uint256 platformShare)",
-    "event Withdrawn(address indexed recipient, uint256 amount)",
-    "event SharesUpdated(uint256 indexed tokenId, address[] recipients, uint256[] shares)",
-  ],
 
   // ── ENS / Identity contracts (Polygon Amoy) ─────────────────────────────
 
@@ -635,8 +587,47 @@ export const ARB_SEPOLIA_ENS_CONTRACTS = {
   JoyCreatorGate: "0x70e575b3546852808e742d21c16aabeeccd5d424" as const,
   /** DropERC1155 ERC1967 proxy — the address the subgraph indexes. */
   platformDrop: "0x61672aa9c97342183481455834e6e944ea64e552" as const,
+  /** Canonical controller that lazy-mints and installs claim conditions. */
+  EditionController: "0xF3c41b1E3aE3Db0e91985cB140781Ada636AD617" as const,
   Treasury: "0x5939229582A5b42A6C5f55Fe55eC47523Cd5B9FE" as const,
 } as const;
+
+/**
+ * Per-store DropERC1155 stack (`contracts/store-drop/` in the marketplace repo).
+ *
+ * This is where the marketplace actually publishes. Each store gets its own
+ * `JoyStoreDrop1155` clone, deterministically addressed from the store's ENS
+ * label hash, and ownership is derived from the store's BaseRegistrar NFT — so
+ * `lazyMint` is `onlyStoreOwner` and the publishing wallet must hold the name.
+ *
+ * The shared `platformDrop` above predates this and carries no indexed tokens
+ * on either chain; on Arbitrum One it is intentionally never deployed. New
+ * publishes MUST target a store drop.
+ *
+ * Keep in sync with `mfe-agents-quest/src/config/contracts.ts`.
+ */
+export const ARB_SEPOLIA_STORE_DROP_CONTRACTS = {
+  storeDropImpl: "0x4f422c57f358a7ef3aea24e3120ac917c512c48b" as const,
+  storeDropFactory: "0x07e59859bfac23e448a59965871dfaf0daf086a6" as const,
+  /** Circle native testnet USDC (6 decimals) — claim-condition currency. */
+  usdc: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d" as const,
+} as const;
+
+export const STORE_DROP_FACTORY_ABI = [
+  "function predictStoreDrop(bytes32 labelHash) view returns (address)",
+] as const;
+
+export const STORE_DROP_ABI = [
+  "function nextTokenIdToMint() view returns (uint256)",
+  "function uri(uint256 tokenId) view returns (string)",
+  "function lazyMint(uint256 amount, string baseURIForTokens, bytes extraData) returns (uint256 batchId)",
+  "function setClaimConditions(uint256 tokenId, (uint256 startTimestamp, uint256 maxClaimableSupply, uint256 supplyClaimed, uint256 quantityLimitPerWallet, bytes32 merkleRoot, uint256 pricePerToken, address currency, string metadata)[] conditions, bool resetClaimEligibility)",
+] as const;
+
+export const CANONICAL_EDITION_CONTROLLER_ABI = [
+  "function createEdition(bytes32 storeNode, string metadataURI, string agentCardURI, (uint256 maxSupply, uint256 pricePerToken, uint256 startTimestamp, uint256 quantityLimitPerWallet, address currency) claimParams) returns (uint256 tokenId, uint256 identityId)",
+  "event EditionCreated(bytes32 indexed storeNode, uint256 indexed tokenId, uint256 storeIdentityId, uint256 editionIdentityId, address creator)",
+] as const;
 
 /** ENS parent domain per chain (different from the .joy 2LD on Amoy). */
 export const ARB_SEPOLIA_PARENT_DOMAIN = "joymarketplace.io" as const;

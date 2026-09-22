@@ -1,6 +1,13 @@
-import { app, BrowserWindow, dialog, Menu, session } from "electron";
+import { app, BrowserWindow, dialog, Menu, session, shell } from "electron";
 import * as path from "node:path";
 import { registerIpcHandlers } from "./ipc/ipc_host";
+import {
+  isInternalNavigation,
+  isSafeExternalUrl,
+  isAllowedLoopbackIframe,
+  isAllowedThirdPartyIframe,
+  decidePermissionRequest,
+} from "./main_security";
 import {
   startModelCatalogWatchdog,
   stopModelCatalogWatchdog,
@@ -8,6 +15,23 @@ import {
 import dotenv from "dotenv";
 // @ts-ignore
 import started from "electron-squirrel-startup";
+import {
+  applyOpenAtLogin,
+  destroyBackgroundTray,
+  initBackgroundTray,
+  isAppQuitting,
+  setActivityCounter,
+} from "@/main/background_tray";
+import { countRunning } from "@/lib/runtime/activity_store";
+import {
+  reconcileRunsAtBoot,
+  startSupervisor,
+  stopSupervisor,
+} from "@/lib/runtime/supervisor";
+import { reconcileStrandedContracts } from "@/lib/a2a_economy";
+import { registerBuiltinA2aExecutors } from "@/lib/a2a_executors";
+import { applyPendingRestoreAtBoot } from "@/lib/backup_service";
+import { reconcileTrainingJobsAtBoot } from "@/lib/training_job_store";
 import { updateElectronApp, UpdateSourceType } from "update-electron-app";
 import log from "electron-log";
 import {
@@ -106,6 +130,19 @@ if (process.defaultApp) {
 }
 
 export async function onReady() {
+  // A restore staged by a previous run has to be applied BEFORE anything opens
+  // the database — including the upgrade BackupManager below, which reads it.
+  // The running process holds an open handle to `sqlite.db`, so a restore can
+  // only ever swap the file at a moment when nothing has opened it yet, and
+  // this is the only such moment.
+  try {
+    if (applyPendingRestoreAtBoot()) {
+      logger.info("Applied a restore staged before the last shutdown");
+    }
+  } catch (e) {
+    logger.error("Error applying pending restore", e);
+  }
+
   try {
     const backupManager = new BackupManager({
       settingsFile: getSettingsFilePath(),
@@ -155,8 +192,83 @@ export async function onReady() {
   // Start performance monitoring
   startPerformanceMonitoring();
 
+  // Install app-wide security policies BEFORE the main window is created so
+  // that the very first webContents picks up the will-attach-webview /
+  // setWindowOpenHandler guards.
+  applyAppSecurityPolicies();
+
+  // Background mode + tray, before the window exists, so the very first close
+  // is already handled. Defaults to on when unset.
+  backgroundModeEnabled = settings.backgroundMode !== false;
+  applyOpenAtLogin(settings.openAtLogin === true);
+
   await onFirstRunMaybe(settings);
   createWindow();
+
+  if (backgroundModeEnabled) {
+    setActivityCounter(() => countRunning());
+    initBackgroundTray(() => mainWindow);
+  }
+
+  // ── Reconcile agent runs left over from the previous process. ─────
+  //
+  // Runs still marked `running` belong to a process that no longer exists — no
+  // controller, timer or abort signal survives a restart. Mark them, resume
+  // what carries a cursor, and fail the rest with a reason rather than leaving
+  // rows that claim to be active forever. Runs before the schedulers start so
+  // nothing new is competing with the reconcile.
+  try {
+    const outcome = await reconcileRunsAtBoot();
+    if (outcome.interrupted > 0) {
+      logger.info(
+        `Run reconcile: ${outcome.interrupted} interrupted, ${outcome.resumed} resumed, ${outcome.failed} failed`,
+      );
+    }
+    startSupervisor();
+    app.on("will-quit", () => stopSupervisor());
+  } catch (err) {
+    logger.warn("Run reconcile failed:", err);
+  }
+
+  // ── Reconcile A2A contracts left mid-execution. ────────────────────────────
+  //
+  // Separate from the run reconcile above because this one is about money, not
+  // observability. A contract stuck `IN_PROGRESS` holds the caller's escrow
+  // against their daily cap indefinitely; the activity row for it may be
+  // missing or carry no resume cursor, so the run reconcile cannot see it.
+  try {
+    const swept = await reconcileStrandedContracts();
+    if (swept.contracts > 0 || swept.invocations > 0) {
+      logger.info(
+        `A2A reconcile: ${swept.contracts} contract(s) refunded, ${swept.invocations} invocation(s) closed`,
+      );
+    }
+  } catch (err) {
+    logger.warn("A2A contract reconcile failed:", err);
+  }
+
+  // A fine-tune runs as a child process, so a job still marked `running` at
+  // boot belonged to a process that died with the app. Mark those rather than
+  // leaving "list jobs" claiming a training run is in flight days later.
+  try {
+    const interrupted = reconcileTrainingJobsAtBoot();
+    if (interrupted > 0) {
+      logger.info(`Training reconcile: ${interrupted} interrupted run(s)`);
+    }
+  } catch (err) {
+    logger.warn("Training reconcile failed:", err);
+  }
+
+  // Bind the capabilities an agent can actually sell. Must come after the IPC
+  // handlers are registered, since each executor resolves its channel through
+  // the same registry `ipcMain.handle` writes to.
+  try {
+    registerBuiltinA2aExecutors();
+  } catch (err) {
+    logger.warn("A2A executor registration failed:", err);
+  }
+
+
 
   // ── Auto-start the Hypercore peer layer (Holepunch). ─────────────
   // Best-effort, fire-and-forget — never blocks UI even if discovery / DHT
@@ -456,13 +568,12 @@ export async function onReady() {
           const daemonAlive = await probeGatewayHealth(daemonPort);
 
           if (daemonAlive) {
-            // Trust the daemon config to decide whether it owns Telegram
+            // Trust the daemon config to decide whether it owns Telegram.
+            // Checks the daemon's REAL config (e.g. openclaw-ollama.json via
+            // gateway.cmd's OPENCLAW_CONFIG_PATH), not just openclaw.json.
             try {
-              const { readFileSync } = await import("node:fs");
-              const { join } = await import("node:path");
-              const { homedir } = await import("node:os");
-              const daemonCfg = JSON.parse(readFileSync(join(homedir(), ".openclaw", "openclaw.json"), "utf8"));
-              if (daemonCfg?.channels?.telegram?.enabled && daemonCfg?.channels?.telegram?.botToken) {
+              const { daemonTelegramChannelEnabled } = await import("./ipc/handlers/telegram_handlers");
+              if (daemonTelegramChannelEnabled()) {
                 daemonHandlesTelegram = true;
               }
             } catch {
@@ -487,11 +598,8 @@ export async function onReady() {
         // answer messages without JoyCreate's IPC tools (causing 409 flapping).
         if (bridged && telegramOwner === "local" && tgBot.getStatus().running) {
           try {
-            const { readFileSync } = await import("node:fs");
-            const { join } = await import("node:path");
-            const { homedir } = await import("node:os");
-            const daemonCfg = JSON.parse(readFileSync(join(homedir(), ".openclaw", "openclaw.json"), "utf8"));
-            if (daemonCfg?.channels?.telegram?.enabled && daemonCfg?.channels?.telegram?.botToken) {
+            const { daemonTelegramChannelEnabled } = await import("./ipc/handlers/telegram_handlers");
+            if (daemonTelegramChannelEnabled()) {
               svcLogger.info("Bot watchdog: daemon re-enabled its Telegram channel — re-claiming ownership (owner=local)");
               await tryAutoStartTelegramBot();
             }
@@ -619,6 +727,21 @@ declare global {
 let mainWindow: BrowserWindow | null = null;
 let pendingForceCloseData: any = null;
 
+/**
+ * Whether closing the last window should keep the process alive.
+ *
+ * Read from settings once and cached, because `window-all-closed` and the
+ * per-window `close` handler both fire on paths where a disk read would be
+ * inappropriate. Defaults to true: agents surviving a window close is the
+ * intended behaviour, and an unreadable settings file should not silently
+ * revert to killing them.
+ */
+let backgroundModeEnabled = true;
+
+function isBackgroundModeEnabled(): boolean {
+  return backgroundModeEnabled;
+}
+
 const createWindow = () => {
   // Create the browser window.
   mainWindow = new BrowserWindow({
@@ -704,6 +827,21 @@ const createWindow = () => {
   // iframe can embed the daemon UI.
   setupResponseHeaderOverrides();
 
+  // Lock down navigation / window.open / permission requests on this
+  // window's webContents. See applyWindowSecurityPolicies() for rationale.
+  applyWindowSecurityPolicies(mainWindow);
+
+  // Background mode: closing the window hides the app instead of ending the
+  // main process, so schedulers, watchdogs and in-flight agent runs survive.
+  // Quitting is explicit — the tray menu, or Cmd/Ctrl-Q — and sets isQuitting
+  // first, which is what lets the close through here.
+  mainWindow.on("close", (event) => {
+    if (isAppQuitting()) return;
+    if (!isBackgroundModeEnabled()) return;
+    event.preventDefault();
+    mainWindow?.hide();
+  });
+
   // Send force-close event if it was detected
   if (pendingForceCloseData) {
     mainWindow.webContents.once("did-finish-load", () => {
@@ -783,6 +921,158 @@ const createWindow = () => {
     menu.popup({ window: mainWindow! });
   });
 };
+
+/**
+ * Apply per-window Electron security hardening:
+ *  1. `will-navigate` — block any navigation away from the renderer's own
+ *     origin (file:// in packaged builds, the Vite dev server in dev). Safe
+ *     http(s) links are routed through `shell.openExternal` so the user gets
+ *     them in their default browser instead of inside the desktop window.
+ *  2. `setWindowOpenHandler` — refuse to create a new BrowserWindow on
+ *     `window.open()`. Safe http(s) targets are forwarded to the system
+ *     browser. Anything else (file:, javascript:, data:, …) is denied.
+ *  3. `setPermissionRequestHandler` / `setPermissionCheckHandler` — default
+ *     deny dangerous permissions (camera, mic, geolocation, etc.) for any
+ *     frame that isn't the renderer's own origin. See `decidePermissionRequest`
+ *     for the policy.
+ *
+ * These guards complement the per-BrowserWindow `webPreferences` (which
+ * already set `nodeIntegration:false`, `contextIsolation:true`, etc.).
+ */
+function applyWindowSecurityPolicies(win: BrowserWindow): void {
+  const wc = win.webContents;
+  const devServerUrl: string | undefined = MAIN_WINDOW_VITE_DEV_SERVER_URL
+    ? MAIN_WINDOW_VITE_DEV_SERVER_URL
+    : undefined;
+
+  wc.on("will-navigate", (event, targetUrl) => {
+    if (isInternalNavigation(targetUrl, { devServerUrl })) return;
+    event.preventDefault();
+    if (isSafeExternalUrl(targetUrl)) {
+      void shell.openExternal(targetUrl).catch((err) => {
+        logger.warn("shell.openExternal failed for will-navigate", err);
+      });
+      return;
+    }
+    logger.warn("Blocked unsafe navigation", targetUrl);
+  });
+
+  wc.setWindowOpenHandler(({ url }) => {
+    if (isSafeExternalUrl(url)) {
+      void shell.openExternal(url).catch((err) => {
+        logger.warn("shell.openExternal failed for window.open", err);
+      });
+    } else {
+      logger.warn("Blocked window.open for unsafe URL", url);
+    }
+    // Never let the renderer spawn a fresh BrowserWindow with default prefs.
+    return { action: "deny" };
+  });
+
+  // Permission request / check handlers default-deny dangerous permissions.
+  // Camera / mic / notifications are only granted to the renderer's own
+  // origin (file:// or the Vite dev server), never to embedded iframes /
+  // webviews of third-party content.
+  wc.session.setPermissionRequestHandler((requestingContents, permission, callback, details) => {
+    const requestingUrl = details?.requestingUrl || requestingContents.getURL();
+    const allow = decidePermissionRequest({
+      permission,
+      requestingUrl,
+      devServerUrl,
+    });
+    if (!allow) {
+      logger.warn(
+        `Denied permission '${permission}' for ${requestingUrl || "<unknown>"}`,
+      );
+    }
+    callback(allow);
+  });
+  wc.session.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
+    decidePermissionRequest({
+      permission,
+      requestingUrl: requestingOrigin,
+      devServerUrl,
+    }),
+  );
+}
+
+/**
+ * App-wide hardening that doesn't depend on a single BrowserWindow.
+ *
+ *  • `will-attach-webview` — JoyCreate uses an embedded <webview> tag in the
+ *    Smart Browser. Even though the JSX sets safe attributes (`nodeintegration="false"`,
+ *    `disablewebsecurity="false"`), a compromised renderer could mutate the
+ *    DOM before the attach event fires. We enforce the safe values from the
+ *    main process so the renderer cannot escape the sandbox via webview.
+ *
+ *  • `web-contents-created` for non-window webContents (e.g. webview pages)
+ *    receives the same navigation / window-open guards as the main window.
+ */
+function applyAppSecurityPolicies(): void {
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-attach-webview", (_e, webPreferences, params) => {
+      // Force-set the safe webPreferences — even if the JSX / attacker put
+      // unsafe values on the DOM node.
+      webPreferences.nodeIntegration = false;
+      webPreferences.nodeIntegrationInSubFrames = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.webSecurity = true;
+      webPreferences.sandbox = true;
+      webPreferences.allowRunningInsecureContent = false;
+      webPreferences.experimentalFeatures = false;
+      delete (webPreferences as Record<string, unknown>).preload;
+      delete (webPreferences as Record<string, unknown>).preloadURL;
+
+      // Restrict src to http(s) and our allow-listed loopback iframes. Any
+      // other scheme (file:, javascript:, data:) is rejected to prevent the
+      // renderer from loading attacker-controlled local files or evaluating
+      // inline scripts.
+      const src = (params as { src?: string } | undefined)?.src ?? "";
+      const allowed =
+        isSafeExternalUrl(src) ||
+        isAllowedLoopbackIframe(src) ||
+        isAllowedThirdPartyIframe(src);
+      if (!allowed) {
+        logger.warn("Blocked webview attach with unsafe src", src);
+        // Setting src to about:blank effectively cancels the attach with a
+        // visible-but-empty webview, which is safer than throwing inside an
+        // event handler.
+        (params as { src?: string }).src = "about:blank";
+      }
+    });
+
+    // Webview-hosted webContents inherits the same navigation guards as the
+    // main window. We don't have a dev server URL inside webviews — they're
+    // always loading remote content.
+    contents.on("will-navigate", (event, targetUrl) => {
+      if (isInternalNavigation(targetUrl)) return;
+      if (
+        isSafeExternalUrl(targetUrl) ||
+        isAllowedLoopbackIframe(targetUrl) ||
+        isAllowedThirdPartyIframe(targetUrl)
+      ) {
+        // For embedded webviews we let the navigation through (the user
+        // expects the browser tab to follow http(s) links). External-link
+        // routing to the system browser is handled by the parent <webview>
+        // tab's new-window listener.
+        return;
+      }
+      event.preventDefault();
+      logger.warn("Blocked unsafe webview navigation", targetUrl);
+    });
+
+    contents.setWindowOpenHandler(({ url }) => {
+      if (isSafeExternalUrl(url)) {
+        void shell.openExternal(url).catch((err) => {
+          logger.warn("shell.openExternal failed for webview window.open", err);
+        });
+      } else {
+        logger.warn("Blocked webview window.open for unsafe URL", url);
+      }
+      return { action: "deny" };
+    });
+  });
+}
 
 /**
  * Patch response headers for two purposes:
@@ -1030,6 +1320,10 @@ async function handleDeepLinkReturn(url: string) {
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
 app.on("window-all-closed", () => {
+  // Background mode keeps the main process alive after the last window closes,
+  // because that is where every scheduler, watchdog and in-flight agent run
+  // lives. Without it, closing the window on Windows/Linux ended all of them.
+  if (isBackgroundModeEnabled()) return;
   if (process.platform !== "darwin") {
     app.quit();
   }
@@ -1038,6 +1332,8 @@ app.on("window-all-closed", () => {
 // Only set isRunning to false when the app is properly quit by the user
 app.on("will-quit", () => {
   logger.info("App is quitting, setting isRunning to false");
+
+  destroyBackgroundTray();
 
   // Stop performance monitoring and capture final metrics
   stopPerformanceMonitoring();

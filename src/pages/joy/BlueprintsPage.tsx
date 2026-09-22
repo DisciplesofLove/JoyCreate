@@ -438,7 +438,7 @@ export default function BlueprintsPage() {
             {
               ...payload,
               metadata: {
-                ...(payload.metadata ?? {}),
+                ...payload.metadata,
                 yamlText: yaml,
                 kind: "blueprint",
               },

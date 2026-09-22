@@ -12,7 +12,9 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { getDiscordBot } from "@/lib/discord_bot_service";
 import { getOpenClawGateway } from "@/lib/openclaw_gateway_service";
+import { assertMayStart, resolveOwner } from "@/lib/channels/channel_owner";
 import { getOpenClawAutonomous } from "@/lib/openclaw_autonomous";
+import { buildChannelTools } from "@/lib/channels/channel_agent_tools";
 import { voiceAssistant } from "@/lib/voice_assistant";
 import {
   detectPublishCommand,
@@ -66,6 +68,37 @@ async function sendChunkedMessage(
   for (const chunk of chunks) {
     await bot.sendMessage(channelId, chunk);
   }
+}
+
+/**
+ * Detect when the model produced a "I can't do that / I'm not connected" style
+ * refusal instead of using its tools. These replies are the exact symptom of
+ * the bot "acting like a plain API bot": the model declined to act even though
+ * the agentic tool was available. When we see one we escalate the original
+ * request to the autonomous brain, which is guaranteed to plan + dispatch real
+ * IPC actions.
+ */
+function looksLikeToollessRefusal(text: string | undefined): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  return (
+    // "I can't / cannot / am not able to / am unable to [have] (ability|access|tools)"
+    /\bi (?:can'?t|cannot|am not able to|am unable to|don'?t have (?:the )?(?:ability|access|tools?))\b/.test(t) ||
+    // "not connected to JoyCreate / the app"
+    /\bnot connected to (?:joy ?create|the app|joycreate)\b/.test(t) ||
+    // "I'm just/only an AI/bot/assistant"
+    /\bi'?m (?:just|only) (?:an? )?(?:ai|bot|language model|chatbot|assistant)\b/.test(t) ||
+    // "I don't have access to JoyCreate / tools / the system / your ..."
+    /\bi don'?t have (?:direct |real-?time |)?access to (?:joy ?create|tools?|the system|your)/.test(t) ||
+    // "unable to perform/execute/complete the action/task/request"
+    /\bunable to (?:perform|execute|carry out|complete) (?:that|this|the) (?:action|task|request)\b/.test(t) ||
+    // "I lack the ability / I don't have the capability"
+    /\bi (?:lack|don'?t have) (?:the )?(?:capability|capabilities|ability|access|permission)/.test(t) ||
+    // "don't have integration with / no integration into JoyCreate"
+    /\b(?:no|don'?t have|lack) (?:direct )?integration(?: with)?/.test(t) ||
+    // "As an AI / As a language model"
+    /\bas an? (?:ai|language model|chatbot|assistant|bot)\b/.test(t)
+  );
 }
 
 // =============================================================================
@@ -345,23 +378,20 @@ You don't just talk about doing things — you actually do them. When someone as
     const intent = detectIntent(content);
     logger.info(`Discord intent: ${intent} for: "${content.slice(0, 80)}"`);
 
-    if (intent === "action" || intent === "image" || intent === "video") {
-      bot.sendTyping(channelId).catch(() => {});
-      handleAutonomousRequest(channelId, content, event).catch((err) => {
-        logger.error("Autonomous execution failed:", err);
-        bot.sendMessage(channelId, `Sorry, I encountered an error: ${(err as Error).message}`).catch(() => {});
-      });
-    } else {
-      bot.sendTyping(channelId).catch(() => {});
-      handleChatMessage(channelId, content, event).catch((err) => {
-        logger.error("Chat response failed:", err);
-        bot.sendMessage(channelId, "Sorry, I had trouble processing that.").catch(() => {});
-      });
-      // Fire-and-forget: self-learning — check if this looks like a repeatable skill
-      import("@/lib/skill_engine")
-        .then((m) => m.learnSkillFromMessage(content))
-        .catch(() => {});
-    }
+    // Always route through the AI model (handleChatMessage) so the model can
+    // form a natural response AND use the execute_joycreate_task tool.
+    // handleChatMessage escalates to handleAutonomousRequest internally when
+    // the model doesn't invoke the tool for an action-type request.
+    bot.sendTyping(channelId).catch(() => {});
+    handleChatMessage(channelId, content, event, intent).catch((err) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      logger.error("Chat response failed:", err);
+      bot.sendMessage(channelId, `Sorry, I hit an error processing that:\n${reason}`).catch(() => {});
+    });
+    // Fire-and-forget: self-learning — check if this looks like a repeatable skill
+    import("@/lib/skill_engine")
+      .then((m) => m.learnSkillFromMessage(content))
+      .catch(() => {});
   });
 
   // ── Voice message transcription ──
@@ -405,11 +435,7 @@ You don't just talk about doing things — you actually do them. When someone as
     const intent = detectIntent(transcribedText);
     logger.info(`Discord voice intent: ${intent} for: "${transcribedText.slice(0, 80)}"`);
 
-    if (intent === "action" || intent === "image" || intent === "video") {
-      await handleAutonomousRequest(channelId, transcribedText, { ...event, content: transcribedText });
-    } else {
-      await handleChatMessage(channelId, transcribedText, { ...event, content: transcribedText });
-    }
+    await handleChatMessage(channelId, transcribedText, { ...event, content: transcribedText }, intent);
 
     // Cleanup temp files
     await fs.unlink(tempPath).catch(() => {});
@@ -534,6 +560,9 @@ You don't just talk about doing things — you actually do them. When someone as
     }
   }
 
+  // Warn once per process, not once per message, about open bot access.
+  let warnedOpenAccess = false;
+
   // ── Conversation history per channel (ring buffer, max 50 messages) ──
   const MAX_HISTORY = 50;
   const chatHistories = new Map<string, Array<{ role: "user" | "assistant"; content: string }>>();
@@ -549,10 +578,17 @@ You don't just talk about doing things — you actually do them. When someone as
     while (history.length > MAX_HISTORY) history.shift();
   }
 
-  // ── Plain chat handler (with conversation memory) ──
-  async function handleChatMessage(channelId: string, content: string, _event: Record<string, unknown>) {
+  // ── Plain chat handler (with conversation memory + agentic tool access) ──
+  async function handleChatMessage(
+    channelId: string,
+    content: string,
+    _event: Record<string, unknown>,
+    intent: "action" | "image" | "video" | "chat" = "chat",
+  ) {
+    const needsAction = intent === "action" || intent === "image" || intent === "video";
     try {
-      const { generateText } = await import("ai");
+      const { generateText, tool, stepCountIs } = await import("ai");
+      const { z } = await import("zod");
       const { getModelClient } = await import("@/ipc/utils/get_model_client");
       const { readSettings } = await import("@/main/settings");
 
@@ -569,22 +605,146 @@ You don't just talk about doing things — you actually do them. When someone as
 
       // Build messages array with conversation history
       const history = getChatHistory(channelId);
-      const systemWithContext = userName
-        ? `${OPENCLAW_SYSTEM_PROMPT}\n\nThe user's name is ${userName}. Use it naturally in conversation (not every message — just when it feels right, like a friend would).`
-        : OPENCLAW_SYSTEM_PROMPT;
+
+      // Append an explicit tool-usage rule so the model knows it MUST call
+      // execute_joycreate_task instead of claiming it cannot access JoyCreate.
+      // The same typed tools the local agent has — documents, apps, email,
+      // publishing, images, video, workflows, agents, the economy — called
+      // directly. execute_joycreate_task stays as the catch-all.
+      const channelTools = buildChannelTools({
+        channel: "discord",
+        onToolStart: () => {
+          bot.sendTyping(channelId).catch(() => {});
+        },
+        onMediaFile: async (filePath) => {
+          await bot.sendFile(channelId, filePath, filePath.split(/[\\/]/).pop() ?? "");
+        },
+      });
+
+      // These tools send email, publish and spend without a confirmation
+      // dialog. With no allowlist, anyone who can reach the bot can use them —
+      // and a guild allowlist alone does not cover DMs, which have no guild.
+      if (!warnedOpenAccess) {
+        const cfg = bot.getConfig();
+        if (!cfg.allowedChannelIds?.length) {
+          warnedOpenAccess = true;
+          logger.warn(
+            `Discord bot has no allowedChannelIds${cfg.allowedGuildIds?.length ? " (a guild allowlist does not apply to DMs)" : ""} — anyone who can message it can call all ${channelTools.names.length} JoyCreate tools, including ${channelTools.destructiveNames.length} that change state.`,
+          );
+        }
+      }
+
+      const toolRule = [
+        "\n\n## TOOL USAGE — CRITICAL",
+        `You have ${channelTools.names.length + 1} tools with FULL access to JoyCreate: ${channelTools.names.length} direct tools (documents, apps, email, publishing, images, video, workflows, agents, datasets, marketplace, wallet) and \`execute_joycreate_task\` for anything no single tool covers.`,
+        "Prefer the direct tool that matches the request: its arguments are validated, so it is more reliable. Use execute_joycreate_task for broad multi-step requests or when no direct tool fits.",
+        needsAction
+          ? "The user's message requires a JoyCreate action. You MUST call a tool — do NOT respond with text alone."
+          : "When the user asks about their JoyCreate data or wants any action performed, call the matching tool. Never say you cannot access JoyCreate — the tools ARE the connection.",
+        "Tools that change things (create, send, publish, delete, spend) run immediately with no confirmation, so only call them when the user actually asked for that action.",
+      ].join("\n");
+
+      const systemWithContext =
+        (userName
+          ? `${OPENCLAW_SYSTEM_PROMPT}\n\nThe user's name is ${userName}. Use it naturally in conversation (not every message — just when it feels right, like a friend would).`
+          : OPENCLAW_SYSTEM_PROMPT) + toolRule;
 
       const messages = [
         { role: "system" as const, content: systemWithContext },
         ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
       ];
 
+      // Agentic tool — lets the conversational model actually DO things across
+      // JoyCreate (create/deploy apps & agents, send emails, generate docs/
+      // images/videos, run workflows, manage services, query marketplace/
+      // blockchain — 190+ actions). Without this the bot can only talk, which
+      // is why it was replying that it "can't use tools". The tool delegates to
+      // the autonomous brain, which plans and executes real IPC actions.
+      let lastToolSummary = "";
+      const executeJoyCreateTask = tool({
+        description:
+          "Perform a real action inside JoyCreate on the user's behalf. Use this whenever the user wants you to actually DO something — create or deploy an app, create/train/deploy an AI agent, send an email, generate a document/image/video, build an n8n workflow, manage services, publish to the marketplace, or query blockchain/marketplace data. Do NOT use it for pure conversation. Pass a complete, self-contained natural-language instruction with any names, targets, or details the user provided.",
+        inputSchema: z.object({
+          task: z
+            .string()
+            .describe(
+              "A complete natural-language description of the action to perform, including every relevant detail the user gave.",
+            ),
+        }),
+        execute: async ({ task }) => {
+          bot.sendTyping(channelId).catch(() => {});
+          const autonomous = getOpenClawAutonomous();
+          const execution = await autonomous.execute({ input: task, requireApproval: false });
+
+          // Deliver any generated media (images/videos) to the channel.
+          await sendMediaResults(bot, channelId, execution.results);
+
+          let summary: string;
+          if (execution.status === "completed") {
+            const ok = execution.results.filter((r) => r.success).length;
+            const failed = execution.results.filter((r) => !r.success).length;
+            const steps = execution.results
+              .map(
+                (r) =>
+                  `${r.success ? "✓" : "✗"} ${r.actionId}${!r.success && r.error ? `: ${r.error.slice(0, 120)}` : ""}`,
+              )
+              .join("\n");
+            summary = `Task completed. ${ok} step(s) succeeded${failed ? `, ${failed} failed` : ""}.\nObjective: ${execution.plan?.objective ?? task}\n${steps}`;
+          } else if (execution.status === "paused") {
+            summary = `Task needs approval before continuing: ${execution.error ?? execution.plan?.objective ?? task}`;
+          } else if (execution.status === "failed") {
+            summary = `Task failed: ${execution.error ?? "unknown error"}`;
+          } else {
+            summary = `Task status: ${execution.status}`;
+          }
+          lastToolSummary = summary;
+          return summary;
+        },
+      });
+
       const result = await generateText({
         model: modelClient.model,
         messages,
+        tools: { ...channelTools.tools, execute_joycreate_task: executeJoyCreateTask },
+        // A direct-tool chain ("write a doc, export it, email it") takes more
+        // steps than a single delegated task did.
+        stopWhen: stepCountIs(12),
         maxOutputTokens: 4096,
       });
 
-      const text = result.text?.trim();
+      // Prefer the model's final summary; if it ended on a tool call without
+      // trailing prose, fall back to the tool's own result.
+      let text = result.text?.trim();
+      if (!text && lastToolSummary) {
+        text = lastToolSummary;
+      }
+      if (!text && channelTools.callCount() > 0) {
+        text = channelTools.lastSummary();
+      }
+      // Any tool call means the model acted. A direct tool is as real as the
+      // delegated task and must not trigger the "did nothing" escalations below,
+      // which would run the request a second time.
+      const actedViaTool = Boolean(lastToolSummary) || channelTools.callCount() > 0;
+
+      // Escalation 1: action-type message but the model never called the tool —
+      // fall straight through to the autonomous brain so the user gets real results.
+      if (needsAction && !actedViaTool) {
+        logger.info(
+          `Model did not call tool for action intent "${intent}" — escalating to autonomous brain: "${content.slice(0, 80)}"`,
+        );
+        await handleAutonomousRequest(channelId, content, _event);
+        return;
+      }
+
+      // Escalation 2: model produced a refusal instead of calling the tool.
+      if (!actedViaTool && looksLikeToollessRefusal(text)) {
+        logger.info(
+          `Model produced a toolless refusal — escalating to autonomous brain: "${content.slice(0, 80)}"`,
+        );
+        await handleAutonomousRequest(channelId, content, _event);
+        return;
+      }
+
       if (text) {
         addToHistory(channelId, "assistant", text);
         await sendChunkedMessage(bot, channelId, text);
@@ -708,6 +868,11 @@ You don't just talk about doing things — you actually do them. When someone as
   // Start / Stop / Status
   // -------------------------------------------------------------------------
   ipcMain.handle("discord:start", async () => {
+    // Refuse to become a second owner of this token. Telegram allows exactly
+    // one getUpdates poller per token, and two bots answering the same message
+    // is its own bug — so the rule is uniform across channels. Throws with the
+    // reason, which the UI shows verbatim.
+    await assertMayStart("discord", { hasLocalCredential: bot.isConfigured() });
     await bot.start();
     return bot.getStatus();
   });
@@ -718,7 +883,12 @@ You don't just talk about doing things — you actually do them. When someone as
   });
 
   ipcMain.handle("discord:status", async () => {
-    return bot.getStatus();
+    // Ownership travels with status so the UI can explain a bot that is not
+    // running *because something else owns it*, rather than just showing 'off'.
+    const ownership = await resolveOwner("discord", {
+      hasLocalCredential: bot.isConfigured(),
+    });
+    return { ...bot.getStatus(), ownership };
   });
 
   ipcMain.handle("discord:config", async () => {
@@ -754,33 +924,26 @@ You don't just talk about doing things — you actually do them. When someone as
 
 export async function tryAutoStartDiscordBot(): Promise<void> {
   try {
-    // If the daemon is running AND explicitly handling Discord, skip the local
-    // bot to avoid token conflicts from two clients on the same token.
-    const gw = getOpenClawGateway();
-    if (gw.isBridged()) {
-      // Only skip if the daemon actually has a Discord channel configured
-      try {
-        const daemonPort = (gw.getConfig() as any)?.gateway?.daemonPort ?? 18790;
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 2000);
-        const resp = await fetch(`http://127.0.0.1:${daemonPort}/health`, { signal: ctrl.signal });
-        clearTimeout(timer);
-        if (resp.ok) {
-          const health = await resp.json().catch(() => ({}));
-          // Only skip if daemon explicitly reports discord as active
-          if (health?.channels?.discord || health?.discord?.active) {
-            logger.info("Daemon is bridged and handling Discord — skipping local bot");
-            return;
-          }
-        }
-      } catch {
-        // Daemon not reachable or no channel info — start local bot
-      }
+    // Ownership is decided in one place for every channel and every caller.
+    //
+    // This used to probe the daemon here with `isBridged()` plus a guess at
+    // the shape of its /health response (`health?.channels?.discord ||
+    // health?.discord?.active`). That guess is unverifiable from this side and
+    // fails open — if the shape ever changed, JoyCreate would start a second
+    // client on a token the daemon was already using. The arbiter reads the
+    // daemon's own config instead, which is what the daemon actually acts on.
+    const ownership = await resolveOwner("discord", {
+      hasLocalCredential: true,
+    });
+    if (ownership.owner === "daemon") {
+      logger.info(`Discord auto-start skipped — ${ownership.reason}`);
+      return;
     }
 
     let token: string | undefined;
 
     // 1. Check the gateway's in-memory config (app userData path)
+    const gw = getOpenClawGateway();
     const config = gw.getConfig() as unknown as Record<string, unknown>;
     const channels = config.channels as Record<string, unknown> | undefined;
     const dcChannel = channels?.discord as Record<string, unknown> | undefined;

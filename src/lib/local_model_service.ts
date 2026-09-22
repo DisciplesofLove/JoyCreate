@@ -215,6 +215,7 @@ export class OllamaProvider {
         family: data.details?.family,
         parameters: data.details?.parameter_size,
         contextLength: data.details?.context_length,
+        capabilities: Array.isArray(data.capabilities) ? data.capabilities : undefined,
         quantization: data.details?.quantization_level,
         digest: data.digest,
       };

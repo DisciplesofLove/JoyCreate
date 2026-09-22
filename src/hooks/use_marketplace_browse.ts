@@ -18,6 +18,7 @@ import type {
   MyClaimsParams,
   OwnershipParams,
   CreatorRevenueSummary,
+  ClaimMarketplaceAssetRequest,
 } from "@/types/publish_types";
 import { showError } from "@/lib/toast";
 
@@ -80,6 +81,20 @@ export function useMarketplaceCategories() {
     queryKey: marketplaceKeys.categories(),
     queryFn: () => client.marketplaceCategories(),
     staleTime: 300_000,
+  });
+}
+
+export function useClaimMarketplaceAsset() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: ClaimMarketplaceAssetRequest) =>
+      client.marketplaceClaimAsset(request),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: marketplaceKeys.all });
+    },
+    onError: (error) => {
+      showError(error instanceof Error ? error : new Error(String(error)));
+    },
   });
 }
 

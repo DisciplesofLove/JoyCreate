@@ -60,6 +60,12 @@ export interface ListProjectsResult {
   projects: Project[];
 }
 
+export interface AssignAppToProjectParams {
+  appId: number;
+  /** Target collection id, or null to remove the app from any collection. */
+  projectId: number | null;
+}
+
 export interface GetProjectResult {
   project?: Project;
   error?: string;

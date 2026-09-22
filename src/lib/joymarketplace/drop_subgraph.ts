@@ -7,14 +7,12 @@
  * DropERC1155 + Stores subgraphs. No MarketplaceV3 listings, no Supabase
  * listing mirror.
  *
- * Chain coverage: Polygon Amoy (default) + Arbitrum Sepolia. The chain to
- * query is passed per-call via the optional `chainId` argument; zero-arg
- * shapes preserve Amoy-only behaviour so existing callers / tests stay
- * green. Endpoints are env-overridable for staging/local subgraphs:
+ * Chain coverage: Arbitrum Sepolia. The chain to query is passed per-call via
+ * the optional `chainId` argument; zero-arg calls default to Sepolia.
+ * Endpoints are env-overridable for staging/local subgraphs:
  *
- *   Amoy:    JOYMARKETPLACE_DROP_SUBGRAPH_URL
- *            JOYMARKETPLACE_STORES_SUBGRAPH_URL
  *   Sepolia: JOYMARKETPLACE_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA
+ *            JOYMARKETPLACE_STORE_DROPS_SUBGRAPH_URL_ARBITRUM_SEPOLIA
  *            JOYMARKETPLACE_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA
  *
  * The renderer should reach this layer through the
@@ -22,82 +20,84 @@
  * directly (electron-main only).
  */
 
-import log from "electron-log";
 import type { MarketplaceChainId } from "@/lib/onchain/chain_registry";
-
-const logger = log.scope("drop_subgraph");
 
 // ── Endpoints ──────────────────────────────────────────────────────────────
 
-/** Default Polygon Amoy DropERC1155 subgraph (joy-drop-amoy). */
+/**
+ * The live drop lane: per-store DropERC1155 clones plus the shared platform
+ * drop that predates them.
+ *
+ * This used to point at `joy-drop-arbitrum-sepolia`, which the marketplace
+ * calls the *editions* subgraph and keeps only for `Edition` and
+ * `ReputationScore`. Reading it as the drop lane meant browse returned the old
+ * lineage and `listClaimsByBuyer` reported zero licences for wallets that
+ * demonstrably hold them — an empty result, not an error, so nothing surfaced.
+ *
+ * `Token.id` here is `<contract>-<tokenId>`, because per-store drops each
+ * restart numbering at zero.
+ */
 export const DEFAULT_DROP_SUBGRAPH_URL =
-  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-amoy/0.0.1/gn";
+  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-store-drops-arbitrum-sepolia/0.0.2/gn";
 
-/** Default Polygon Amoy Stores subgraph (joy-stores-amoy). */
+/** Alias — the store-scoped lane is now the default drop lane. */
+export const DEFAULT_STORE_DROPS_SUBGRAPH_URL = DEFAULT_DROP_SUBGRAPH_URL;
+
+/**
+ * Legacy editions lineage. Retained because it is the only source of the
+ * `Edition` and `ReputationScore` entities; it indexes none of the per-store
+ * drops, so it must never back a browse or ownership query.
+ */
+export const DEFAULT_EDITIONS_SUBGRAPH_URL =
+  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-arbitrum-sepolia/0.0.5/gn";
+
+/** Default marketplace Stores subgraph (Arbitrum Sepolia). */
 export const DEFAULT_STORES_SUBGRAPH_URL =
-  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-amoy/0.0.3/gn";
-
-/** Default Arbitrum Sepolia DropERC1155 subgraph (joy-drop-arbitrum-sepolia). */
-export const DEFAULT_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA =
-  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-drop-arbitrum-sepolia/0.0.1/gn";
-
-/** Default Arbitrum Sepolia Stores subgraph (joy-stores-arbitrum-sepolia). */
-export const DEFAULT_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA =
-  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.1/gn";
+  "https://api.goldsky.com/api/public/project_cmnkv2wbi14re01un3l5lb3rf/subgraphs/joy-stores-arbitrum-sepolia/0.0.5/gn";
 
 /**
  * Chains for which an indexed subgraph is available. Arbitrum One has no
  * Stylus drop deployment yet, so it is intentionally omitted — callers that
  * pass `"arbitrumOne"` get a clear error rather than silent Amoy fallback.
  */
-export type SubgraphChainId = Extract<
-  MarketplaceChainId,
-  "polygonAmoy" | "arbitrumSepolia"
->;
+export type SubgraphChainId = Extract<MarketplaceChainId, "arbitrumSepolia">;
 
 export const SUBGRAPH_CHAIN_IDS: readonly SubgraphChainId[] = [
-  "polygonAmoy",
   "arbitrumSepolia",
 ] as const;
 
 export function isSubgraphChainId(value: unknown): value is SubgraphChainId {
-  return value === "polygonAmoy" || value === "arbitrumSepolia";
+  return value === "arbitrumSepolia";
 }
 
 /** Resolve the active Drop subgraph URL (env override > compiled default). */
-export function getDropSubgraphUrl(chainId: SubgraphChainId = "polygonAmoy"): string {
-  switch (chainId) {
-    case "polygonAmoy":
-      return (
-        process.env.JOYMARKETPLACE_DROP_SUBGRAPH_URL ||
-        DEFAULT_DROP_SUBGRAPH_URL
-      );
-    case "arbitrumSepolia":
-      return (
-        process.env.JOYMARKETPLACE_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA ||
-        DEFAULT_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA
-      );
-  }
+export function getDropSubgraphUrl(_chainId: SubgraphChainId = "arbitrumSepolia"): string {
+  return (
+    process.env.JOYMARKETPLACE_DROP_SUBGRAPH_URL_ARBITRUM_SEPOLIA ||
+    DEFAULT_DROP_SUBGRAPH_URL
+  );
+}
+
+/** Resolve the store-scoped Drop subgraph URL (env override > compiled default). */
+export function getStoreDropsSubgraphUrl(
+  _chainId: SubgraphChainId = "arbitrumSepolia",
+): string {
+  return (
+    process.env.JOYMARKETPLACE_STORE_DROPS_SUBGRAPH_URL_ARBITRUM_SEPOLIA ||
+    DEFAULT_STORE_DROPS_SUBGRAPH_URL
+  );
 }
 
 /** Resolve the active Stores subgraph URL (env override > compiled default). */
-export function getStoresSubgraphUrl(chainId: SubgraphChainId = "polygonAmoy"): string {
-  switch (chainId) {
-    case "polygonAmoy":
-      return (
-        process.env.JOYMARKETPLACE_STORES_SUBGRAPH_URL ||
-        DEFAULT_STORES_SUBGRAPH_URL
-      );
-    case "arbitrumSepolia":
-      return (
-        process.env.JOYMARKETPLACE_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA ||
-        DEFAULT_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA
-      );
-  }
+export function getStoresSubgraphUrl(_chainId: SubgraphChainId = "arbitrumSepolia"): string {
+  return (
+    process.env.JOYMARKETPLACE_STORES_SUBGRAPH_URL_ARBITRUM_SEPOLIA ||
+    DEFAULT_STORES_SUBGRAPH_URL
+  );
 }
 
 function assertSubgraphChain(chainId: SubgraphChainId | undefined): SubgraphChainId {
-  const id = chainId ?? "polygonAmoy";
+  const id = chainId ?? "arbitrumSepolia";
   if (!isSubgraphChainId(id)) {
     throw new Error(
       `Subgraph not available for chain "${String(id)}" — supported: ${SUBGRAPH_CHAIN_IDS.join(", ")}`,
@@ -108,12 +108,14 @@ function assertSubgraphChain(chainId: SubgraphChainId | undefined): SubgraphChai
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-/** A lazy-minted DropERC1155 token, as indexed by joy-drop-amoy. */
+/** A lazy-minted DropERC1155 token indexed on Arbitrum Sepolia. */
 export interface DropToken {
-  /** Subgraph entity id (== tokenId as a decimal string). */
+  /** Subgraph entity id. Store-scoped indexes use `<contract>-<tokenId>`. */
   id: string;
   /** Decimal string. */
   tokenId: string;
+  /** Drop contract this token lives on (lowercase hex). */
+  contract?: string;
   /** ipfs://... or https://... metadata base URI. */
   baseURI: string;
   /** Unix-second string when lazyMint tx was indexed. */
@@ -196,7 +198,7 @@ export interface ListDropsParams {
   /** Sort field. Default "lazyMintedAt". */
   orderBy?: "lazyMintedAt" | "tokenId" | "totalPurchases" | "supplyClaimed";
   orderDirection?: "asc" | "desc";
-  /** Chain to query. Default "polygonAmoy" for backward compat. */
+  /** Chain to query. Default "arbitrumSepolia". */
   chainId?: SubgraphChainId;
 }
 
@@ -210,7 +212,7 @@ export interface ListClaimsByBuyerParams {
   buyer: string;
   page?: number;
   pageSize?: number;
-  /** Chain to query. Default "polygonAmoy". */
+  /** Chain to query. Default "arbitrumSepolia". */
   chainId?: SubgraphChainId;
 }
 
@@ -256,6 +258,7 @@ async function gql<T>(
 const TOKEN_FIELDS = `
   id
   tokenId
+  contract
   baseURI
   lazyMintedAt
   lazyMintBlock
@@ -300,11 +303,8 @@ const STORE_FIELDS = `
 /**
  * Page through all lazy-minted drops. Used by the marketplace browse grid.
  *
- * NOTE: filtering by "creator wallet" is not done here because DropERC1155
- * doesn't store the creator on the token entity directly — we'd need the
- * lazyMintTxHash sender, which the current subgraph schema does not surface
- * on `Token`. For creator-scoped queries use `listDropsByCreator`, which
- * routes through the stores subgraph's domain registration → store owner.
+ * For creator-scoped queries use `listDropsByCreator`, which routes through
+ * the store-scoped drop index where each token records its creator wallet.
  */
 export async function listDrops(params: ListDropsParams = {}): Promise<ListDropsResult> {
   const pageSize = Math.min(Math.max(params.pageSize ?? 20, 1), 100);
@@ -335,18 +335,36 @@ export async function listDrops(params: ListDropsParams = {}): Promise<ListDrops
  */
 export async function getDrop(
   tokenId: string | number | bigint,
-  chainId: SubgraphChainId = "polygonAmoy",
+  chainId: SubgraphChainId = "arbitrumSepolia",
 ): Promise<DropToken | null> {
-  const id = String(tokenId);
+  const ref = String(tokenId);
   const chain = assertSubgraphChain(chainId);
-  const data = await gql<{ token: DropToken | null }>(
+
+  // `Token.id` is `<contract>-<tokenId>` on the store-drops lane, but old links
+  // and pre-migration data still carry a bare tokenId. Resolve a composite id
+  // directly; for a bare one, fall back to a filtered query, since the same
+  // number can exist on several store drops.
+  if (ref.includes("-")) {
+    const data = await gql<{ token: DropToken | null }>(
+      getDropSubgraphUrl(chain),
+      `query GetDrop($id: ID!) {
+        token(id: $id) { ${TOKEN_FIELDS} }
+      }`,
+      { id: ref },
+    );
+    return data.token;
+  }
+
+  const data = await gql<{ tokens: DropToken[] }>(
     getDropSubgraphUrl(chain),
-    `query GetDrop($id: ID!) {
-      token(id: $id) { ${TOKEN_FIELDS} }
+    `query GetDropByTokenId($tokenId: BigInt!) {
+      tokens(where: { tokenId: $tokenId }, first: 1, orderBy: lazyMintBlock, orderDirection: asc) {
+        ${TOKEN_FIELDS}
+      }
     }`,
-    { id },
+    { tokenId: ref },
   );
-  return data.token;
+  return data.tokens?.[0] ?? null;
 }
 
 /**
@@ -367,12 +385,34 @@ export async function listDropsByCreator(params: ListDropsByCreatorParams): Prom
   if (!params.creator) {
     throw new Error("listDropsByCreator: creator wallet is required");
   }
-  // For now, delegate to listDrops; future versions will add a where-filter
-  // once the subgraph exposes `creator` on Token. Logged so we can audit.
-  logger.debug(
-    `listDropsByCreator(${params.creator}) — delegating to listDrops (subgraph lacks per-token creator)`,
+  const pageSize = Math.min(Math.max(params.pageSize ?? 20, 1), 100);
+  const page = Math.max(params.page ?? 1, 1);
+  const skip = (page - 1) * pageSize;
+  const orderBy = params.orderBy ?? "lazyMintedAt";
+  const orderDirection = params.orderDirection ?? "desc";
+  const creator = params.creator.toLowerCase();
+  const chainId = assertSubgraphChain(params.chainId);
+
+  const data = await gql<{ tokens: DropToken[] }>(
+    getStoreDropsSubgraphUrl(chainId),
+    `query ListDropsByCreator($creator: Bytes!, $first: Int!, $skip: Int!, $orderBy: Token_orderBy!, $orderDirection: OrderDirection!) {
+      tokens(
+        where: { creator: $creator }
+        first: $first
+        skip: $skip
+        orderBy: $orderBy
+        orderDirection: $orderDirection
+      ) {
+        ${TOKEN_FIELDS}
+      }
+    }`,
+    { creator, first: pageSize, skip, orderBy, orderDirection },
   );
-  return listDrops(params);
+
+  return {
+    items: data.tokens,
+    hasMore: data.tokens.length === pageSize,
+  };
 }
 
 /**
@@ -413,7 +453,7 @@ export async function listClaimsByBuyer(params: ListClaimsByBuyerParams): Promis
 export async function getOwnership(
   tokenId: string | number | bigint,
   walletAddress: string,
-  chainId: SubgraphChainId = "polygonAmoy",
+  chainId: SubgraphChainId = "arbitrumSepolia",
 ): Promise<DropUserBalance | null> {
   if (!walletAddress) {
     throw new Error("getOwnership: walletAddress is required");
@@ -449,7 +489,7 @@ export async function getOwnership(
  */
 export async function getStore(
   id: string,
-  chainId: SubgraphChainId = "polygonAmoy",
+  chainId: SubgraphChainId = "arbitrumSepolia",
 ): Promise<JoyStore | null> {
   if (!id) throw new Error("getStore: id is required");
   const chain = assertSubgraphChain(chainId);
@@ -469,7 +509,7 @@ export async function getStore(
 export async function listStoresByOwner(
   walletAddress: string,
   first = 50,
-  chainId: SubgraphChainId = "polygonAmoy",
+  chainId: SubgraphChainId = "arbitrumSepolia",
 ): Promise<JoyStore[]> {
   if (!walletAddress) {
     throw new Error("listStoresByOwner: walletAddress is required");
@@ -507,7 +547,7 @@ export async function listStoresByOwner(
 export async function listStoresByDomainOwner(
   walletAddress: string,
   first = 50,
-  chainId: SubgraphChainId = "polygonAmoy",
+  chainId: SubgraphChainId = "arbitrumSepolia",
 ): Promise<JoyStore[]> {
   if (!walletAddress) {
     throw new Error("listStoresByDomainOwner: walletAddress is required");

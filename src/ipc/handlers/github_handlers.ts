@@ -17,7 +17,9 @@ import { IS_TEST_BUILD } from "../utils/test_utils";
 const logger = log.scope("github_handlers");
 
 // --- GitHub Device Flow Constants ---
-// TODO: Fetch this securely, e.g., from environment variables or a config file
+// OAuth *client IDs* are public identifiers (not secrets) — GitHub's device
+// flow is designed for apps that cannot keep a client secret. Overridable
+// via GITHUB_CLIENT_ID for forks that register their own OAuth app.
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || "Ov23likR31wIwYJUzHE3";
 
 // Use test server URLs when in test mode

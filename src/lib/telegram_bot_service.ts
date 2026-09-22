@@ -78,9 +78,19 @@ export interface TelegramBotStatus {
 // Service
 // ---------------------------------------------------------------------------
 
-class TelegramBotService extends EventEmitter {
-  private static instance: TelegramBotService;
+/**
+ * Process-global singleton key. The main-process bundle can load this module
+ * under two chunk identities (a static `import` in one file and a dynamic
+ * `await import()` in another) — electron-forge's Vite build does NOT dedupe
+ * those into a single chunk. A plain `private static instance` field would then
+ * exist TWICE, producing two independent bots that both long-poll the same
+ * Telegram token and terminate each other with HTTP 409 "Conflict: terminated
+ * by other getUpdates request". Pinning the instance on `globalThis` guarantees
+ * a single bot no matter how many times the module is instantiated.
+ */
+const TELEGRAM_BOT_SINGLETON = Symbol.for("joycreate.telegramBotService");
 
+class TelegramBotService extends EventEmitter {
   private config: TelegramBotConfig = { token: "", enabled: false };
   private polling = false;
   private pollAbort: AbortController | null = null;
@@ -99,10 +109,11 @@ class TelegramBotService extends EventEmitter {
   }
 
   static getInstance(): TelegramBotService {
-    if (!TelegramBotService.instance) {
-      TelegramBotService.instance = new TelegramBotService();
+    const g = globalThis as Record<symbol, TelegramBotService | undefined>;
+    if (!g[TELEGRAM_BOT_SINGLETON]) {
+      g[TELEGRAM_BOT_SINGLETON] = new TelegramBotService();
     }
-    return TelegramBotService.instance;
+    return g[TELEGRAM_BOT_SINGLETON]!;
   }
 
   // =========================================================================
@@ -157,6 +168,7 @@ class TelegramBotService extends EventEmitter {
 
       this.polling = true;
       this.consecutiveErrors = 0;
+      this.consecutive409Reclaims = 0;
       this.lastError = undefined;
       logger.info(`Telegram bot polling started (@${this.botUser?.username})`);
       this.emit("started", { username: this.botUser?.username });

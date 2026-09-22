@@ -15,7 +15,9 @@ const logger = log.scope("openai_fine_tuning");
 export const OPENAI_FINE_TUNE_MODELS = [
   { id: "gpt-5-mini", name: "GPT 5 Mini", description: "Cost-effective fine-tuning" },
   { id: "gpt-5", name: "GPT 5", description: "High-performance fine-tuning" },
-  { id: "gpt-5.1-codex-mini", name: "GPT 5.1 Codex Mini", description: "Premium code fine-tuning" },
+  // gpt-5.1-codex-mini was shut down on 2026-07-23 and is gone. The two models
+  // above are still available; this list has not been checked against OpenAI's
+  // fine-tuning docs, which support a narrower set than the chat API.
 ];
 
 export interface OpenAiFineTuneConfig {

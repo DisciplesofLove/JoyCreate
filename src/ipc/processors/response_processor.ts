@@ -41,6 +41,7 @@ import { applySearchReplace } from "../../pro/main/ipc/processors/search_replace
 import { storeDbTimestampAtCurrentVersion } from "../utils/neon_timestamp_utils";
 import { convertMarkdownCodeBlocksToJoyWrite } from "../utils/markdown_to_joy_write";
 import { fixShadcnImports } from "../utils/fix_shadcn_imports";
+import { recordTurnInBuilderMemory } from "../utils/builder_memory";
 
 import { FileUploadsState } from "../utils/file_uploads_state";
 
@@ -530,6 +531,30 @@ export async function processFullResponseActions(
       renamedFiles.length > 0 ||
       deletedFiles.length > 0 ||
       joyAddDependencyPackages.length > 0;
+
+    // Deterministic builder memory: record this turn in .joy/memory/ so the
+    // agent retains project state across long conversations, regardless of
+    // whether the model remembered to update PROJECT.md.
+    try {
+      const lastUserMessage = await db.query.messages.findFirst({
+        where: and(eq(messages.chatId, chatId), eq(messages.role, "user")),
+        orderBy: (messages, { desc }) => [desc(messages.id)],
+      });
+      const memoryFiles = await recordTurnInBuilderMemory(appPath, {
+        userPrompt: lastUserMessage?.content,
+        chatSummary,
+        writtenFiles,
+        renamedFiles,
+        deletedFiles,
+        addedDependencies: joyAddDependencyPackages,
+      });
+      if (hasChanges) {
+        // Stage the memory files as part of this turn's commit.
+        writtenFiles.push(...memoryFiles);
+      }
+    } catch (memoryError) {
+      logger.warn("Failed to record builder memory (non-fatal):", memoryError);
+    }
 
     let uncommittedFiles: string[] = [];
     let extraFilesError: string | undefined;

@@ -26,9 +26,15 @@ export function escapeXmlContent(str: string): string {
 export interface AgentContext {
   event: IpcMainInvokeEvent;
   appPath: string;
+  /** The app's numeric id (used for runtime log lookup, resource locking, etc.). */
+  appId: number;
   chatId: number;
   supabaseProjectId: string | null;
   supabaseOrganizationSlug: string | null;
+  /** The app's Neon project id, when a Neon database is connected. */
+  neonProjectId: string | null;
+  /** The app's Neon development branch id, when connected. */
+  neonDevelopmentBranchId: string | null;
   messageId: number;
   isSharedModulesChanged: boolean;
   chatSummary?: string;

@@ -9,6 +9,11 @@
  * but from the main process directly (no round-trip through preload).
  */
 
+import {
+  defaultModelFor,
+  pickUsableProvider,
+  type ProviderAvailability,
+} from "@/lib/media/provider_defaults";
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import log from "electron-log";
 import type { ActionDefinition } from "@/types/openclaw_autonomous_types";
@@ -375,7 +380,7 @@ export const ACTION_CATALOG: ActionDefinition[] = [
     description: "Generate an AI image from a text prompt",
     parameters: [
       { name: "prompt", type: "string", required: true, description: "Image description" },
-      { name: "provider", type: "string", required: false, description: "Provider: openai, google, stability, local" },
+      { name: "provider", type: "string", required: false, description: "Provider: openai, google, stabilityai, replicate, fal, xai, comfyui, a1111, localai. Omit to use the first configured one." },
       { name: "width", type: "number", required: false, description: "Image width (default 1024)" },
       { name: "height", type: "number", required: false, description: "Image height (default 1024)" },
     ],
@@ -398,7 +403,7 @@ export const ACTION_CATALOG: ActionDefinition[] = [
     description: "Generate an AI video from a text prompt",
     parameters: [
       { name: "prompt", type: "string", required: true, description: "Video description" },
-      { name: "provider", type: "string", required: false, description: "Provider: runway, stability, local" },
+      { name: "provider", type: "string", required: false, description: "Provider: runway, fal, replicate, luma, stabilityai, google, openai. Omit to use the first configured one." },
       { name: "duration", type: "number", required: false, description: "Duration in seconds" },
     ],
     channel: "video-studio:generate",
@@ -2198,7 +2203,50 @@ export async function dispatchAction(
   // exact shape it expects.
   let dispatchParams: Record<string, unknown> = params;
 
-  if (actionId === "document.write") {
+  if (actionId === "image.generate" || actionId === "video.generate") {
+    // Both handlers throw "Provider is required" on their first line, and both
+    // record `model` in the provenance manifest for every generated asset.
+    // The catalog marks provider optional, so without this a planner that
+    // omits it — the common case — fails before rendering anything.
+    const kind = actionId === "image.generate" ? "image" : "video";
+
+    let available: ProviderAvailability[] | undefined;
+    if (kind === "image") {
+      try {
+        available = (await invokeHandler(
+          "image-studio:available-providers",
+          {},
+          [],
+        )) as ProviderAvailability[];
+      } catch {
+        // Falling back to the explicit choice is better than failing here.
+      }
+    }
+
+    const provider = pickUsableProvider(
+      params.provider as string | undefined,
+      available,
+      kind,
+    );
+    if (!provider) {
+      throw new Error(
+        `No ${kind} provider is configured. Add an API key in Settings, or run a ` +
+          `local backend (ComfyUI, Automatic1111, LocalAI), then try again.`,
+      );
+    }
+
+    dispatchParams = {
+      ...params,
+      provider,
+      model: (params.model as string) || defaultModelFor(provider, kind),
+      // The handlers read camelCase; the catalog speaks plain words.
+      negativePrompt: params.negativePrompt ?? params.negative_prompt,
+      width: params.width ?? 1024,
+      height: params.height ?? (kind === "image" ? 1024 : 576),
+      // `seed` is a string on both handlers.
+      seed: params.seed === undefined ? undefined : String(params.seed),
+    };
+  } else if (actionId === "document.write") {
     dispatchParams = {
       ...params,
       type: (params.type as string) || "document",

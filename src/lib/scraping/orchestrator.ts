@@ -28,6 +28,15 @@ import {
   APIEngine,
 } from "./engines";
 import { runExtraction, quickExtract } from "./extraction";
+import { JoyCrawler } from "./crawler";
+import { generatePaginationUrls, detectPagination } from "./pagination";
+import { ProxyManager } from "./proxy";
+import {
+  adjustDelay,
+  getAdaptiveDelay,
+  isUrlAllowed,
+  waitForToken,
+} from "./anti_bot";
 import {
   MetricsCollector,
   categorizeError,
@@ -36,7 +45,10 @@ import {
   DEFAULT_RETRY_STRATEGY,
 } from "./monitoring";
 import type {
+  CrawlConfig,
+  CrawlPageResult,
   EngineType,
+  ProxyConfig,
   ScrapeOptions,
   ScrapeResult,
   ScrapingEngine,
@@ -46,6 +58,13 @@ import type {
 import type { ScrapingConfig } from "@/ipc/handlers/scraping/types";
 
 const logger = log.scope("scraping:orchestrator");
+
+/**
+ * The most recent HTML per URL, so pagination can be detected from the page
+ * that was just fetched without fetching it twice. Entries are deleted as soon
+ * as the URL has been processed.
+ */
+const lastHtmlByUrl = new Map<string, string>();
 
 // ── Engine pool ─────────────────────────────────────────────────────────────
 
@@ -160,21 +179,55 @@ export async function runJob(jobId: string): Promise<void> {
     }
 
     const engine = getEngine(engineType);
+    const proxies = buildProxyManager(config);
 
-    // Process each URL
-    for (const url of urls) {
-      // Check if cancelled
-      const [current] = await db
-        .select({ status: scrapingJobs.status })
-        .from(scrapingJobs)
-        .where(eq(scrapingJobs.id, jobId))
-        .limit(1);
+    if (config.crawl?.enabled && urls.length > 0) {
+      // Crawl mode replaces the fixed list: the seeds are the starting points
+      // and the frontier decides the rest.
+      await runCrawl(jobId, urls, engine, config, metrics);
+    } else {
+      // A queue rather than a fixed array, so pagination discovered on page one
+      // can extend the run without a second pass over the site.
+      const queue = [...urls];
+      const seen = new Set(queue);
+      let paginationChecked = false;
 
-      if (current?.status === "cancelled" || current?.status === "paused") {
-        break;
+      for (let i = 0; i < queue.length; i++) {
+        const url = queue[i];
+
+        // Check if cancelled
+        const [current] = await db
+          .select({ status: scrapingJobs.status })
+          .from(scrapingJobs)
+          .where(eq(scrapingJobs.id, jobId))
+          .limit(1);
+
+        if (current?.status === "cancelled" || current?.status === "paused") {
+          break;
+        }
+
+        await processUrl(jobId, url, engine, config, metrics, undefined, proxies);
+
+        // Pagination is detected once, from the first page that produced HTML.
+        // Re-detecting per page would multiply the same sequence.
+        if (!paginationChecked && config.api?.pagination) {
+          paginationChecked = true;
+          const html = lastHtmlByUrl.get(url);
+          if (html) {
+            for (const next of expandPagination(config, url, html)) {
+              if (!seen.has(next)) {
+                seen.add(next);
+                queue.push(next);
+              }
+            }
+            await db
+              .update(scrapingJobs)
+              .set({ pagesTotal: queue.length })
+              .where(eq(scrapingJobs.id, jobId));
+          }
+        }
+        lastHtmlByUrl.delete(url);
       }
-
-      await processUrl(jobId, url, engine, config, metrics);
     }
 
     // Final status
@@ -210,18 +263,55 @@ async function processUrl(
   config: ScrapingConfig,
   metrics: MetricsCollector,
   retryStrategy: RetryStrategy = DEFAULT_RETRY_STRATEGY,
+  proxies?: ProxyManager,
 ): Promise<void> {
   let lastError: Error | undefined;
+  const domain = domainOf(url);
+  const baseDelay = config.rateLimit?.delayBetweenRequests ?? 0;
+
+  // Politeness, before the first request rather than between requests.
+  //
+  // The orchestrator used to fetch in a tight loop with no delay and no robots
+  // check, while a finished politeness engine sat unimported next to it. A
+  // scraper that ignores robots.txt and hammers a host is how an IP gets
+  // blocked — and the proxy rotation below exists to survive blocks, not to
+  // make earning them cheaper.
+  if (!(await isUrlAllowed(url, config.rateLimit?.respectRobots !== false))) {
+    logger.info(`robots.txt disallows ${url}; skipping`);
+    metrics.recordError();
+    return;
+  }
 
   for (let attempt = 0; attempt <= retryStrategy.maxRetries; attempt++) {
+    let proxy: ProxyConfig | undefined;
+    const startedAt = Date.now();
     try {
+      // Token bucket per domain, then the adaptive delay this domain has
+      // earned — it grows on errors and shrinks on success.
+      await waitForToken(domain, config.rateLimit?.requestsPerSecond ?? 2);
+      const delayMs = getAdaptiveDelay(domain, baseDelay);
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+
+      proxy = proxies?.getProxy(domain) ?? undefined;
+
       // Fetch
       const scrapeResult = await engine.scrape(url, {
         timeout: 30_000,
         scrollToBottom: config.mode === "playwright" || config.mode === "hybrid",
+        proxy,
       });
 
+      if (proxy) proxies?.reportSuccess(proxy, Date.now() - startedAt);
+      // The real status matters: `adjustDelay` backs off hard on 429/503 and
+      // eases off on 2xx, which a boolean could not express.
+      adjustDelay(domain, scrapeResult.statusCode, baseDelay);
+
       metrics.recordPageLoad(scrapeResult.fetchDurationMs, scrapeResult.bytesReceived);
+
+      // Held only until the caller has had a chance to look for pagination
+      // links, then dropped. Keeping every page's HTML for the length of a job
+      // would hold a whole site in memory.
+      if (scrapeResult.html) lastHtmlByUrl.set(url, scrapeResult.html);
 
       // Extract
       const extraction = await runExtraction({
@@ -271,6 +361,14 @@ async function processUrl(
       lastError = err instanceof Error ? err : new Error(String(err));
       const category = categorizeError(err);
       metrics.recordError();
+
+      // A failure through a proxy counts against that proxy, and slows this
+      // domain down. Both are what let a long crawl survive rate limiting
+      // instead of failing every remaining page the same way.
+      if (proxy) proxies?.reportFailure(proxy);
+      // No response means no status; 503 is the closest honest signal — treat
+      // it as "back off", which is what a dead or throttling host warrants.
+      adjustDelay(domain, 503, baseDelay);
 
       if (!shouldRetry(category) || attempt >= retryStrategy.maxRetries) {
         break;
@@ -515,3 +613,200 @@ function resolveUrls(config: ScrapingConfig): string[] {
   }
   return [];
 }
+
+/** Host of a URL, or the raw string if it will not parse. */
+function domainOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Build a rotating proxy pool from the job config, or nothing when none is set.
+ *
+ * `ScrapingConfig.proxy` holds a single URL; `ProxyManager` wants a parsed pool.
+ * A pool of one still buys the health tracking — three failures and the
+ * orchestrator stops routing through a proxy that is no longer working, rather
+ * than retrying every remaining URL through it.
+ */
+function buildProxyManager(config: ScrapingConfig): ProxyManager | undefined {
+  if (!config.proxy?.url) return undefined;
+  try {
+    const u = new URL(config.proxy.url);
+    const type = (u.protocol.replace(":", "") || "http") as ProxyConfig["type"];
+    const proxy: ProxyConfig = {
+      type,
+      host: u.hostname,
+      port: Number(u.port) || (type === "https" ? 443 : 80),
+      username: config.proxy.username || u.username || undefined,
+      password: config.proxy.password || u.password || undefined,
+    };
+    return new ProxyManager({ proxies: [proxy], rotation: "per-domain" });
+  } catch (err) {
+    // A malformed proxy URL must not silently mean "scrape without a proxy" —
+    // the whole point of setting one is usually that direct requests are
+    // blocked or identifying.
+    logger.error(`invalid proxy URL ${config.proxy.url}:`, err);
+    throw new Error(`Invalid proxy URL: ${config.proxy.url}`);
+  }
+}
+
+/**
+ * Expand a seed URL into its paginated siblings.
+ *
+ * `ScrapingConfig.api.pagination` was declared, surfaced in the UI, and read by
+ * nothing — a job with pagination configured scraped page one and stopped.
+ * Detection needs the first page's HTML, so this runs after the first fetch.
+ */
+function expandPagination(
+  config: ScrapingConfig,
+  firstUrl: string,
+  html: string,
+): string[] {
+  const maxPages = config.api?.pagination?.maxPages ?? 0;
+  if (maxPages <= 1) return [];
+
+  try {
+    const detection = detectPagination(html, firstUrl);
+    if (detection.confidence < 0.5) {
+      logger.info(
+        `pagination not confidently detected for ${firstUrl} (${detection.strategy}, ${detection.confidence})`,
+      );
+      return [];
+    }
+    const urls = generatePaginationUrls(detection, maxPages);
+    if (urls.length > 0) {
+      logger.info(`pagination: ${urls.length} more page(s) from ${firstUrl}`);
+    }
+    return urls;
+  } catch (err) {
+    logger.warn(`pagination detection failed for ${firstUrl}:`, err);
+    return [];
+  }
+}
+
+/**
+ * Run a job in crawl mode: follow links from the seeds instead of scraping a
+ * fixed list.
+ *
+ * `ScrapingConfig.crawl` has always existed and the orchestrator has always
+ * ignored it, so turning crawling on in the UI scraped exactly the seed URLs.
+ * The crawler handles the frontier, scope and dedupe; extraction and storage
+ * stay here, because that is where the job's config and the results table are.
+ */
+async function runCrawl(
+  jobId: string,
+  seeds: string[],
+  engine: ScrapingEngine,
+  config: ScrapingConfig,
+  metrics: MetricsCollector,
+): Promise<void> {
+  const crawlConfig: CrawlConfig = {
+    seeds,
+    maxDepth: config.crawl?.maxDepth ?? 2,
+    maxPages: config.crawl?.maxPages ?? 50,
+    concurrency: Math.max(1, config.rateLimit?.maxConcurrent ?? 2),
+    // "domain" keeps the crawl on the seed's host; "subdomain" is the widest
+    // scope this type offers, and is what "follow external links" means here.
+    scope: config.crawl?.followExternal ? "subdomain" : "domain",
+    strategy: "bfs",
+    followRedirects: true,
+    respectRobots: config.rateLimit?.respectRobots !== false,
+    delayMs: [
+      config.rateLimit?.delayBetweenRequests ?? 250,
+      (config.rateLimit?.delayBetweenRequests ?? 250) * 3,
+    ],
+    engine: engine.name as EngineType,
+    filters: [
+      ...(config.crawl?.urlIncludePattern
+        ? [{ type: "include" as const, pattern: config.crawl.urlIncludePattern }]
+        : []),
+      ...(config.crawl?.urlExcludePattern
+        ? [{ type: "exclude" as const, pattern: config.crawl.urlExcludePattern }]
+        : []),
+    ],
+    onPageDone: (page: CrawlPageResult) => {
+      // Fire-and-forget: the crawler's workers must not block on the database,
+      // and a storage failure should cost one page rather than the crawl.
+      void storeCrawledPage(jobId, page, config, metrics).catch((err) =>
+        logger.warn(`failed to store crawled page ${page.url}:`, err),
+      );
+    },
+  };
+
+  const crawler = new JoyCrawler(crawlConfig, engine);
+  const session = await crawler.crawl();
+  logger.info(
+    `crawl finished: ${session.pagesVisited} visited, ${session.pagesErrored} errored`,
+  );
+
+  await db
+    .update(scrapingJobs)
+    .set({ pagesTotal: session.pagesVisited })
+    .where(eq(scrapingJobs.id, jobId));
+}
+
+/** Extract and store one page the crawler fetched. */
+async function storeCrawledPage(
+  jobId: string,
+  page: CrawlPageResult,
+  config: ScrapingConfig,
+  metrics: MetricsCollector,
+): Promise<void> {
+  if (page.error || !page.result) {
+    metrics.recordError();
+    return;
+  }
+
+  metrics.recordPageLoad(
+    page.result.fetchDurationMs,
+    page.result.bytesReceived,
+  );
+
+  const extraction = await runExtraction({ scrapeResult: page.result, config });
+  metrics.recordExtraction(true, extraction.fieldData?.length ?? 1);
+
+  await db.insert(scrapingResults).values({
+    id: crypto.randomUUID(),
+    jobId,
+    url: page.url,
+    statusCode: page.statusCode,
+    data: {
+      title: extraction.page.title,
+      content: extraction.page.content,
+      excerpt: extraction.page.excerpt,
+      author: extraction.page.author,
+      publishedDate: extraction.page.publishedDate,
+      images: extraction.page.images?.length ?? 0,
+      links: extraction.page.links?.length ?? 0,
+      fields: extraction.fieldData,
+      crawlDepth: page.depth,
+    } as Record<string, unknown>,
+    extractionEngine: "crawler",
+    confidence: 1.0,
+  });
+
+  const progress = await getJobProgress(jobId);
+  await db
+    .update(scrapingJobs)
+    .set({
+      pagesDone: progress.pagesDone + 1,
+      recordsExtracted:
+        progress.recordsExtracted + (extraction.fieldData?.length ?? 1),
+    })
+    .where(eq(scrapingJobs.id, jobId));
+}
+
+// ── Exported for tests ──────────────────────────────────────────────────────
+//
+// The URL-expansion and proxy-parsing helpers decide how much of a site gets
+// hit and through what, so they are worth testing directly rather than only
+// through a job that needs a network, a database and a browser.
+export const __test__ = {
+  domainOf,
+  buildProxyManager,
+  expandPagination,
+  resolveUrls,
+};

@@ -59,6 +59,9 @@ const EXCLUDED_DIRS = [
   ".next",
   ".venv",
   "venv",
+  // Builder memory — injected separately as a context prefix; excluding it
+  // here avoids duplicating it inside the codebase dump.
+  ".joy",
 ];
 
 // Files to always exclude

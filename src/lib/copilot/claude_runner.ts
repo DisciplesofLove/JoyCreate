@@ -88,17 +88,12 @@ const DEFAULT_DISALLOWED_TOOLS = [
 export async function runClaudeCodeJob(
   opts: ClaudeRunOptions,
 ): Promise<ClaudeRunResult> {
+  // An API key is optional, not required. When the user has signed in to Claude
+  // Code with `claude login`, the CLI holds an OAuth token for their Pro or Max
+  // plan and refreshes it itself — which is how the editors work, and how most
+  // subscribers actually pay for Claude. Refusing to start without a key meant
+  // a paying Max subscriber could not use this feature at all.
   const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return {
-      ok: false,
-      output: "",
-      costUsd: 0,
-      numTurns: 0,
-      errorMessage:
-        "No Anthropic API key. Set ANTHROPIC_API_KEY or pass apiKey in copilot settings.",
-    };
-  }
 
   // Lazy import — the SDK ships an ESM binary helper that we don't want
   // to load at app startup.
@@ -114,6 +109,8 @@ export async function runClaudeCodeJob(
       numTurns: 0,
       errorMessage:
         "Claude Code SDK is not installed. Run: npm install @anthropic-ai/claude-code --legacy-peer-deps",
+      // Deliberately not mentioning an API key here: once the SDK is present,
+      // `claude login` with a Pro/Max plan is enough.
     };
   }
 
@@ -134,10 +131,12 @@ export async function runClaudeCodeJob(
         disallowedTools: opts.disallowedTools ?? DEFAULT_DISALLOWED_TOOLS,
         maxTurns: opts.maxTurns ?? 25,
         permissionMode: "acceptEdits",
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: apiKey,
-        },
+        // Pass the key only if there is one. Setting ANTHROPIC_API_KEY to
+        // undefined would shadow a real one in the environment; leaving the
+        // variable out entirely lets the CLI fall back to the subscription.
+        env: apiKey
+          ? { ...process.env, ANTHROPIC_API_KEY: apiKey }
+          : { ...process.env },
       },
     });
 

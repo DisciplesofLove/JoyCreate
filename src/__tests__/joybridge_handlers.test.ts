@@ -64,10 +64,10 @@ const ENV_KEYS = [
 ];
 
 describe("joybridge_handlers — channel surface", () => {
-  it("declares 11 unique IPC channels", () => {
-    expect(joybridgeTest.CHANNELS.length).toBe(11);
+  it("declares 12 unique IPC channels", () => {
+    expect(joybridgeTest.CHANNELS.length).toBe(12);
     const set = new Set(joybridgeTest.CHANNELS);
-    expect(set.size).toBe(11);
+    expect(set.size).toBe(12);
   });
 
   it("every channel name is namespaced under joybridge:", () => {
@@ -80,6 +80,7 @@ describe("joybridge_handlers — channel surface", () => {
     expect([...joybridgeTest.CHANNELS].sort()).toEqual(
       [
         "joybridge:browse-marketplace",
+        "joybridge:check-store",
         "joybridge:connect",
         "joybridge:create-store",
         "joybridge:get-asset",

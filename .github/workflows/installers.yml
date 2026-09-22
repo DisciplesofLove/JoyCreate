@@ -1,0 +1,242 @@
+# .github/workflows/installers.yml
+#
+# The push-button installer build. Actions -> "Build Installers" -> Run workflow.
+#
+# Builds, on each OS's own runner (installers cannot be cross-built):
+#   Windows  Setup.exe (Squirrel, per-user, no admin) and .msi (WiX, for IT/GPO/Intune)
+#   macOS    .dmg and .zip, for both Apple Silicon and Intel
+#   Linux    .deb, .rpm and .AppImage (the AppImage covers every other distro)
+# plus a one-click installer zip per platform, and one SHA256SUMS.txt.
+#
+# With "publish" ticked -- or on a pushed v* tag -- everything is uploaded to a
+# DRAFT GitHub release. Nobody can download it until a maintainer publishes the
+# draft; the web installers (installer/web/) only ever see published releases.
+#
+# See docs/INSTALLER_PLAYBOOK.md for the full runbook.
+
+name: Build Installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload to a draft GitHub release for the package.json version"
+        type: boolean
+        default: false
+      sign:
+        description: "Code-sign and notarize (needs the signing secrets)"
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: installers-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    # Signing secrets live in the "release" environment, as in release.yml.
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: "Windows x64", image: windows-latest, target: win, arch: x64 }
+          - { label: "Linux x64", image: ubuntu-22.04, target: linux, arch: x64 }
+          - { label: "macOS arm64", image: macos-latest, target: mac, arch: arm64 }
+          - { label: "macOS x64", image: macos-15-intel, target: mac, arch: x64 }
+    runs-on: ${{ matrix.image }}
+    env:
+      # Signing is on for tag pushes, and for manual runs unless unticked.
+      WANT_SIGN: ${{ github.event_name == 'push' || inputs.sign }}
+      HAS_WIN_SIGNING: ${{ secrets.SM_API_KEY != '' }}
+      HAS_MAC_SIGNING: ${{ secrets.MACOS_CERT_P12 != '' }}
+      # Fail the job if any package is missing, rather than shipping a release
+      # that silently has no MSI or no AppImage.
+      JOYCREATE_REQUIRE_ALL: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install node modules
+        run: npm ci --no-audit --no-fund --progress=false
+
+      # ── Windows ──────────────────────────────────────────────────────────
+      - name: Install WiX Toolset v3 (builds the MSI)
+        if: matrix.target == 'win'
+        shell: pwsh
+        run: |
+          # electron-wix-msi drives candle.exe/light.exe from WiX v3. WiX v4+
+          # (the `wix` dotnet tool) is a different CLI and will not work.
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset --version=3.14.1 -y --no-progress
+          }
+          $bin = Get-ChildItem "${env:ProgramFiles(x86)}\WiX Toolset v3*\bin" -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name | Select-Object -Last 1
+          if ($bin) {
+            Add-Content -Path $env:GITHUB_PATH -Value $bin.FullName
+            Write-Host "WiX bin: $($bin.FullName)"
+          } elseif (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            throw "WiX Toolset v3 is not available: candle.exe not found."
+          }
+
+      - name: Set up Windows signing certificate
+        if: matrix.target == 'win' && env.WANT_SIGN == 'true' && env.HAS_WIN_SIGNING == 'true'
+        run: |
+          echo "${{ secrets.SM_CLIENT_CERT_FILE_B64 }}" | base64 --decode > /d/Certificate_pkcs12.p12
+          echo "SM_HOST=${{ secrets.SM_HOST }}" >> "$GITHUB_ENV"
+          echo "SM_API_KEY=${{ secrets.SM_API_KEY }}" >> "$GITHUB_ENV"
+          echo "SM_CLIENT_CERT_FILE=D:\\Certificate_pkcs12.p12" >> "$GITHUB_ENV"
+          echo "SM_CLIENT_CERT_PASSWORD=${{ secrets.SM_CLIENT_CERT_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "SM_CODE_SIGNING_CERT_SHA1_HASH=${{ secrets.SM_CODE_SIGNING_CERT_SHA1_HASH }}" >> "$GITHUB_ENV"
+
+      - name: Code signing with Software Trust Manager
+        if: matrix.target == 'win' && env.WANT_SIGN == 'true' && env.HAS_WIN_SIGNING == 'true'
+        uses: digicert/ssm-code-signing@v1.1.0
+
+      - name: Sync certificate
+        if: matrix.target == 'win' && env.WANT_SIGN == 'true' && env.HAS_WIN_SIGNING == 'true'
+        run: smctl windows certsync --keypair-alias=${{ secrets.DIGICERT_KEYPAIR_ALIAS }}
+
+      # ── Linux ────────────────────────────────────────────────────────────
+      - name: Install Linux packaging tools
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update -qq
+          # rpm -> .rpm, squashfs-tools -> .AppImage (dpkg/fakeroot are preinstalled)
+          sudo apt-get install -y --no-install-recommends rpm squashfs-tools
+
+      # ── macOS ────────────────────────────────────────────────────────────
+      - name: Add macOS signing certificate
+        if: matrix.target == 'mac' && env.WANT_SIGN == 'true' && env.HAS_MAC_SIGNING == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: chmod +x tools/add-macos-cert.sh && . ./tools/add-macos-cert.sh
+
+      - name: Export macOS notarization credentials
+        if: matrix.target == 'mac' && env.WANT_SIGN == 'true' && env.HAS_MAC_SIGNING == 'true'
+        run: |
+          # forge.config.ts signs only when APPLE_TEAM_ID is set, and notarizes
+          # only when APPLE_ID and APPLE_PASSWORD are too. Left unset, the build
+          # is unsigned rather than failing.
+          echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> "$GITHUB_ENV"
+          echo "APPLE_ID=${{ secrets.APPLE_ID }}" >> "$GITHUB_ENV"
+          echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}" >> "$GITHUB_ENV"
+
+      # ── Build ────────────────────────────────────────────────────────────
+      - name: Build installers
+        env:
+          DEBUG: "electron-forge:*,electron-windows-installer:main"
+        run: node scripts/build-installer.mjs ${{ matrix.target }}
+
+      - name: Summarise
+        run: |
+          {
+            echo "### ${{ matrix.label }}"
+            echo '```'
+            cat out-final/installers/SHA256SUMS-*.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.target }}-${{ matrix.arch }}
+          path: |
+            out-final/installers/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft GitHub release
+    needs: build
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: dist
+          merge-multiple: true
+
+      - name: Assemble and verify SHA256SUMS.txt
+        run: |
+          cd dist
+          cat SHA256SUMS-*.txt | sort -k2 > SHA256SUMS.txt
+          rm SHA256SUMS-*.txt
+          # Proves every file survived the artifact round-trip intact. The web
+          # installers refuse to run anything whose hash is not in this file.
+          sha256sum -c SHA256SUMS.txt
+          ls -la
+
+      - name: Create or update the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+
+          if [ "${{ github.event_name }}" = "push" ] && [ "$GITHUB_REF_NAME" != "$TAG" ]; then
+            echo "::error::Pushed tag $GITHUB_REF_NAME does not match package.json version $VERSION."
+            exit 1
+          fi
+
+          PRERELEASE=""
+          case "$VERSION" in *-*) PRERELEASE="--prerelease" ;; esac
+
+          cat > notes.md <<EOF
+          ## Install JoyCreate $VERSION
+
+          **Windows** (PowerShell):
+          \`\`\`powershell
+          irm https://raw.githubusercontent.com/${{ github.repository }}/main/installer/web/install.ps1 | iex
+          \`\`\`
+
+          **macOS / Linux**:
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/installer/web/install.sh | bash
+          \`\`\`
+
+          Or download a file below:
+
+          | You have | Download |
+          |---|---|
+          | Windows | \`JoyCreate-Installer-Windows-x64-$VERSION.zip\`, or the \`Setup.exe\` |
+          | Windows, managed / IT | the \`.msi\` (\`msiexec /i JoyCreate.msi /qn\`) |
+          | Mac | the \`.dmg\` -- \`arm64\` for Apple Silicon, \`x64\` for Intel |
+          | Ubuntu / Debian | the \`.deb\` |
+          | Fedora / RHEL / openSUSE | the \`.rpm\` |
+          | Any other Linux | the \`.AppImage\` |
+
+          Verify any download against \`SHA256SUMS.txt\`.
+          EOF
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft $PRERELEASE --target "$GITHUB_SHA" \
+              --title "JoyCreate $VERSION" --notes-file notes.md
+          fi
+          gh release upload "$TAG" dist/* --clobber
+
+          echo "Draft release ready: $(gh release view "$TAG" --json url -q .url)" >> "$GITHUB_STEP_SUMMARY"

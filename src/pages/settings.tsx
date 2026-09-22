@@ -7,7 +7,7 @@ import { showSuccess, showError } from "@/lib/toast";
 import { AutoApproveSwitch } from "@/components/AutoApproveSwitch";
 import { TelemetrySwitch } from "@/components/TelemetrySwitch";
 import { MaxChatTurnsSelector } from "@/components/MaxChatTurnsSelector";
-import { ThinkingBudgetSelector } from "@/components/ThinkingBudgetSelector";
+import { ReasoningEffortSelector } from "@/components/ReasoningEffortSelector";
 import { useSettings } from "@/hooks/useSettings";
 import { useAppVersion } from "@/hooks/useAppVersion";
 import { Button } from "@/components/ui/button";
@@ -28,9 +28,11 @@ import { RuntimeModeSelector } from "@/components/RuntimeModeSelector";
 import { NodePathSelector } from "@/components/NodePathSelector";
 import { AgentToolsSettings } from "@/components/settings/AgentToolsSettings";
 import { JoyIdentitySettings } from "@/components/settings/JoyIdentitySettings";
+import { SidebarCustomizationPanel } from "@/components/settings/SidebarCustomizationPanel";
 import { JoyMarketplaceSettings } from "@/components/settings/JoyMarketplaceSettings";
 import { CNSSettings } from "@/components/settings/CNSSettings";
 import { ExternalServicesSettings } from "@/components/settings/ExternalServicesSettings";
+import { SubscriptionCliSettings } from "@/components/settings/SubscriptionCliSettings";
 import { CelestiaBlobExplorer } from "@/components/settings/CelestiaBlobExplorer";
 import { CreatorLifecycleDashboard } from "@/components/settings/CreatorLifecycleDashboard";
 import { DocumentAiSettings } from "@/components/settings/DocumentAiSettings";
@@ -152,6 +154,12 @@ export default function SettingsPage() {
             </div>
           </div>
 
+          {/* Subscription plans — Claude Pro/Max, ChatGPT Plus, Google AI Pro,
+              Copilot — used through the vendor CLI instead of an API key. */}
+          <div id="subscription-clis">
+            <SubscriptionCliSettings />
+          </div>
+
           {/* External Services */}
           <div id="external-services">
             <ExternalServicesSettings />
@@ -223,9 +231,60 @@ export default function SettingsPage() {
             </Button>
           </div>
 
+          {/* Sidebar Customization Section */}
+          <div
+            id="sidebar-settings"
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6"
+          >
+            <SidebarCustomizationPanel />
+          </div>
+
           {/* Experiments Section */}
           <div
             id="experiments"
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6"
+          >
+            <h2 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
+              Background &amp; Agents
+            </h2>
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="background-mode"
+                    checked={settings?.backgroundMode !== false}
+                    onCheckedChange={(checked) => {
+                      updateSettings({ backgroundMode: checked });
+                    }}
+                  />
+                  <Label htmlFor="background-mode">Keep running in the background</Label>
+                </div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Closing the window hides JoyCreate to the tray instead of quitting, so
+                  scheduled agents, syncs and in-flight runs keep going. Quit from the tray
+                  menu. Turn this off and closing the last window ends every running agent.
+                  Takes effect on restart.
+                </div>
+              </div>
+              <div className="space-y-1 mt-4">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="open-at-login"
+                    checked={settings?.openAtLogin === true}
+                    onCheckedChange={(checked) => {
+                      updateSettings({ openAtLogin: checked });
+                    }}
+                  />
+                  <Label htmlFor="open-at-login">Start JoyCreate at login</Label>
+                </div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Needed for scheduled agents to run without you starting the app by hand.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div
             className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6"
           >
             <h2 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
@@ -430,7 +489,7 @@ export function AISettings() {
       </h2>
 
       <div className="mt-4">
-        <ThinkingBudgetSelector />
+        <ReasoningEffortSelector variant="inline" />
       </div>
 
       <div className="mt-4">

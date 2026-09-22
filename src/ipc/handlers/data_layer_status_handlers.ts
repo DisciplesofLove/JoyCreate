@@ -331,7 +331,7 @@ export function registerDataLayerStatusHandlers() {
       }
       const merged: DataLayerConfig = {
         ...DEFAULT_DATA_LAYER_CONFIG,
-        ...(req.config ?? {}),
+        ...req.config,
       };
       await db
         .update(appsTable)

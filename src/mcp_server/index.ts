@@ -31,10 +31,30 @@ import { registerAgentBuilderTools } from "./tools/agent_builder_tools";
 import { registerSkillsTools } from "./tools/skills_tools";
 import { registerCreatorDashboardTools } from "./tools/creator_dashboard_tools";
 import { registerWeb4MarketplaceTools } from "./tools/web4_marketplace_tools";
+import { registerPublishTools } from "./tools/publish_tools";
+import { registerEmailTools } from "./tools/email_tools";
+import { registerEconomyTools } from "./tools/economy_tools";
 import { processInboundEvent, type MarketplaceInboundEvent } from "../ipc/handlers/marketplace_inbound_handlers";
 import { getTailscaleConfig } from "../lib/tailscale_service";
 
 const logger = log.scope("mcp-server");
+
+/**
+ * Read and parse a JSON request body.
+ *
+ * The transport can parse the stream itself, but only when it is the first
+ * reader. Since the body is consumed here, it is handed to `handleRequest` as
+ * the pre-parsed third argument. GET/DELETE carry no body — resolve undefined
+ * so the transport falls back to its own handling.
+ */
+async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
+  if (req.method !== "POST") return undefined;
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(chunk as Buffer);
+  const raw = Buffer.concat(chunks).toString("utf8");
+  if (!raw) return undefined;
+  return JSON.parse(raw);
+}
 
 // ---------------------------------------------------------------------------
 // Singleton server manager
@@ -66,13 +86,10 @@ class JoyCreateMcpServer {
     }
 
     this.port = port ?? this.port;
+    // Kept so `getStatus()` and `stop()` have something to report/close, and so
+    // tool registration errors surface at start rather than on first request.
+    // The instance that actually serves /mcp is created per request below.
     this.mcpServer = this.createServer();
-
-    this.httpTransport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined, // stateless — each request is independent
-    });
-
-    await this.mcpServer.connect(this.httpTransport);
 
     this.httpServer = http.createServer(async (req, res) => {
       // ── CORS preflight ───────────────────────────────────────────────────
@@ -130,8 +147,45 @@ class JoyCreateMcpServer {
       }
 
       // ── /mcp — MCP protocol endpoint ─────────────────────────────────────
+      //
+      // A fresh McpServer + transport per request. `handleRequest` binds a
+      // StreamableHTTPServerTransport to that request's response stream, so a
+      // single shared transport can only ever serve ONE request: the first
+      // call (always `initialize`) succeeded and every later call — including
+      // `tools/list`, which every client sends second — returned HTTP 500.
+      // That made the server unusable by any real MCP client.
+      //
+      // Stateless mode is what makes per-request construction correct: there is
+      // no session to carry between calls, so nothing is lost by rebuilding.
       if (req.url === "/mcp") {
-        await this.httpTransport!.handleRequest(req, res);
+        let requestServer: McpServer | null = null;
+        let requestTransport: StreamableHTTPServerTransport | null = null;
+        try {
+          const body = await readJsonBody(req);
+          requestServer = this.createServer();
+          requestTransport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: undefined, // stateless — each request is independent
+          });
+          // Tear down with the response so neither instance outlives the call.
+          res.on("close", () => {
+            requestTransport?.close().catch(() => {});
+            requestServer?.close().catch(() => {});
+          });
+          await requestServer.connect(requestTransport);
+          await requestTransport.handleRequest(req, res, body);
+        } catch (err) {
+          logger.error("MCP request failed:", err);
+          if (!res.headersSent) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                error: { code: -32603, message: (err as Error)?.message ?? "Internal error" },
+                id: null,
+              }),
+            );
+          }
+        }
         return;
       }
 
@@ -226,6 +280,11 @@ class JoyCreateMcpServer {
     registerAgentBuilderTools(server);
     registerSkillsTools(server);
     registerCreatorDashboardTools(server);
+    // Publishing to Joy Marketplace — the canonical encrypt + mint path.
+    registerPublishTools(server);
+    // The AI email client — read + analyse + draft, never send.
+    registerEmailTools(server);
+    registerEconomyTools(server);
     // Web 4.0 pipeline — ERC-8004 / ERC-1144 / X402 store operations
     registerWeb4MarketplaceTools(server);
 

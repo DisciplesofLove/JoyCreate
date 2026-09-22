@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "description": "Single source of truth for the purchase revenue split. Must match REVENUE_SPLIT_BPS in src/config/x402.ts and the on-chain RevenueSplitter config (getConfig()).",
+  "splitBps": {
+    "seller": 8000,
+    "compute": 1000,
+    "platformDao": 1000
+  },
+  "bucketMapping": {
+    "seller": { "label": "Seller", "onchainRole": "creator", "source": "drop.creator on EditionController" },
+    "compute": { "label": "Compute", "onchainRole": "protocolWallet", "purpose": "protocol / Lit encryption fee" },
+    "platformDao": { "label": "Platform + DAO", "onchainRole": "platformWallet", "purpose": "shared platform + DAO treasury (Safe)" }
+  },
+  "rounding": "integer bps division; remainder is credited to compute (protocolWallet)",
+  "settlementAsset": "USDC (Circle, EIP-3009 transferWithAuthorization), 6 decimals",
+  "chains": {
+    "arbitrumSepolia": {
+      "chainId": 421614,
+      "status": "live",
+      "usdc": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+      "revenueSplitter": "0x34fa204ca5db1a25a0003b1c7b45ab9c858d63bf",
+      "platformWallet": "0x5939229582A5b42A6C5f55Fe55eC47523Cd5B9FE",
+      "protocolWallet": "0x5939229582A5b42A6C5f55Fe55eC47523Cd5B9FE",
+      "notes": "TESTNET: platform and protocol wallets are currently the same address. Phase 1 replaces them with a distinct compute wallet and a Platform+DAO treasury Safe via set_wallets.cjs."
+    },
+    "arbitrumOne": {
+      "chainId": 42161,
+      "status": "preview",
+      "usdc": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+      "revenueSplitter": "0x0000000000000000000000000000000000000000",
+      "platformWallet": null,
+      "protocolWallet": null,
+      "notes": "Splitter NOT deployed. Blocked on Phase 4 audit. UI must show the Preview-only caption."
+    }
+  },
+  "exampleFor3Usdc": {
+    "priceUsdc": "3.00",
+    "seller": "2.40",
+    "compute": "0.30",
+    "platformDao": "0.30"
+  }
+}

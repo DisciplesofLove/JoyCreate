@@ -11,6 +11,7 @@ import * as fs from "fs-extra";
 import * as nodeFs from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import log from "electron-log";
+import { rejectsSamplingParams } from "@/ipc/utils/claude_sampling";
 import WebSocket, { WebSocketServer } from "ws";
 import http from "node:http";
 import net from "node:net";
@@ -88,9 +89,16 @@ type ActivityLogEventType =
 // GATEWAY SERVICE
 // =============================================================================
 
+/**
+ * Process-global singleton key. See telegram_bot_service.ts: electron-forge's
+ * Vite build can load this module under two chunk identities (static `import`
+ * vs dynamic `await import()`) without deduping, which would duplicate a
+ * `private static instance` field and fork the gateway state (two bridges, two
+ * heartbeats, two daemon-respawn loops). Pinning on `globalThis` guarantees one.
+ */
+const OPENCLAW_GATEWAY_SINGLETON = Symbol.for("joycreate.openclawGatewayService");
+
 export class OpenClawGatewayService extends EventEmitter {
-  private static instance: OpenClawGatewayService;
-  
   private config: OpenClawConfig;
   private claudeCodeConfig: ClaudeCodeConfig;
   private state: OpenClawGatewayState;
@@ -140,10 +148,11 @@ export class OpenClawGatewayService extends EventEmitter {
   }
   
   static getInstance(): OpenClawGatewayService {
-    if (!OpenClawGatewayService.instance) {
-      OpenClawGatewayService.instance = new OpenClawGatewayService();
+    const g = globalThis as Record<symbol, OpenClawGatewayService | undefined>;
+    if (!g[OPENCLAW_GATEWAY_SINGLETON]) {
+      g[OPENCLAW_GATEWAY_SINGLETON] = new OpenClawGatewayService();
     }
-    return OpenClawGatewayService.instance;
+    return g[OPENCLAW_GATEWAY_SINGLETON]!;
   }
   
   // ===========================================================================
@@ -608,6 +617,27 @@ export class OpenClawGatewayService extends EventEmitter {
   // BRIDGE MODE — connect as WS client to an external OpenClaw gateway
   // ===========================================================================
   
+  /**
+   * Is the external OpenClaw daemon alive?
+   *
+   * Public because channel ownership depends on it: Telegram allows exactly one
+   * `getUpdates` poller per token, so if the daemon is running and already owns
+   * a channel, JoyCreate must not start a competing in-process poller. The
+   * daemon's own log records what happens otherwise — a 409 "terminated by
+   * other getUpdates request", with both sides losing messages.
+   *
+   * Reuses the same TCP probe the bridge uses rather than duplicating it.
+   */
+  async isDaemonAlive(): Promise<boolean> {
+    const port = this.config.gateway.daemonPort ?? 18790;
+    const host = this.config.gateway.host === "0.0.0.0"
+      ? "127.0.0.1"
+      : (this.config.gateway.host ?? "127.0.0.1");
+    // Short timeout: this runs on the start path and at boot, where a slow
+    // answer is worse than assuming the daemon is absent.
+    return this.probeTcpPort(host, port, 1500);
+  }
+
   /** HTTP probe to see if an external gateway is listening */
   private async probeExternalGateway(host: string, port: number): Promise<boolean> {
     // We deliberately use a TCP-level probe (not HTTP /health) because the
@@ -767,8 +797,8 @@ export class OpenClawGatewayService extends EventEmitter {
               platform: "electron",
             },
             ...(token ? { auth: { token } } : {}),
-            minProtocol: 3,
-            maxProtocol: 3,
+            minProtocol: 4,
+            maxProtocol: 4,
             role: "operator",
             scopes: ["operator.admin"],
           },
@@ -909,11 +939,17 @@ export class OpenClawGatewayService extends EventEmitter {
         outFd = "ignore" as unknown as number;
         errFd = "ignore" as unknown as number;
       }
-      const child = spawn("cmd.exe", ["/c", gatewayCmdPath], {
+      // NOTE: gatewayCmdPath contains a space (e.g. "C:\Users\Wise AI\...").
+      // Passing it to `cmd.exe /c <path>` unquoted makes cmd split on the space
+      // and try to run "C:\Users\Wise" → "is not recognized" and the daemon
+      // never starts. Use `/s /c "<quoted path>"` with windowsVerbatimArguments
+      // so cmd treats the quoted string as a single path.
+      const child = spawn("cmd.exe", ["/d", "/s", "/c", `"${gatewayCmdPath}"`], {
         cwd: homedir,
         detached: true,
         stdio: ["ignore", outFd, errFd],
         windowsHide: true,
+        windowsVerbatimArguments: true,
       });
       child.unref();
       logger.info("Daemon process spawned (PID: " + child.pid + "), log: " + daemonLogPath);
@@ -1317,7 +1353,11 @@ export class OpenClawGatewayService extends EventEmitter {
           role: m.role === "assistant" ? "assistant" : "user",
           content: m.content,
         })),
-        temperature: request.temperature ?? provider.temperature ?? 0.7,
+        // Claude Opus 4.7+ and the Claude 5 generation return a 400 for any
+        // temperature, so it is omitted for them.
+        ...(rejectsSamplingParams(request.model || provider.model)
+          ? {}
+          : { temperature: request.temperature ?? provider.temperature ?? 0.7 }),
       }),
     });
     

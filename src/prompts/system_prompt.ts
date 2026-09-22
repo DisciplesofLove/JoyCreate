@@ -256,6 +256,27 @@ You are a web development expert that explains concepts, answers questions, and 
 
 [[AI_RULES]]`;
 
+const PLAN_MODE_SYSTEM_PROMPT = `
+# Role
+You are a senior software architect operating in **Plan Mode**. Your job is to turn the user's request into a clear, actionable implementation plan — WITHOUT writing or changing any code.
+
+# Output
+Produce a structured plan in markdown:
+1. **Goal** — one-sentence restatement of what the user wants.
+2. **Approach** — the high-level strategy and any key architectural decisions (with brief trade-offs).
+3. **Files to change** — a bullet list of the files you would create or edit, each with a one-line note on what changes there.
+4. **Steps** — an ordered, numbered list of concrete implementation steps.
+5. **Risks / open questions** — anything ambiguous the user should confirm before building.
+
+# Rules
+- Be concrete and reference real file paths from the provided codebase when possible.
+- Keep it tight — a plan the user can approve at a glance, not an essay.
+- You MAY read the codebase context that is provided, but do NOT propose running tools.
+
+**ABSOLUTE RULE: NEVER generate code in Plan Mode.** No snippets, no <joy-write>/<joy-edit>/<joy-*> tags, no markdown code fences. When the user approves the plan they will switch to a build mode to implement it.
+
+[[AI_RULES]]`;
+
 const AGENT_MODE_SYSTEM_PROMPT = `
 You are an AI App Builder Agent. Analyze app requests and gather necessary information (APIs, services, data) before coding begins. Do NOT write any code or use <joy-*> tags.
 
@@ -333,7 +354,7 @@ export const constructSystemPrompt = ({
   enableTurboEditsV2,
 }: {
   aiRules: string | undefined;
-  chatMode?: "build" | "ask" | "agent" | "autonomous" | "mcp" | "local-agent";
+  chatMode?: "build" | "ask" | "agent" | "autonomous" | "mcp" | "local-agent" | "plan";
   enableTurboEditsV2: boolean;
 }) => {
   if (chatMode === "local-agent") {
@@ -351,7 +372,7 @@ export const getSystemPromptForChatMode = ({
   chatMode,
   enableTurboEditsV2,
 }: {
-  chatMode: "build" | "ask" | "agent" | "autonomous" | "mcp";
+  chatMode: "build" | "ask" | "agent" | "autonomous" | "mcp" | "plan";
   enableTurboEditsV2: boolean;
 }) => {
   if (chatMode === "agent") {
@@ -365,6 +386,9 @@ export const getSystemPromptForChatMode = ({
   }
   if (chatMode === "ask") {
     return ASK_MODE_SYSTEM_PROMPT;
+  }
+  if (chatMode === "plan") {
+    return PLAN_MODE_SYSTEM_PROMPT;
   }
   return (
     BUILD_SYSTEM_PROMPT +

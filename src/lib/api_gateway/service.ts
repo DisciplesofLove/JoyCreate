@@ -310,7 +310,7 @@ export async function startApiGateway(port = 18791): Promise<ApiGatewayStatus> {
       send(res, 200, { ok: true });
       return;
     }
-    const match = url.pathname.match(/^\/api\/v1\/([A-Za-z0-9_\-]+)\/?$/);
+    const match = url.pathname.match(/^\/api\/v1\/([A-Za-z0-9_-]+)\/?$/);
     if (!match) {
       send(res, 404, { error: "not found" });
       return;

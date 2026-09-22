@@ -4,6 +4,7 @@ import {
   Settings,
   HelpCircle,
   LayoutDashboard,
+  SlidersHorizontal,
   BookOpen,
   Bot,
   Workflow,
@@ -73,13 +74,15 @@ import {
 } from "lucide-react";
 import { Link, useRouterState, useRouter } from "@tanstack/react-router";
 import { useSidebar } from "@/components/ui/sidebar";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { useAtom } from "jotai";
 import { dropdownOpenAtom } from "@/atoms/uiAtoms";
 import { selectedAppIdAtom } from "@/atoms/appAtoms";
 import { useLoadApps } from "@/hooks/useLoadApps";
 import { useSettings } from "@/hooks/useSettings";
 import { useTemplates } from "@/hooks/useTemplates";
+import { useScrollAndNavigateTo } from "@/hooks/useScrollAndNavigateTo";
+import { filterVisibleCategories } from "@/components/sidebar-menu";
 import { cn } from "@/lib/utils";
 
 import { CNSWidget } from "@/components/openclaw/CNSWidget";
@@ -110,7 +113,7 @@ import {
 
 // Organized menu categories — grouped by user-journey (workspace → AI →
 // build → data → network → publish → sovereign → productivity → admin)
-const menuCategories = [
+export const menuCategories = [
   {
     label: "Workspace",
     items: [
@@ -904,7 +907,14 @@ export function AppSidebar() {
   const { settings } = useSettings();
   const { templates } = useTemplates();
   const { navigate } = useRouter();
+  const scrollToSettingsSection = useScrollAndNavigateTo("/settings");
   const isCollapsed = state === "collapsed";
+
+  // Apply the user's per-item / stage visibility preferences to the menu.
+  const visibleCategories = useMemo(
+    () => filterVisibleCategories(menuCategories, settings?.sidebar),
+    [settings?.sidebar],
+  );
 
   // Get selected app name
   const selectedApp = apps.find((app) => app.id === selectedAppId);
@@ -1002,7 +1012,7 @@ export function AppSidebar() {
               {/* Scrollable Navigation Area */}
               <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 <div className="py-1.5 px-1.5 space-y-3">
-                  {menuCategories.map((category, categoryIndex) => (
+                  {visibleCategories.map((category, categoryIndex) => (
                     <div key={category.label}>
                       {/* Category Label - only show when expanded */}
                       {!isCollapsed && (
@@ -1058,7 +1068,7 @@ export function AppSidebar() {
                       </div>
                       
                       {/* Category Divider */}
-                      {categoryIndex < menuCategories.length - 1 && (
+                      {categoryIndex < visibleCategories.length - 1 && (
                         <div className="mt-2 mx-1 border-t border-border/30" />
                       )}
                     </div>
@@ -1121,6 +1131,28 @@ export function AppSidebar() {
                   </TooltipTrigger>
                   <TooltipContent side="right" sideOffset={8} className="font-medium">
                     Help & Support
+                  </TooltipContent>
+                </Tooltip>
+
+                {/* Customize Sidebar Button */}
+                <Tooltip delayDuration={0}>
+                  <TooltipTrigger asChild>
+                    <button
+                      className={cn(
+                        "flex items-center justify-center w-full h-9 rounded-lg transition-all duration-200",
+                        "hover:bg-muted/60"
+                      )}
+                      onClick={() => {
+                        void scrollToSettingsSection("sidebar-settings");
+                      }}
+                    >
+                      <div className="flex items-center justify-center w-7 h-7 rounded-md">
+                        <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={8} className="font-medium">
+                    Customize Sidebar
                   </TooltipContent>
                 </Tooltip>
               </div>

@@ -24,6 +24,7 @@
  */
 
 import { useState, useMemo, useCallback } from "react";
+import { useAgentSwarmManager } from "@/hooks/useAgentSwarm";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -123,6 +124,46 @@ const STATUS_COLORS: Record<string, string> = {
 // ============================================================================
 
 function BlueprintsPanel() {
+  const swarmManager = useAgentSwarmManager();
+  const [deploying, setDeploying] = useState<string | null>(null);
+
+  /**
+   * Create a swarm from a built-in blueprint.
+   *
+   * This button used to raise "Deploying … swarm..." and do nothing, which read
+   * as success. It now goes through the same `createSwarm` the page's own
+   * create dialog uses, so a blueprint produces a real swarm that shows up in
+   * the list — and a failure says so instead of claiming a deployment.
+   */
+  const deployBlueprint = useCallback(
+    async (bp: { name: string; description: string; agents: number }) => {
+      setDeploying(bp.name);
+      try {
+        await swarmManager.createSwarm({
+          name: bp.name,
+          description: bp.description,
+          config: {
+            // The blueprint's agent count is its starting size, not a ceiling;
+            // leaving headroom keeps auto-scale from being blocked immediately.
+            maxAgents: Math.max(bp.agents * 2, 10),
+            maxGenerations: 5,
+            autoScale: true,
+            replicationEnabled: true,
+            witnessSystemEnabled: true,
+          },
+        });
+        toast.success(`${bp.name} deployed`);
+      } catch (err) {
+        toast.error(
+          `Failed to deploy ${bp.name}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setDeploying(null);
+      }
+    },
+    [swarmManager],
+  );
+
   const BUILT_IN_BLUEPRINTS = [
     {
       name: "Software Dev Team",
@@ -240,7 +281,12 @@ function BlueprintsPanel() {
                   <span className="flex items-center gap-0.5"><Star className="w-3 h-3 text-amber-400" /> {bp.rating}</span>
                   <span>{bp.uses.toLocaleString()} uses</span>
                 </div>
-                <Button size="sm" className="w-full mt-3 gap-1.5" onClick={() => toast.info(`Deploying ${bp.name} swarm...`)}>
+                <Button
+                  size="sm"
+                  className="w-full mt-3 gap-1.5"
+                  disabled={deploying === bp.name}
+                  onClick={() => void deployBlueprint(bp)}
+                >
                   <Rocket className="w-3.5 h-3.5" /> Deploy Swarm
                 </Button>
               </CardContent>

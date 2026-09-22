@@ -1160,8 +1160,12 @@ async function executeStep(
       return executeNotifyStep(step.config, run, pipeline);
     
     default:
-      logger.warn(`Step type ${step.type} not implemented, skipping`);
-      return { skipped: true, metrics: { itemsProcessed: 0 } };
+      // Fail loudly instead of silently skipping — a silently skipped step
+      // makes users believe their pipeline ran fully when it didn't.
+      throw new Error(
+        `Pipeline step "${step.name}" has unsupported type "${step.type}". ` +
+          `Supported types: validate, filter, deduplicate, quality_check, transform, split, notify.`,
+      );
   }
 }
 

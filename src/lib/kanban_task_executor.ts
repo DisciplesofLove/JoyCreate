@@ -16,6 +16,13 @@ import { createHash } from "crypto";
 import log from "electron-log";
 
 import { getDb } from "@/db";
+import {
+  cancelActivity,
+  completeActivity,
+  failActivity,
+  startActivity,
+} from "@/lib/runtime/activity_store";
+import { registerResumer } from "@/lib/runtime/supervisor";
 import { openclawKanbanTasks, openclawKanbanActivity } from "@/db/schema";
 import { ipldReceiptService } from "@/lib/ipld_receipt_service";
 import { celestiaBlobService } from "@/lib/celestia_blob_service";
@@ -107,6 +114,18 @@ async function executeTask(task: any): Promise<void> {
   stats.totalExecuted++;
 
   const startTime = Date.now();
+
+  // Mirror the run into `os_activities`, the cross-subsystem record. The kanban
+  // row stays authoritative for kanban; this is what the shell, the tray count
+  // and the boot reconcile read. Dual-write on purpose — a bug here must not
+  // take the executor down with it.
+  const activityId = startActivity({
+    source: "background",
+    sourceRef: String(taskId),
+    title: task.title ?? `Task ${taskId}`,
+    subtitle: task.taskType ?? undefined,
+    input: { taskId, taskType: task.taskType ?? null, model: task.model ?? null },
+  });
 
   try {
     // Mark as started
@@ -260,6 +279,7 @@ async function executeTask(task: any): Promise<void> {
     );
 
     stats.totalSucceeded++;
+    completeActivity(activityId);
 
     // ── Step 6: Record outcome for MAB + registry (best-effort) ──
     try {
@@ -337,8 +357,10 @@ async function executeTask(task: any): Promise<void> {
 
     if (aborted) {
       logger.warn(`Task hard-stopped: ${task.title} (${taskId})`);
+      cancelActivity(activityId);
     } else {
       logger.error(`Task failed: ${task.title} (${taskId}):`, errorMessage);
+      failActivity(activityId, errorMessage);
     }
 
     try {
@@ -581,6 +603,51 @@ async function logActivity(
 // =============================================================================
 // PUBLIC API
 // =============================================================================
+
+// Registered at module load: the boot reconcile runs before the executor
+// starts, so a resumer registered inside startTaskExecutor() would be too late
+// and every interrupted task would be failed as "no resumer registered".
+registerResumer("background", (activity) => resumeKanbanTask(activity));
+
+/**
+ * Continue a kanban task that was in flight when the process died.
+ *
+ * `pollForTasks` only picks up rows with `startedAt IS NULL`, so a task killed
+ * mid-run — which has `startedAt` set — was never retried. It sat `in_progress`
+ * forever, invisible to the poller and to the user. Clearing the timestamp
+ * hands it back to the normal queue.
+ *
+ * Safe to replay: `executeTask` derives everything from the task row and writes
+ * its result at the end, so a partial run left nothing to undo. Executors whose
+ * steps are not repeatable must NOT register a resumer — the boot pass fails
+ * those explicitly instead.
+ */
+async function resumeKanbanTask(activity: {
+  sourceRef: string | null;
+}): Promise<void> {
+  const taskId = activity.sourceRef;
+  if (!taskId) throw new Error("kanban activity has no task reference");
+
+  const db = getDb();
+  const task = await db
+    .select()
+    .from(openclawKanbanTasks)
+    .where(eq(openclawKanbanTasks.id, taskId))
+    .get();
+
+  if (!task) throw new Error(`kanban task ${taskId} no longer exists`);
+  if (task.status !== "in_progress") {
+    // It reached a terminal state some other way; nothing to resume.
+    return;
+  }
+
+  await db
+    .update(openclawKanbanTasks)
+    .set({ startedAt: null, updatedAt: new Date() })
+    .where(eq(openclawKanbanTasks.id, taskId));
+
+  logger.info(`Requeued interrupted kanban task ${taskId} for another attempt`);
+}
 
 export function startTaskExecutor(): void {
   if (running) {

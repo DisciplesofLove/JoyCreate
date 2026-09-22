@@ -19,13 +19,17 @@
 import { ethers } from "ethers";
 import log from "electron-log";
 import {
-  AMOY_ENS_CONTRACTS,
+  ARBITRUM_SEPOLIA,
+  ARB_SEPOLIA_ENS_CONTRACTS,
+  CANONICAL_EDITION_CONTROLLER_ABI,
   CONTRACT_ABIS,
   CONTRACT_ADDRESSES,
-  POLYGON_AMOY,
   STYLUS_DROP_ABI,
 } from "@/config/joymarketplace";
-import type { MarketplaceChainConfig } from "@/lib/onchain/chain_registry";
+import {
+  DEFAULT_MARKETPLACE_CHAIN,
+  type MarketplaceChainConfig,
+} from "@/lib/onchain/chain_registry";
 
 const logger = log.scope("onchain_publisher");
 
@@ -64,6 +68,16 @@ export interface StylusMintInput {
   priceWei: bigint;
   /** Recipient — defaults to the publisher signer. */
   recipient?: string;
+}
+
+export interface CanonicalEditionInput {
+  storeSlug: string;
+  /** Authoritative node from the stores subgraph; preferred over slug derivation. */
+  storeNode?: string;
+  metadataUri: string;
+  priceUsdc: bigint;
+  maxSupply: bigint;
+  quantityLimitPerWallet?: bigint;
 }
 
 export interface ListingResult {
@@ -105,7 +119,7 @@ export class OnchainPublisher {
 
   constructor(
     wallet: ethers.Wallet,
-    chain: ChainConfig = POLYGON_AMOY,
+    chain: ChainConfig = ARBITRUM_SEPOLIA,
     marketplaceChain: MarketplaceChainConfig | null = null,
   ) {
     this.chain = chain;
@@ -123,9 +137,9 @@ export class OnchainPublisher {
     return this.wallet.address;
   }
 
-  /** Returns the resolved marketplace chain id, or "polygonAmoy" by default. */
+  /** Returns the resolved marketplace chain id, or the default chain. */
   get marketplaceChainId(): string {
-    return this.marketplaceChain?.id ?? "polygonAmoy";
+    return this.marketplaceChain?.id ?? DEFAULT_MARKETPLACE_CHAIN;
   }
 
   // -- gate -----------------------------------------------------------------
@@ -138,7 +152,7 @@ export class OnchainPublisher {
   async verifyCreatorGate(signerAddress: string): Promise<VerifyResult> {
     try {
       const gateAddr =
-        this.marketplaceChain?.contracts.creatorGate ?? AMOY_ENS_CONTRACTS.JoyCreatorGate;
+        this.marketplaceChain?.contracts.creatorGate ?? ARB_SEPOLIA_ENS_CONTRACTS.JoyCreatorGate;
       const gate = new ethers.Contract(
         gateAddr,
         CONTRACT_ABIS.JOY_CREATOR_GATE,
@@ -174,9 +188,9 @@ export class OnchainPublisher {
       throw new Error(`invalid mint inputs: uri=${metadataUri} qty=${quantity}`);
     }
     const dropAddr =
-      this.marketplaceChain?.contracts.dropEdition ?? AMOY_ENS_CONTRACTS.platformDrop;
+      this.marketplaceChain?.contracts.dropEdition ?? ARB_SEPOLIA_ENS_CONTRACTS.platformDrop;
     const gateAddr =
-      this.marketplaceChain?.contracts.creatorGate ?? AMOY_ENS_CONTRACTS.JoyCreatorGate;
+      this.marketplaceChain?.contracts.creatorGate ?? ARB_SEPOLIA_ENS_CONTRACTS.JoyCreatorGate;
 
     // 1. Derive nextTokenId
     const drop = new ethers.Contract(dropAddr, DROP_ERC1155_ABI, this.provider);
@@ -234,6 +248,75 @@ export class OnchainPublisher {
       BigInt(quantity),
       encodedData,
     );
+    const receipt = await tx.wait();
+    return {
+      tokenId: nextTokenId.toString(),
+      txHash: receipt?.hash ?? tx.hash,
+      gasEstimate,
+    };
+  }
+
+  /** Create a claimable edition through the canonical Arbitrum controller. */
+  async createCanonicalEdition(
+    input: CanonicalEditionInput,
+    opts: { dryRun?: boolean } = {},
+  ): Promise<MintResult> {
+    const storeSlug = input.storeSlug.trim().toLowerCase();
+    if (!storeSlug) throw new Error("storeSlug is required");
+    if (!input.metadataUri) throw new Error("metadataUri is required");
+    if (input.maxSupply <= 0n) throw new Error("maxSupply must be positive");
+
+    const controller = new ethers.Contract(
+      ARB_SEPOLIA_ENS_CONTRACTS.EditionController,
+      CANONICAL_EDITION_CONTROLLER_ABI,
+      this.wallet,
+    );
+    const storeNode = input.storeNode ?? ethers.namehash(`${storeSlug}.joymarketplace.io`);
+    if (!ethers.isHexString(storeNode, 32)) {
+      throw new Error("storeNode must be a bytes32 hex value");
+    }
+    const claimParams = {
+      maxSupply: input.maxSupply,
+      pricePerToken: input.priceUsdc,
+      startTimestamp: 0n,
+      quantityLimitPerWallet: input.quantityLimitPerWallet ?? 1n,
+      currency: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+    };
+    const args = [
+      storeNode,
+      input.metadataUri,
+      input.metadataUri,
+      claimParams,
+    ] as const;
+    const calldata = controller.interface.encodeFunctionData("createEdition", args);
+    const nextTokenId = await new ethers.Contract(
+      ARB_SEPOLIA_ENS_CONTRACTS.platformDrop,
+      DROP_ERC1155_ABI,
+      this.provider,
+    ).nextTokenIdToMint() as bigint;
+
+    let gasEstimate = 0n;
+    try {
+      gasEstimate = await this.provider.estimateGas({
+        from: this.wallet.address,
+        to: ARB_SEPOLIA_ENS_CONTRACTS.EditionController,
+        data: calldata,
+      });
+    } catch (err) {
+      logger.warn(`createEdition gas estimate failed: ${(err as Error).message}`);
+    }
+
+    if (opts.dryRun) {
+      return {
+        tokenId: nextTokenId.toString(),
+        gasEstimate,
+        dryRun: true,
+        to: ARB_SEPOLIA_ENS_CONTRACTS.EditionController,
+        data: calldata,
+      };
+    }
+
+    const tx = await controller.createEdition(...args);
     const receipt = await tx.wait();
     return {
       tokenId: nextTokenId.toString(),
@@ -392,7 +475,7 @@ export class OnchainPublisher {
   // -- Goldsky --------------------------------------------------------------
 
   /**
-   * Poll a Goldsky subgraph until the given tokenId shows up as an Asset,
+  * Poll a Goldsky subgraph until the given tokenId shows up as a Token,
    * or until `timeoutMs` elapses. Best-effort — never throws.
    */
   async goldskyWatch(
@@ -403,7 +486,7 @@ export class OnchainPublisher {
   ): Promise<GoldskyWatchResult> {
     if (!subgraphUrl) return { indexed: false, error: "no subgraph url" };
     const start = Date.now();
-    const query = `query Asset($id: ID!) { asset(id: $id) { id tokenId tokenUri } }`;
+    const query = `query Token($id: ID!) { token(id: $id) { id tokenId baseURI } }`;
     while (Date.now() - start < timeoutMs) {
       try {
         const res = await fetchImpl(subgraphUrl, {
@@ -412,9 +495,9 @@ export class OnchainPublisher {
           body: JSON.stringify({ query, variables: { id: tokenId } }),
         });
         if (res.ok) {
-          const json = (await res.json()) as { data?: { asset?: unknown } };
-          if (json.data?.asset) {
-            return { indexed: true, asset: json.data.asset };
+          const json = (await res.json()) as { data?: { token?: unknown } };
+          if (json.data?.token) {
+            return { indexed: true, asset: json.data.token };
           }
         }
       } catch (err) {
@@ -434,7 +517,7 @@ export class OnchainPublisher {
  * Build an ethers.Wallet from a hex private key + a chain config.
  * Used by the orchestrator after pulling the key from JcnKeyManager.
  */
-export function buildWallet(privateKeyHex: string, chain: ChainConfig = POLYGON_AMOY): ethers.Wallet {
+export function buildWallet(privateKeyHex: string, chain: ChainConfig = ARBITRUM_SEPOLIA): ethers.Wallet {
   const provider = new ethers.JsonRpcProvider(chain.rpcUrl, chain.chainId);
   const pk = privateKeyHex.startsWith("0x") ? privateKeyHex : `0x${privateKeyHex}`;
   return new ethers.Wallet(pk, provider);

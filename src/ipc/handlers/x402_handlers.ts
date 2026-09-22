@@ -19,12 +19,17 @@ import log from "electron-log";
 import { jcnKeyManager } from "@/lib/jcn_key_manager";
 import {
   DEFAULT_X402_CHAIN,
+  REVENUE_SPLITTER_ABI,
+  REVENUE_SPLIT_BPS,
   X402_RPC,
+  getRevenueSplitterAddress,
+  getUsdcAddress,
   isX402Ready,
   usdcToAtomic,
   atomicToUsdc,
   type X402ChainId,
 } from "@/config/x402";
+import { readSettings } from "@/main/settings";
 import { createPayment } from "@/lib/x402/client";
 import {
   createPaymentRequirements,
@@ -72,7 +77,43 @@ export function registerX402Handlers(): void {
   // --- status -----------------------------------------------------------
   ipcMain.handle("x402:status", async (_e, params?: { chain?: string }) => {
     const chain = resolveChain(params?.chain);
-    return { chain, ready: isX402Ready(chain) };
+    const ready = isX402Ready(chain);
+    const splitter = getRevenueSplitterAddress(chain);
+
+    // On-chain fee wallets (best-effort — null when splitter absent/unreachable).
+    let platformWallet: string | null = null;
+    let protocolWallet: string | null = null;
+    if (ready) {
+      try {
+        const provider = new ethers.JsonRpcProvider(X402_RPC[chain]);
+        const contract = new ethers.Contract(splitter, REVENUE_SPLITTER_ABI, provider);
+        const cfg = await contract.getConfig();
+        platformWallet = String(cfg[1]);
+        protocolWallet = String(cfg[2]);
+      } catch (err) {
+        logger.warn(`getConfig failed on ${chain}:`, err instanceof Error ? err.message : err);
+      }
+    }
+
+    let payoutAddress: string | null = null;
+    try {
+      const settings = readSettings();
+      payoutAddress =
+        (settings as { marketplacePayoutAddress?: string }).marketplacePayoutAddress ?? null;
+    } catch {
+      // settings unavailable — leave null.
+    }
+
+    return {
+      chain,
+      ready,
+      splitter,
+      usdc: getUsdcAddress(chain),
+      splitBps: { ...REVENUE_SPLIT_BPS },
+      platformWallet,
+      protocolWallet,
+      payoutAddress,
+    };
   });
 
   // --- challenge: build PaymentRequirements (402) -----------------------

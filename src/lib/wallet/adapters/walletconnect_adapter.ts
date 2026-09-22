@@ -17,8 +17,11 @@ import {
   type WalletProviderId,
 } from "../joy_wallet_connector";
 
-const POLYGON_AMOY_ID = 80002;
-const DEFAULT_CHAINS = [POLYGON_AMOY_ID, 1, 137]; // Amoy + mainnet + Polygon
+// Arbitrum Sepolia only. Previously defaulted to Polygon Amoy (80002) with
+// Ethereum + Polygon mainnet as optional chains, which invited a wallet to
+// connect on a network nothing here can transact against.
+const ARBITRUM_SEPOLIA_ID = 421614;
+const DEFAULT_CHAINS = [ARBITRUM_SEPOLIA_ID];
 
 const PROJECT_ID =
   (import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string | undefined) ??
@@ -42,7 +45,7 @@ async function getSharedProvider(): Promise<WCInstance> {
   if (initPromise) return initPromise;
   initPromise = EthereumProvider.init({
     projectId: PROJECT_ID,
-    chains: [POLYGON_AMOY_ID],
+    chains: [ARBITRUM_SEPOLIA_ID],
     optionalChains: DEFAULT_CHAINS,
     showQrModal: true,
     metadata: {
@@ -88,7 +91,7 @@ function build(opts: BuildOpts): WalletAdapter {
         throw new Error("WalletConnect session has no accounts");
       }
       attachProviderListeners(adapter);
-      return { address: accounts[0], chainId: provider.chainId ?? POLYGON_AMOY_ID };
+      return { address: accounts[0], chainId: provider.chainId ?? ARBITRUM_SEPOLIA_ID };
     },
 
     async disconnect() {
@@ -110,7 +113,7 @@ function build(opts: BuildOpts): WalletAdapter {
       const accounts = (provider.accounts ?? []) as string[];
       if (accounts.length === 0) return null;
       attachProviderListeners(adapter);
-      return { address: accounts[0], chainId: provider.chainId ?? POLYGON_AMOY_ID };
+      return { address: accounts[0], chainId: provider.chainId ?? ARBITRUM_SEPOLIA_ID };
     },
   };
   return adapter;

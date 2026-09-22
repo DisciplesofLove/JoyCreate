@@ -141,7 +141,7 @@ export async function composeBlueprint(
   ).selectedChatModel;
   const model: LargeLanguageModel = {
     provider: (selectedRaw?.provider ?? "auto") as LargeLanguageModel["provider"],
-    name: opts.modelId ?? selectedRaw?.name ?? "claude-sonnet-4-5",
+    name: opts.modelId ?? selectedRaw?.name ?? "claude-sonnet-5",
   };
   const { modelClient } = await getModelClient(model, settings);
 

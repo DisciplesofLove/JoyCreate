@@ -31,11 +31,33 @@ import {
   type SignedIntentRow,
   type WalletCurrency,
 } from "@/db/agent_wallet_schema";
-import { agentPrincipals } from "@/db/a2a_schema";
+import {
+  agentPrincipals,
+  a2aContracts,
+  type A2AContractState,
+} from "@/db/a2a_schema";
 import { osIntents, type OsIntentRow } from "@/db/agent_os_schema";
-import { ssiIdentities, rewardsLedger } from "@/db/schema";
+import { ssiIdentities } from "@/db/schema";
 
 const logger = log.scope("agent_wallet");
+
+/**
+ * Contract states in which the caller's funds are committed and must count
+ * against a spend cap.
+ *
+ * ACCEPTED is excluded because escrow has not happened yet, and REFUNDED /
+ * FAILED because the money came back. Everything from ESCROWED onward has
+ * left the caller's budget whether or not the work has finished.
+ */
+const SPENT_CONTRACT_STATES: A2AContractState[] = [
+  "ESCROWED",
+  "IN_PROGRESS",
+  "DELIVERED",
+  "VERIFIED",
+  "SETTLED",
+  "CLOSED",
+  "DISPUTED",
+];
 
 // =============================================================================
 // HELPERS
@@ -371,34 +393,48 @@ export async function evaluatePolicy(
     const want = bigOf(ctx.amount);
     const cap = bigOf(p.maxAmount);
     const windowSec = p.windowSeconds ?? 86_400; // default 24h
-    const sinceSec = Math.floor(at.getTime() / 1000) - windowSec;
+    const since = new Date(at.getTime() - windowSec * 1000);
 
-    // Sum prior spends on rewards_ledger by this principal in the window.
-    // We approximate by counting confirmed/pending rows whose senderId
-    // matches the principal's DID. (rewards_ledger.senderId is text.)
-    const principal = await db
-      .select()
-      .from(agentPrincipals)
-      .where(eq(agentPrincipals.id, ctx.principalId))
-      .limit(1);
-    if (principal.length === 0) continue;
-    const senderRef = principal[0].did;
-
-    const recent = await db
-      .select()
-      .from(rewardsLedger)
+    // Prior spend comes from the contracts this principal is the CALLER on.
+    //
+    // It used to be summed from `rewards_ledger` filtered by a `senderId`
+    // column — which exists on neither the Drizzle model nor the SQLite table.
+    // The query therefore threw, and `requestQuote` swallows everything that
+    // is not a "policy denied" message, so a spend cap silently failed open:
+    // the one rule whose whole job is to stop an agent overspending never
+    // stopped anything.
+    //
+    // `a2a_contracts` is the right source anyway. The ledger records the
+    // provider's side of a settlement; the contract records the caller's
+    // commitment, from the moment funds are escrowed. Counting from escrow
+    // means money in flight is already counted, so two invocations started
+    // together cannot both slip under the cap.
+    const committed = await db
+      .select({ amount: a2aContracts.amount, currency: a2aContracts.currency })
+      .from(a2aContracts)
       .where(
         and(
-          eq(rewardsLedger.senderId, senderRef),
-          gt(rewardsLedger.createdAt, new Date(sinceSec * 1000)),
+          eq(a2aContracts.callerPrincipalId, ctx.principalId),
+          gt(a2aContracts.createdAt, since),
+          inArray(a2aContracts.state, SPENT_CONTRACT_STATES),
         ),
       );
+
     let spent = 0n;
-    for (const r of recent) {
-      // Best-effort: amount may be on different fields across handlers.
-      const amt = (r as Record<string, unknown>).amount;
-      if (typeof amt === "string") spent += BigInt(amt);
-      else if (typeof amt === "number") spent += BigInt(amt);
+    for (const c of committed) {
+      // A cap is denominated in one currency; rows in another are not
+      // comparable, so they are excluded rather than silently added.
+      if (p.currency && c.currency !== p.currency) continue;
+      try {
+        spent += BigInt(c.amount);
+      } catch {
+        // A non-numeric amount cannot be reasoned about. Skipping it would
+        // under-count and let the cap through, so treat the cap as breached.
+        reasons.push(
+          `spend cap unverifiable for policy "${p.name}": bad amount on contract`,
+        );
+        return { allowed: false, reasons, requiresHumanVerify: false };
+      }
     }
     if (spent + want > cap) {
       reasons.push(

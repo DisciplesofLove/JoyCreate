@@ -37,6 +37,14 @@ import { registerMarketplaceTools } from "@/mcp_server/tools/marketplace_tools";
 import { registerChatTools } from "@/mcp_server/tools/chat_tools";
 import { registerComputeTools } from "@/mcp_server/tools/compute_tools";
 import { registerCreatorDashboardTools } from "@/mcp_server/tools/creator_dashboard_tools";
+// Publishing, email and the agent economy were absent, so the local agent and
+// the swarm runtime could build an asset but not sell it, and could reason
+// about a mailbox they had no way to read. The adapter's own doc comment says
+// anything available via MCP is automatically available to agents — these are
+// the files that stopped being true when they were added.
+import { registerPublishTools } from "@/mcp_server/tools/publish_tools";
+import { registerEmailTools } from "@/mcp_server/tools/email_tools";
+import { registerEconomyTools } from "@/mcp_server/tools/economy_tools";
 
 const logger = log.scope("mcp_tools_adapter");
 
@@ -76,8 +84,27 @@ class CapturingServer {
 
 /**
  * Heuristic: tools that look like they mutate state require explicit consent.
+ *
+ * Matched against whole `_`-separated segments, anywhere in the name. This used
+ * to accept only `verb_…` and `…_verb_…`, which misses the most common naming
+ * in these files — noun first, verb last. So `app_deploy`, `app_write_file`,
+ * `agent_hire`, `agent_refund`, `skill_publish` and `plugin_install` ran with
+ * no consent prompt at all, while `create_document` asked. 6 of 97 tools were
+ * flagged.
  */
 const DESTRUCTIVE_PREFIXES = [
+  // Missed state- and money-changing verbs used by the current tool names.
+  "write",
+  "stop",
+  "toggle",
+  "sell",
+  "hire",
+  "invoke",
+  "refund",
+  "set",
+  "import",
+  "download",
+  "finetune",
   "create",
   "delete",
   "update",
@@ -100,10 +127,9 @@ const DESTRUCTIVE_PREFIXES = [
   "send",
 ];
 
-function isDestructive(shortName: string): boolean {
-  return DESTRUCTIVE_PREFIXES.some(
-    (p) => shortName.startsWith(`${p}_`) || shortName.includes(`_${p}_`),
-  );
+export function isDestructive(shortName: string): boolean {
+  const segments = shortName.split("_");
+  return DESTRUCTIVE_PREFIXES.some((verb) => segments.includes(verb));
 }
 
 /**
@@ -180,6 +206,9 @@ export function getMcpAgentTools(): ToolDefinition[] {
     registerChatTools,
     registerComputeTools,
     registerCreatorDashboardTools,
+    registerPublishTools,
+    registerEmailTools,
+    registerEconomyTools,
   ];
 
   for (const fn of registrars) {

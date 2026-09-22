@@ -19,6 +19,7 @@ import type {
   ListProjectsResult,
   GetProjectResult,
   ProjectWithApps,
+  AssignAppToProjectParams,
 } from "../../types/project_types";
 
 const PROJECTS_BASE_DIR = path.join(process.cwd(), "userData", "projects");
@@ -294,6 +295,35 @@ export async function deleteProject(
 }
 
 /**
+ * Assign an app to a collection (project), or remove it from any collection
+ * when `projectId` is null. Throws on invalid app/project ids.
+ */
+export async function assignAppToProject({
+  appId,
+  projectId,
+}: AssignAppToProjectParams): Promise<void> {
+  const db = getDb();
+
+  const app = await db.select().from(apps).where(eq(apps.id, appId)).get();
+  if (!app) {
+    throw new Error(`App not found: ${appId}`);
+  }
+
+  if (projectId !== null) {
+    const project = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .get();
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+  }
+
+  await db.update(apps).set({ projectId }).where(eq(apps.id, appId));
+}
+
+/**
  * Register project IPC handlers
  */
 export function registerProjectHandlers(): void {
@@ -316,4 +346,11 @@ export function registerProjectHandlers(): void {
   ipcMain.handle("project:delete", async (_, params: DeleteProjectParams) => {
     return await deleteProject(params);
   });
+
+  ipcMain.handle(
+    "project:assign-app",
+    async (_, params: AssignAppToProjectParams) => {
+      await assignAppToProject(params);
+    },
+  );
 }

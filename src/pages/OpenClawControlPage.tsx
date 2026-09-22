@@ -156,6 +156,18 @@ export function OpenClawControlPage() {
     refetchInterval: 5000,
   });
 
+  // Direct HTTP liveness probe of the daemon portal (18790). The portal iframe
+  // always targets the daemon, which can run independently of JoyCreate's
+  // bridge (e.g. as a Windows Scheduled Task). Gating the iframe on this probe
+  // (rather than on `bridged`) means it loads whenever the portal is actually
+  // reachable, and only shows the "starting" state during a genuine cold start.
+  const { data: daemonReachability } = useQuery({
+    queryKey: ["openclaw-daemon-reachable"],
+    queryFn: () => openclawClient.isDaemonReachable(),
+    refetchInterval: 3000,
+  });
+  const isDaemonReachable = daemonReachability?.reachable === true;
+
   const { data: providers } = useQuery({
     queryKey: ["openclaw-providers"],
     queryFn: () => openclawClient.listProviders(),
@@ -289,7 +301,11 @@ export function OpenClawControlPage() {
   const portalLoadedRef = useRef(false);
   const portalRetryRef = useRef(0);
   useEffect(() => {
-    if (portalView !== "iframe" || !portalUrl) return;
+    // Only arm the load watchdog once the iframe is actually mounted, i.e. the
+    // daemon portal (18790) is reachable. Starting the 30s countdown while the
+    // daemon is still spawning would trip the error state before the iframe
+    // ever renders.
+    if (portalView !== "iframe" || !portalUrl || !isDaemonReachable) return;
     portalLoadedRef.current = false;
     setPortalLoadError(false);
     const timer = setTimeout(() => {
@@ -303,7 +319,7 @@ export function OpenClawControlPage() {
       }
     }, 30_000);
     return () => clearTimeout(timer);
-  }, [portalKey, portalUrl, portalView]);
+  }, [portalKey, portalUrl, portalView, isDaemonReachable]);
 
   // Reset retry counter when user manually refreshes (refresh button bumps
   // portalKey too — but we only want to reset retries when the user does it,
@@ -625,27 +641,57 @@ export function OpenClawControlPage() {
           {/* Iframe view */}
           {portalView === "iframe" && (
             <div className="flex-1 flex flex-col min-h-0">
-              {isStatusLoading && !gatewayStatus ? (
+              {daemonReachability === undefined ? (
+                // Still running the first reachability probe — brief.
                 <div className="flex-1 flex items-center justify-center">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>
-              ) : !isConnected ? (
+              ) : !isDaemonReachable ? (
+                // The portal ALWAYS targets the external daemon (18790), which
+                // normally runs independently (Windows Scheduled Task) and may
+                // be up even when JoyCreate's bridge is not. We gate the iframe
+                // on a real HTTP probe of the daemon so it loads whenever the
+                // portal is actually reachable. If the probe fails the daemon is
+                // either cold-starting or down — offer to (re)start it. The 3s
+                // refetch flips this to the iframe automatically once it's up.
                 <div className="flex-1 flex items-center justify-center">
                   <Card className="max-w-sm text-center">
                     <CardHeader>
                       <AlertTriangle className="h-10 w-10 mx-auto text-orange-500 mb-2" />
-                      <CardTitle>Gateway Offline</CardTitle>
+                      <CardTitle>Daemon Not Responding</CardTitle>
                       <CardDescription>
-                        Start the OpenClaw gateway to load the portal.
+                        The external OpenClaw daemon isn't answering on port{" "}
+                        {daemonReachability?.port ?? 18790}. If it's cold-starting
+                        the portal will load automatically in a few seconds —
+                        otherwise start it below.
                       </CardDescription>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="space-y-2">
                       <Button
-                        onClick={() => startMutation.mutate()}
+                        onClick={() => yieldToDaemonMutation.mutate()}
                         disabled={isLoading}
-                        className="bg-gradient-to-r from-rose-500 to-orange-500 text-white"
+                        className="w-full bg-gradient-to-r from-rose-500 to-orange-500 text-white"
                       >
-                        <Play className="h-4 w-4 mr-1" />Start Gateway
+                        {yieldToDaemonMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                        ) : (
+                          <Play className="h-4 w-4 mr-1" />
+                        )}
+                        Start Daemon
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => window.open(portalUrl, "_blank")}
+                      >
+                        <ExternalLink className="h-4 w-4 mr-1" />Open in Browser
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="w-full text-xs"
+                        onClick={() => setPortalView("dashboard")}
+                      >
+                        Switch to built-in Dashboard
                       </Button>
                     </CardContent>
                   </Card>

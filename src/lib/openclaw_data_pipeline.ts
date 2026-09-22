@@ -13,6 +13,7 @@
 
 import { EventEmitter } from "events";
 import log from "electron-log";
+import { rejectsSamplingParams } from "@/ipc/utils/claude_sampling";
 import { v4 as uuidv4 } from "uuid";
 import type {
   OpenClawScrapingConfig,
@@ -149,7 +150,7 @@ export class OpenClawDataPipelineService extends EventEmitter {
       type: "anthropic",
       baseURL: "https://api.anthropic.com",
       apiKey: anthropicConfig.apiKey,
-      model: anthropicConfig.model || "claude-sonnet-4-5",
+      model: anthropicConfig.model || "claude-sonnet-5",
       available: true,
     };
     logger.info("Anthropic connection configured", { model: this.anthropicConnection.model });
@@ -282,7 +283,11 @@ export class OpenClawDataPipelineService extends EventEmitter {
         max_tokens: options?.maxTokens ?? 2048,
         system: options?.systemPrompt,
         messages: [{ role: "user", content: prompt }],
-        temperature: options?.temperature ?? 0.7,
+        // Claude Opus 4.7+ and the Claude 5 generation return a 400 for any
+        // temperature, so it is omitted for them.
+        ...(rejectsSamplingParams(this.anthropicConnection.model)
+          ? {}
+          : { temperature: options?.temperature ?? 0.7 }),
       }),
     });
     

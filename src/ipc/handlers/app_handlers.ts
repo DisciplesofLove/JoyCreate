@@ -26,6 +26,7 @@ import {
   stopAppByInfo,
   removeDockerVolumesForApp,
 } from "../utils/process_manager";
+import { appendAppLog, clearAppLogs } from "../utils/app_log_buffer";
 import { getEnvVar } from "../utils/read_env";
 import { readSettings } from "../../main/settings";
 
@@ -320,6 +321,7 @@ Details: ${details || "n/a"}
 
   // Increment the counter and store the process reference with its ID
   const currentProcessId = processCounter.increment();
+  clearAppLogs(appId);
   runningApps.set(appId, {
     process: spawnedProcess,
     processId: currentProcessId,
@@ -371,6 +373,7 @@ function listenToProcess({
     logger.debug(
       `App ${appId} (PID: ${spawnedProcess.pid}) stdout: ${message}`,
     );
+    appendAppLog(appId, "stdout", message);
 
     // This is a hacky heuristic to pick up when drizzle is asking for user
     // to select from one of a few choices. We automatically pick the first
@@ -425,6 +428,7 @@ function listenToProcess({
     logger.debug(
       `App ${appId} (PID: ${spawnedProcess.pid}) stderr: ${message}`,
     );
+    appendAppLog(appId, "stderr", message);
     safeSend(event.sender, "app:output", {
       type: "stderr",
       message,
@@ -663,6 +667,7 @@ ${errorOutput || "(empty)"}`,
 
   // Increment the counter and store the process reference with its ID
   const currentProcessId = processCounter.increment();
+  clearAppLogs(appId);
   runningApps.set(appId, {
     process,
     processId: currentProcessId,

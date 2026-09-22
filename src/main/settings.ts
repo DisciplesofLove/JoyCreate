@@ -220,7 +220,7 @@ export function getGeniusCoreSettings(): NonNullable<
   const s = readSettings();
   const legacy = s.geniusCore;
   const next = s.localProviders?.geniusCore;
-  const merged = { ...(legacy ?? {}), ...(next ?? {}) };
+  const merged = { ...legacy, ...next };
   return {
     enabled: merged.enabled ?? false,
     vramBudgetGb: merged.vramBudgetGb ?? 8,

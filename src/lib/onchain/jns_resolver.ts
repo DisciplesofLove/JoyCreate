@@ -21,33 +21,25 @@
 import { ethers } from "ethers";
 
 import {
-  AMOY_ENS_CONTRACTS,
   ARB_SEPOLIA_ENS_CONTRACTS,
   ARB_SEPOLIA_PARENT_DOMAIN,
   ARBITRUM_SEPOLIA,
-  POLYGON_AMOY,
 } from "@/config/joymarketplace";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 /** Chains where the Joy ENS (.joy / joymarketplace.io) registry is deployed. */
-export type JnsChainId = "polygonAmoy" | "arbitrumSepolia";
+export type JnsChainId = "arbitrumSepolia";
 
 interface JnsChainConfig {
   rpcUrl: string;
   ensRegistry: string;
   joyResolver: string;
-  /** Parent domain JNS names hang off (e.g. "joy" on Amoy). */
+  /** Parent domain JNS names hang off (e.g. "joymarketplace.io"). */
   parentDomain: string;
 }
 
 const JNS_CHAINS: Record<JnsChainId, JnsChainConfig> = {
-  polygonAmoy: {
-    rpcUrl: POLYGON_AMOY.rpcUrl,
-    ensRegistry: AMOY_ENS_CONTRACTS.ENSRegistry,
-    joyResolver: AMOY_ENS_CONTRACTS.JoyResolver,
-    parentDomain: "joy",
-  },
   arbitrumSepolia: {
     rpcUrl: ARBITRUM_SEPOLIA.rpcUrl,
     ensRegistry: ARB_SEPOLIA_ENS_CONTRACTS.ENSRegistry,
@@ -56,8 +48,13 @@ const JNS_CHAINS: Record<JnsChainId, JnsChainConfig> = {
   },
 };
 
-/** The canonical home of the `.joy` TLD (JNS). */
-export const DEFAULT_JNS_CHAIN: JnsChainId = "polygonAmoy";
+/**
+ * The canonical home of JNS names.
+ *
+ * Was `polygonAmoy`, which meant every unqualified name resolution went to a
+ * decommissioned chain and returned nothing.
+ */
+export const DEFAULT_JNS_CHAIN: JnsChainId = "arbitrumSepolia";
 
 const ENS_REGISTRY_ABI = [
   "function owner(bytes32 node) view returns (address)",
@@ -106,14 +103,17 @@ export interface JnsResolution {
 }
 
 function isJnsChainId(value: unknown): value is JnsChainId {
-  return value === "polygonAmoy" || value === "arbitrumSepolia";
+  return value === "arbitrumSepolia";
 }
 
-/** Choose the chain whose parent domain matches the name's suffix. */
-function pickChainForName(name: string): JnsChainId {
-  const lower = name.toLowerCase();
-  if (lower.endsWith(`.${ARB_SEPOLIA_PARENT_DOMAIN}`)) return "arbitrumSepolia";
-  // ".joy" names (and bare labels, normalized to ".joy") live on Amoy.
+/**
+ * Choose the chain for a name.
+ *
+ * There is only one now. The `.joy` parent domain belonged to the Polygon Amoy
+ * registry; on Arbitrum every name hangs off `ARB_SEPOLIA_PARENT_DOMAIN`, and
+ * bare labels are normalized to it by `normalizeName`.
+ */
+function pickChainForName(_name: string): JnsChainId {
   return DEFAULT_JNS_CHAIN;
 }
 

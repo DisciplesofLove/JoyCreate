@@ -456,6 +456,35 @@ export type RevertVersionResponse =
   | { successMessage: string }
   | { warningMessage: string };
 
+export interface GetVersionDiffParams {
+  appId: number;
+  /** The commit OID to inspect (the "to" side of the diff). */
+  versionId: string;
+  /**
+   * Optional base commit OID. When omitted, the diff is computed against the
+   * commit's first parent (i.e. what this version changed).
+   */
+  previousVersionId?: string;
+}
+
+export interface GitDiffFile {
+  path: string;
+  /** Rename source path, if the file was renamed. */
+  oldPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  insertions: number;
+  deletions: number;
+  binary: boolean;
+}
+
+export interface GitDiffResult {
+  /** Full unified diff patch text. */
+  patch: string;
+  files: GitDiffFile[];
+  insertions: number;
+  deletions: number;
+}
+
 // --- Help Bot Types ---
 export interface StartHelpChatParams {
   sessionId: string;
@@ -712,9 +741,31 @@ export interface ModelFactorySystemInfo {
   cudaVersion?: string;
   hasPython: boolean;
   pythonVersion?: string;
+  /**
+   * The interpreter that actually answered — "python" or "python3".
+   *
+   * Detection used to try `python`, then fall back to `python3`, and then
+   * probe every package with `python3` regardless of which had worked. On
+   * Windows `python3` is usually absent, so a machine with the full toolchain
+   * installed still reported every package missing.
+   */
+  pythonCommand?: string;
+  hasTorch: boolean;
+  torchVersion?: string;
+  /** torch's own view of CUDA, which is what training actually depends on. */
+  torchCuda: boolean;
   hasTransformers: boolean;
+  hasPeft: boolean;
   hasBitsAndBytes: boolean;
+  hasDatasets: boolean;
+  hasAccelerate: boolean;
   hasUnsloth: boolean;
+  /** Packages needed for a real run that are not installed. */
+  missingPackages: string[];
+  /** Methods this machine can actually run right now. */
+  supportedMethods: string[];
+  /** Why a method is unavailable, keyed by method. */
+  blockers: Record<string, string>;
   recommendedMethod: string;
   recommendedQuantization: string;
   maxBatchSize: number;
@@ -1256,4 +1307,34 @@ export interface VideoProject {
   renderedVideoId: number | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * A subscription-backed agent CLI (Claude Code, Codex, Gemini CLI, Copilot CLI).
+ * The static catalog entry — what exists, independent of this machine.
+ */
+export interface SubscriptionCliInfo {
+  id: string;
+  label: string;
+  vendor: string;
+  /** The plan this uses, in the vendor's own words. */
+  subscription: string;
+  loginCommand: string;
+  installCommand: string;
+  docsUrl: string;
+  models: { id: string; label: string; description: string }[];
+}
+
+/** What was actually found on this machine. */
+export interface SubscriptionCliDetection extends SubscriptionCliInfo {
+  binaryPath: string | null;
+  version: string | null;
+  installed: boolean;
+  /**
+   * The login-created credential path exists. A hint, not proof — only running
+   * a prompt shows whether the session is still valid.
+   */
+  signedIn: boolean;
+  /** One line ready to show in the UI. */
+  status: string;
 }

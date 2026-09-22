@@ -3,7 +3,7 @@
  *
  * After the 2026-05-02 architecture pivot
  * (see briefs/droperc1155-read-layer-surgery.md), browse / detail / featured
- * / categories are all sourced from the joy-drop-amoy + joy-stores-amoy
+ * / categories are sourced from the Arbitrum Sepolia drop + stores
  * Goldsky subgraphs. There is NO MarketplaceV3 listing fetch, NO Supabase
  * listing-mirror call, and NO `joy-marketplace-amoy` subgraph access.
  *
@@ -48,6 +48,11 @@ import type {
   CreatorRevenueRow,
   CreatorRevenueSummary,
 } from "@/types/publish_types";
+import type {
+  ClaimMarketplaceAssetRequest,
+  ClaimMarketplaceAssetResult,
+} from "@/types/publish_types";
+import { claimMarketplaceAsset } from "@/lib/joymarketplace/claim_asset";
 import type { PricingModel, AssetStatus } from "@/types/marketplace_types";
 import { db } from "@/db";
 import { dataLeaseListings } from "@/db/schema";
@@ -84,6 +89,7 @@ interface TokenMetadata {
   name?: string;
   description?: string;
   image?: string;
+  license?: string;
   external_url?: string;
   animation_url?: string;
   attributes?: { trait_type?: string; value?: unknown }[];
@@ -141,24 +147,15 @@ function ipfsToHttp(uri: string, gatewayIndex = 0): string {
 /**
  * Build the per-token metadata URL from a DropERC1155 baseURI + tokenId.
  *
- * ERC-1155 baseURI semantics: the actual metadata file for a given token
- * lives at `<baseURI><tokenId>` (no extension, no padding). Some publishers
- * include a trailing slash on the baseURI (`ipfs://Qm.../`); others don't
- * (`ipfs://Qm...`). We normalize both. If the caller passed a baseURI that
- * already encodes the tokenId path (legacy single-token mints from before
- * the directory-CID convention was standardized), we leave it alone — this
- * is detected by the URI ending in `/<tokenId>` (with or without trailing
- * slash).
+ * A trailing slash denotes an ERC-1155 metadata directory and receives the
+ * token ID suffix. A URI without a trailing slash is a direct JSON metadata
+ * URI, which is how JoyCreate pins single-asset metadata.
  */
 function tokenMetadataUri(baseURI: string, tokenId: string): string {
   if (!baseURI) return baseURI;
-  // Legacy guard: if the baseURI already ends with the tokenId, return as-is
-  // to avoid double-appending (e.g. `ipfs://.../11` + "11" → `.../11/11`).
   const stripped = baseURI.endsWith("/") ? baseURI.slice(0, -1) : baseURI;
   if (stripped.endsWith(`/${tokenId}`)) return stripped;
-  // Normalize trailing slash — append exactly one before the tokenId.
-  const trimmed = baseURI.endsWith("/") ? baseURI : baseURI + "/";
-  return trimmed + tokenId;
+  return baseURI.endsWith("/") ? `${baseURI}${tokenId}` : baseURI;
 }
 
 /** Fetch + parse the metadata JSON behind a token's baseURI, with retry across gateways. */
@@ -203,6 +200,41 @@ function weiToDisplay(wei: string | null): number | undefined {
   } catch {
     return undefined;
   }
+}
+
+function tokenPriceDisplay(token: DropToken): {
+  price: number | undefined;
+  currency: string;
+} {
+  const currency = token.currency?.toLowerCase();
+  if (currency === "0x75faf114eafb1bdbe2f0316df893fd58ce46aa4d") {
+    return {
+      price: token.pricePerToken
+        ? Number(BigInt(token.pricePerToken)) / 1e6
+        : undefined,
+      currency: "USDC",
+    };
+  }
+  return { price: weiToDisplay(token.pricePerToken), currency: "ETH" };
+}
+
+function normalizeLicense(value: unknown): LicenseType {
+  if (typeof value !== "string") return "proprietary";
+  const normalized = value.trim().toLowerCase();
+  const aliases: Record<string, LicenseType> = {
+    "cc-by-4.0": "cc-by-4.0",
+    "cc-by-sa-4.0": "cc-by-sa-4.0",
+    "cc-by-nc-4.0": "cc-by-nc-4.0",
+    "cc0-1.0": "custom",
+    "commercial-use": "proprietary",
+    "personal-use-only": "proprietary",
+    mit: "mit",
+    "apache-2.0": "apache-2.0",
+    "gpl-3.0": "gpl-3.0",
+    proprietary: "proprietary",
+    custom: "custom",
+  };
+  return aliases[normalized] ?? "custom";
 }
 
 /**
@@ -274,7 +306,7 @@ function toBrowseItem(token: DropToken, meta: TokenMetadata | null): Marketplace
   const category = (props.category ?? "ai-workflow") as UnifiedCategory;
   const pricingModel: PricingModel =
     token.pricePerToken && token.pricePerToken !== "0" ? "one-time" : "free";
-  const price = weiToDisplay(token.pricePerToken);
+  const { price, currency } = tokenPriceDisplay(token);
 
   return {
     id: token.tokenId,
@@ -284,7 +316,7 @@ function toBrowseItem(token: DropToken, meta: TokenMetadata | null): Marketplace
     assetType,
     pricingModel,
     price,
-    currency: "MATIC",
+    currency,
     thumbnailUrl: meta?.image ? ipfsToHttp(meta.image) : undefined,
     downloads: Number(token.totalPurchases ?? "0"),
     rating: 0,
@@ -303,10 +335,10 @@ function toAssetDetail(token: DropToken, meta: TokenMetadata | null): Marketplac
   const props = meta?.properties ?? {};
   const assetType = (props.assetType ?? "model") as PublishableAssetType;
   const category = (props.category ?? "ai-workflow") as UnifiedCategory;
-  const license = (props.license ?? "proprietary") as LicenseType;
+  const license = normalizeLicense(props.license ?? meta?.license);
   const pricingModel: PricingModel =
     token.pricePerToken && token.pricePerToken !== "0" ? "one-time" : "free";
-  const price = weiToDisplay(token.pricePerToken);
+  const { price, currency } = tokenPriceDisplay(token);
   const status: AssetStatus = "published";
 
   return {
@@ -320,7 +352,7 @@ function toAssetDetail(token: DropToken, meta: TokenMetadata | null): Marketplac
     tags: props.tags ?? [],
     pricingModel,
     price,
-    currency: "MATIC",
+    currency,
     thumbnailUrl: meta?.image ? ipfsToHttp(meta.image) : undefined,
     screenshotUrls: (props.screenshots ?? []).map((s) => ipfsToHttp(s)),
     demoUrl: props.demoUrl,
@@ -497,10 +529,9 @@ export function registerMarketplaceBrowseHandlers() {
 
   /**
    * "My drops" — drops authored by the given creator wallet, in browse-grid
-   * shape so the existing renderer components can render them with no extra
-   * conversion. The drop subgraph doesn't store creator on Token (see
-   * `listDropsByCreator` for details), so we fetch a page of drops and
-   * filter by metadata.creatorWallet (set during publish-orchestrator pin).
+    * shape so the existing renderer components can render them with no extra
+    * conversion. `listDropsByCreator` uses the store-scoped Goldsky index,
+    * where creator ownership is recorded directly on each token.
    *
    * Params: { wallet: string, page?, pageSize?, query? }
    */
@@ -522,13 +553,13 @@ export function registerMarketplaceBrowseHandlers() {
       const wallet = params.wallet.toLowerCase();
       const chainId: SubgraphChainId = isSubgraphChainId(params.chainId)
         ? params.chainId
-        : "polygonAmoy";
+        : "arbitrumSepolia";
 
       logger.info(
         `my-drops chain=${chainId} wallet=${wallet} page=${page} pageSize=${pageSize}`,
       );
 
-      // Fetch a page of drops (subgraph-side filter unavailable today).
+      // Goldsky filters by creator before pagination.
       const { items: tokens, hasMore } = await listDropsByCreator({
         creator: wallet,
         page,
@@ -545,12 +576,7 @@ export function registerMarketplaceBrowseHandlers() {
         })),
       );
 
-      // Filter by creatorWallet (set by publish_orchestrator). When metadata
-      // is missing or creatorWallet is absent, exclude rather than
-      // over-include — "my drops" should never show a stranger's drops.
-      let items = enriched
-        .filter(({ meta }) => isMyDrop(meta, wallet))
-        .map(({ token, meta }) => toBrowseItem(token, meta));
+      let items = enriched.map(({ token, meta }) => toBrowseItem(token, meta));
 
       if (params.query) {
         const q = params.query.toLowerCase();
@@ -592,7 +618,7 @@ export function registerMarketplaceBrowseHandlers() {
       if (!params?.wallet) throw new Error("wallet is required");
       const chainId: SubgraphChainId = isSubgraphChainId(params.chainId)
         ? params.chainId
-        : "polygonAmoy";
+        : "arbitrumSepolia";
       logger.info(
         `my-claims chain=${chainId} wallet=${params.wallet} page=${params.page ?? 1}`,
       );
@@ -625,7 +651,7 @@ export function registerMarketplaceBrowseHandlers() {
       }
       const chainId: SubgraphChainId = isSubgraphChainId(params.chainId)
         ? params.chainId
-        : "polygonAmoy";
+        : "arbitrumSepolia";
       return getOwnership(params.tokenId, params.wallet, chainId);
     },
   );
@@ -648,7 +674,7 @@ export function registerMarketplaceBrowseHandlers() {
       if (!params?.wallet) throw new Error("wallet is required");
       const chainId: SubgraphChainId = isSubgraphChainId(params.chainId)
         ? params.chainId
-        : "polygonAmoy";
+        : "arbitrumSepolia";
       logger.info(`my-stores chain=${chainId} wallet=${params.wallet}`);
       return listStoresByDomainOwner(params.wallet, params.first ?? 50, chainId);
     },
@@ -670,6 +696,29 @@ export function registerMarketplaceBrowseHandlers() {
     }
     return Array.from(counts.entries()).map(([category, count]) => ({ category, count }));
   });
+
+  ipcMain.handle(
+    "marketplace:claim-asset",
+    async (
+      _,
+      request: ClaimMarketplaceAssetRequest,
+    ): Promise<ClaimMarketplaceAssetResult> => {
+      if (!request?.tokenId) throw new Error("tokenId is required");
+      const quantity = Math.min(Math.max(request.quantity ?? 1, 1), 100);
+      if (!Number.isInteger(quantity)) throw new Error("quantity must be an integer");
+      const token = await getDrop(request.tokenId, "arbitrumSepolia");
+      if (!token) throw new Error(`Marketplace asset not found: ${request.tokenId}`);
+      if (!token.currency) throw new Error("Asset has no active claim currency");
+      if (token.pricePerToken == null) throw new Error("Asset has no active claim price");
+
+      return claimMarketplaceAsset({
+        tokenId: token.tokenId,
+        quantity: BigInt(quantity),
+        currency: token.currency,
+        pricePerToken: BigInt(token.pricePerToken),
+      });
+    },
+  );
 
   /**
    * "My revenue" — per-token sales summary for a creator wallet, derived
@@ -708,9 +757,7 @@ export function registerMarketplaceBrowseHandlers() {
         })),
       );
 
-      const mine = enriched.filter(({ meta }) => isMyDrop(meta, wallet));
-
-      const rows: CreatorRevenueRow[] = mine.map(({ token, meta }) => {
+      const rows: CreatorRevenueRow[] = enriched.map(({ token, meta }) => {
         let revenueWei = "0";
         try {
           const sold = BigInt(token.supplyClaimed ?? "0");

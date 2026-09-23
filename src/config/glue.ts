@@ -9,22 +9,24 @@
  * /memories/repo/glue-contracts-deploy.md for tx hashes.
  */
 
+import { envAddress } from "@/config/env_address";
+
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 export const STORE_REGISTRY_CONTRACTS = {
   arbitrumSepolia: "0x2e6f02271ae08250d2c87f4fa02eb468f4abe3e4",
-  arbitrumOne: ZERO_ADDRESS,
-} as const;
+  arbitrumOne: envAddress("VITE_STORE_REGISTRY_ARB_ONE", ZERO_ADDRESS),
+};
 
 export const EDITION_CONTROLLER_CONTRACTS = {
   arbitrumSepolia: "0x93b334ce8043195d57259c55ca2b336e63c17255",
-  arbitrumOne: ZERO_ADDRESS,
-} as const;
+  arbitrumOne: envAddress("VITE_EDITION_CONTROLLER_ARB_ONE", ZERO_ADDRESS),
+};
 
 export const AGENT_MANDATE_CONTRACTS = {
   arbitrumSepolia: "0xe326ec664c22ac6adde0215e619fe8aece669408",
-  arbitrumOne: ZERO_ADDRESS,
-} as const;
+  arbitrumOne: envAddress("VITE_AGENT_MANDATE_ARB_ONE", ZERO_ADDRESS),
+};
 
 export type GlueChainId = keyof typeof STORE_REGISTRY_CONTRACTS;
 

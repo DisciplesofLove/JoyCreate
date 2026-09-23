@@ -1,0 +1,24 @@
+[
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "AgentRegistered",
+    "inputs": [
+      { "indexed": true, "name": "agentId", "type": "uint256" },
+      { "indexed": true, "name": "agentAddress", "type": "address" },
+      { "indexed": true, "name": "domainHash", "type": "bytes32" },
+      { "indexed": false, "name": "agentDomain", "type": "bytes" }
+    ]
+  },
+  {
+    "anonymous": false,
+    "type": "event",
+    "name": "AgentUpdated",
+    "inputs": [
+      { "indexed": true, "name": "agentId", "type": "uint256" },
+      { "indexed": true, "name": "agentAddress", "type": "address" },
+      { "indexed": true, "name": "domainHash", "type": "bytes32" },
+      { "indexed": false, "name": "agentDomain", "type": "bytes" }
+    ]
+  }
+]

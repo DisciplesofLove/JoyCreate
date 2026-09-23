@@ -9,22 +9,24 @@
  * /memories/repo/erc8004-deploy.md for tx hashes.
  */
 
+import { envAddress } from "@/config/env_address";
+
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 export const IDENTITY_REGISTRY_CONTRACTS = {
   arbitrumSepolia: "0x2168a88e613cd28409335eaa98e8aeed78d2e2ec",
-  arbitrumOne: ZERO_ADDRESS,
-} as const;
+  arbitrumOne: envAddress("VITE_IDENTITY_REGISTRY_ARB_ONE", ZERO_ADDRESS),
+};
 
 export const REPUTATION_REGISTRY_CONTRACTS = {
   arbitrumSepolia: "0x82718a9325ee5322cab83d5b7ee4ed060c19a626",
-  arbitrumOne: ZERO_ADDRESS,
-} as const;
+  arbitrumOne: envAddress("VITE_REPUTATION_REGISTRY_ARB_ONE", ZERO_ADDRESS),
+};
 
 export const VALIDATION_REGISTRY_CONTRACTS = {
   arbitrumSepolia: "0x9edcbf7f396dddb6e793b472661610772c7d68a6",
-  arbitrumOne: ZERO_ADDRESS,
-} as const;
+  arbitrumOne: envAddress("VITE_VALIDATION_REGISTRY_ARB_ONE", ZERO_ADDRESS),
+};
 
 export type Erc8004ChainId = keyof typeof IDENTITY_REGISTRY_CONTRACTS;
 

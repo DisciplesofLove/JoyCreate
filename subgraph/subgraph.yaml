@@ -1,0 +1,123 @@
+specVersion: 1.0.0
+description: JOY Marketplace — ERC-8004 identity/reputation + Stylus glue contracts
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: IdentityRegistry
+    network: arbitrum-sepolia
+    source:
+      address: "0x2168a88e613cd28409335eaa98e8aeed78d2e2ec"
+      abi: IdentityRegistry
+      startBlock: 0 # TODO: set to deployment block before deploying
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/mapping.ts
+      entities:
+        - Agent
+      abis:
+        - name: IdentityRegistry
+          file: ./abis/IdentityRegistry.json
+      eventHandlers:
+        - event: AgentRegistered(indexed uint256,indexed address,indexed bytes32,bytes)
+          handler: handleAgentRegistered
+        - event: AgentUpdated(indexed uint256,indexed address,indexed bytes32,bytes)
+          handler: handleAgentUpdated
+  - kind: ethereum
+    name: ReputationRegistry
+    network: arbitrum-sepolia
+    source:
+      address: "0x82718a9325ee5322cab83d5b7ee4ed060c19a626"
+      abi: ReputationRegistry
+      startBlock: 0 # TODO: set to deployment block before deploying
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/mapping.ts
+      entities:
+        - Feedback
+        - Agent
+      abis:
+        - name: ReputationRegistry
+          file: ./abis/ReputationRegistry.json
+      eventHandlers:
+        - event: FeedbackSubmitted(indexed uint256,indexed uint256,uint256,bytes)
+          handler: handleFeedbackSubmitted
+  - kind: ethereum
+    name: StoreRegistry
+    network: arbitrum-sepolia
+    source:
+      address: "0x2e6f02271ae08250d2c87f4fa02eb468f4abe3e4"
+      abi: StoreRegistry
+      startBlock: 0 # TODO: set to deployment block before deploying
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/mapping.ts
+      entities:
+        - Store
+        - Agent
+      abis:
+        - name: StoreRegistry
+          file: ./abis/StoreRegistry.json
+      eventHandlers:
+        - event: StoreRegistered(indexed uint256,indexed address,indexed uint256,bytes32,bytes)
+          handler: handleStoreRegistered
+        - event: StoreAgentUpdated(indexed uint256,indexed address,indexed uint256)
+          handler: handleStoreAgentUpdated
+        - event: StoreTransferred(indexed uint256,indexed address,indexed address)
+          handler: handleStoreTransferred
+  - kind: ethereum
+    name: EditionController
+    network: arbitrum-sepolia
+    source:
+      address: "0x93b334ce8043195d57259c55ca2b336e63c17255"
+      abi: EditionController
+      startBlock: 0 # TODO: set to deployment block before deploying
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/mapping.ts
+      entities:
+        - Drop
+        - Mint
+        - Store
+      abis:
+        - name: EditionController
+          file: ./abis/EditionController.json
+      eventHandlers:
+        - event: DropCreated(indexed uint256,indexed address,indexed uint256,bytes32,uint256,uint256,bool)
+          handler: handleDropCreated
+        - event: DropActivated(indexed uint256,bool)
+          handler: handleDropActivated
+        - event: Minted(indexed uint256,indexed uint256,indexed address,uint256)
+          handler: handleMinted
+  - kind: ethereum
+    name: AgentMandate
+    network: arbitrum-sepolia
+    source:
+      address: "0xe326ec664c22ac6adde0215e619fe8aece669408"
+      abi: AgentMandate
+      startBlock: 0 # TODO: set to deployment block before deploying
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/mapping.ts
+      entities:
+        - Mandate
+      abis:
+        - name: AgentMandate
+          file: ./abis/AgentMandate.json
+      eventHandlers:
+        - event: MandateCreated(indexed uint256,indexed address,indexed address,uint256,uint256,bytes32)
+          handler: handleMandateCreated
+        - event: MandateSpent(indexed uint256,indexed address,uint256,uint256)
+          handler: handleMandateSpent
+        - event: MandateRevoked(indexed uint256,indexed address)
+          handler: handleMandateRevoked

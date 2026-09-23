@@ -288,6 +288,20 @@ export async function editionBalanceOf(
   return ((await contract.balanceOf(dropId, account)) as bigint).toString();
 }
 
+/**
+ * Read whether a Proof-of-Use grant exists for `account` on a drop (LR8 gate).
+ * Used to authorize local skill execution of PoU-gated assets.
+ */
+export async function isProofGranted(
+  chain: GlueChainId,
+  dropId: string,
+  account: string,
+): Promise<boolean> {
+  if (!ethers.isAddress(account)) throw new Error("account is not a valid address");
+  const contract = editionContract(chain);
+  return (await contract.isProofGranted(dropId, account)) as boolean;
+}
+
 export async function dropCount(chain: GlueChainId): Promise<string> {
   const contract = editionContract(chain);
   return ((await contract.dropCount()) as bigint).toString();

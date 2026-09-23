@@ -24,6 +24,9 @@ import { formatDistanceToNow, format } from "date-fns";
 import { useVersions } from "@/hooks/useVersions";
 import { useAtomValue } from "jotai";
 import { selectedAppIdAtom } from "@/atoms/appAtoms";
+import { selectedChatIdAtom } from "@/atoms/chatAtoms";
+import { extractPlanProposal } from "@/shared/plan_mode";
+import { PlanProposalActions } from "./PlanProposalActions";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useRateMessage, useCorrectMessage } from "@/hooks/use-flywheel";
@@ -42,6 +45,13 @@ interface ChatMessageProps {
 const ChatMessage = ({ message, isLastMessage }: ChatMessageProps) => {
   const { isStreaming } = useStreamChat();
   const appId = useAtomValue(selectedAppIdAtom);
+  const chatId = useAtomValue(selectedChatIdAtom);
+  // Plan-mode proposals get Approve / Revise / Reject — but only on the latest
+  // message, and only once the plan has finished streaming.
+  const hasPlanProposal = useMemo(
+    () => message.role === "assistant" && extractPlanProposal(message.content) !== null,
+    [message.role, message.content],
+  );
   const { versions: liveVersions } = useVersions(appId);
   //handle copy chat
   const { copyMessageContent, copied } = useCopyToClipboard();
@@ -154,6 +164,9 @@ const ChatMessage = ({ message, isLastMessage }: ChatMessageProps) => {
               {message.role === "assistant" ? (
                 <>
                   <JoyMarkdownParser content={message.content} />
+                  {hasPlanProposal && isLastMessage && !isStreaming && chatId && message.id ? (
+                    <PlanProposalActions chatId={chatId} messageId={message.id} />
+                  ) : null}
                   {isLastMessage && isStreaming && (
                     <div className="mt-4 ml-4 relative w-5 h-5 animate-spin">
                       <div className="absolute top-0 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-(--primary) dark:bg-blue-500 rounded-full"></div>

@@ -6,6 +6,7 @@ import {
   type ContextPathResults,
   ChatSearchResultsSchema,
   AppSearchResultsSchema,
+  type ChatMode,
 } from "../lib/schemas";
 import type {
   AppOutput,
@@ -94,6 +95,7 @@ import type {
 import type { VideoTimeline } from "@/lib/video/timeline_types";
 import type { ConsoleEntry } from "../atoms/appAtoms";
 import type { Template } from "../shared/templates";
+import type { PlanAction, PlanRespondResult } from "@/shared/plan_mode";
 import type {
   AppChatContext,
   AppSearchResult,
@@ -1227,6 +1229,7 @@ export class IpcClient {
       chatId: number;
       redo?: boolean;
       attachments?: FileAttachment[];
+      chatModeOverride?: ChatMode;
       onUpdate: (messages: Message[]) => void;
       onEnd: (response: ChatResponseEnd) => void;
       onError: (error: string) => void;
@@ -1238,6 +1241,7 @@ export class IpcClient {
       redo,
       attachments,
       selectedComponents,
+      chatModeOverride,
       onUpdate,
       onEnd,
       onError,
@@ -1279,6 +1283,7 @@ export class IpcClient {
               redo,
               selectedComponents,
               attachments: fileDataArray,
+              chatModeOverride,
             })
             .catch((err) => {
               console.error("Error streaming message:", err);
@@ -1301,6 +1306,7 @@ export class IpcClient {
           chatId,
           redo,
           selectedComponents,
+          chatModeOverride,
         })
         .catch((err) => {
           console.error("Error streaming message:", err);
@@ -2997,6 +3003,19 @@ export class IpcClient {
     chatId: number,
   ): Promise<import("@/shared/chat_plan_types").ChatPlan | null> {
     return this.ipcRenderer.invoke("chat-plan:get", { chatId });
+  }
+
+  /**
+   * Validate a plan decision on the chat's latest plan and get the follow-up
+   * turn to send. Approve returns a one-turn "build" override.
+   */
+  public async planRespond(params: {
+    chatId: number;
+    messageId: number;
+    action: PlanAction;
+    feedback?: string;
+  }): Promise<PlanRespondResult> {
+    return this.ipcRenderer.invoke("chat:plan-respond", params);
   }
 
   public async upsertChatPlan(params: {

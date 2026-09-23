@@ -15,6 +15,7 @@ import {
 import { IpcClient } from "@/ipc/ipc_client";
 import { isPreviewOpenAtom } from "@/atoms/viewAtoms";
 import type { ChatResponseEnd } from "@/ipc/ipc_types";
+import type { ChatMode } from "@/lib/schemas";
 import { useChats } from "./useChats";
 import { useLoadApp } from "./useLoadApp";
 import { selectedAppIdAtom, appUrlAtom } from "@/atoms/appAtoms";
@@ -71,6 +72,7 @@ export function useStreamChat({
       redo,
       attachments,
       selectedComponents,
+      chatModeOverride,
       onSettled,
     }: {
       prompt: string;
@@ -78,6 +80,8 @@ export function useStreamChat({
       redo?: boolean;
       attachments?: FileAttachment[];
       selectedComponents?: ComponentSelection[];
+      /** Run this one turn in another mode (an approved plan runs in Build). */
+      chatModeOverride?: ChatMode;
       onSettled?: () => void;
     }) => {
       if (
@@ -111,6 +115,7 @@ export function useStreamChat({
           chatId,
           redo,
           attachments,
+          chatModeOverride,
           onUpdate: (updatedMessages: Message[]) => {
             if (!hasIncrementedStreamCount) {
               setStreamCountById((prev) => {

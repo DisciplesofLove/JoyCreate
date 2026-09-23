@@ -114,6 +114,7 @@ import {
 import { parseChatPlanFromText } from "@/lib/chat_plan_parser";
 import { parsePhaseCompleteFromText } from "@/lib/chat_plan_parser";
 import { upsertChatPlan, applyPhaseCompleteToPlan } from "./chat_plan_handlers";
+import { isReadOnlyChatMode } from "@/shared/plan_mode";
 import { AI_STREAMING_ERROR_MESSAGE_PREFIX } from "@/shared/texts";
 import { getCurrentCommitHash } from "../utils/git_utils";
 import {
@@ -517,10 +518,18 @@ ${componentSnippet}
 
       // Per-chat sticky chat mode overrides the global setting when set.
       // When chats.chatMode is null we fall back to settings.selectedChatMode.
+      // A one-turn override (an approved plan executing in Build) beats both.
+      const overrideParsed = ChatModeSchema.safeParse(req.chatModeOverride);
       const chatModeParsed = ChatModeSchema.safeParse(updatedChat.chatMode);
-      const effectiveChatMode: ChatMode = chatModeParsed.success
-        ? chatModeParsed.data
-        : (settings.selectedChatMode ?? "build");
+      const effectiveChatMode: ChatMode = overrideParsed.success
+        ? overrideParsed.data
+        : chatModeParsed.success
+          ? chatModeParsed.data
+          : (settings.selectedChatMode ?? "build");
+      // Ask and Plan must never modify the app. The guards below used to test
+      // the *global* setting against "ask" only, so Plan mode — and any chat
+      // whose own mode differed from the global one — could still apply edits.
+      const readOnlyMode = isReadOnlyChatMode(effectiveChatMode);
 
       // Send the messages right away so that the loading state is shown for the message.
       safeSend(event.sender, "chat:response:chunk", {
@@ -748,7 +757,7 @@ ${componentSnippet}
         // drift from the original spec across turns. Skipped in "ask" mode (no
         // file writes); summarize/security-review intents replace systemPrompt
         // entirely below, so this addition is harmlessly dropped for those.
-        if (settings.selectedChatMode !== "ask") {
+        if (!readOnlyMode) {
           systemPrompt += PROJECT_SPEC_PROTOCOL;
         }
 
@@ -758,7 +767,7 @@ ${componentSnippet}
         // write_file tool and adding joy-write instructions conflicts.
         if (
           isLocalModel(settings.selectedModel.provider) &&
-          settings.selectedChatMode !== "ask" &&
+          !readOnlyMode &&
           settings.selectedChatMode !== "local-agent"
         ) {
           systemPrompt += `
@@ -1701,7 +1710,7 @@ This conversation includes one or more image attachments. When the user uploads 
           fullResponse = result.fullResponse;
 
           if (
-            settings.selectedChatMode !== "ask" &&
+            !readOnlyMode &&
             isTurboEditsV2Enabled(settings)
           ) {
             let issues = await dryRunSearchReplace({
@@ -1802,7 +1811,7 @@ ${formattedSearchReplaceIssues}`,
 
           if (
             !abortController.signal.aborted &&
-            settings.selectedChatMode !== "ask" &&
+            !readOnlyMode &&
             hasUnclosedJoyWrite(fullResponse)
           ) {
             let continuationAttempts = 0;
@@ -1845,7 +1854,7 @@ ${formattedSearchReplaceIssues}`,
             // installed yet.
             addDependencies.length === 0 &&
             settings.enableAutoFixProblems &&
-            settings.selectedChatMode !== "ask"
+            !readOnlyMode
           ) {
             try {
               // IF auto-fix is enabled
@@ -1989,7 +1998,7 @@ ${problemReport.problems
           // prompts to the AI to finish the job.
           if (
             !abortController.signal.aborted &&
-            settings.selectedChatMode !== "ask" &&
+            !readOnlyMode &&
             settings.autoApproveChanges
           ) {
             try {
@@ -2341,7 +2350,7 @@ ${problemReport.problems
         const settings = readSettings();
         if (
           settings.autoApproveChanges &&
-          settings.selectedChatMode !== "ask"
+          !readOnlyMode
         ) {
           const status = await processFullResponseActions(
             fullResponse,

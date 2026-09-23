@@ -1,0 +1,16 @@
+#!/bin/sh
+# Local-only guard: JoyCreate moved to its own repo on 2026-09-22
+# (DisciplesofLove/create). This checkout is the old dyad fork and should not
+# receive pushes except deliberate historical/reference work.
+if [ "$JOYCREATE_ALLOW_OLD_FORK_PUSH" != "1" ]; then
+  echo ""
+  echo "BLOCKED: this is the OLD dyad-fork checkout (DisciplesofLove/JoyCreate)."
+  echo "JoyCreate's active repo is now https://github.com/DisciplesofLove/create"
+  echo "  -> C:\Users\Wise AI\joycreate\create"
+  echo ""
+  echo "If you really mean to push here, re-run with:"
+  echo "  JOYCREATE_ALLOW_OLD_FORK_PUSH=1 git push ..."
+  echo ""
+  exit 1
+fi
+echo "NOTE: pushing to the old fork (DisciplesofLove/JoyCreate) - override was set."

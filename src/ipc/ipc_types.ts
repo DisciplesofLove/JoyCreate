@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ProblemReport, Problem } from "../../shared/tsc_types";
+import type { ChatMode } from "../lib/schemas";
 export type { ProblemReport, Problem };
 
 export interface AppOutput {
@@ -42,6 +43,12 @@ export interface ChatStreamParams {
     attachmentType: "upload-to-codebase" | "chat-context"; // FileAttachment type
   }>;
   selectedComponents?: ComponentSelection[];
+  /**
+   * Run this one turn in a different chat mode without changing the chat's
+   * own mode — how an approved plan executes in Build while the chat stays in
+   * Plan.
+   */
+  chatModeOverride?: ChatMode;
 }
 
 export interface ChatResponseEnd {

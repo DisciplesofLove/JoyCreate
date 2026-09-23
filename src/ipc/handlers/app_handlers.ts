@@ -46,13 +46,19 @@ function buildEnrichedPath(): string {
   let basePath = process.env.PATH || "";
   if (process.platform === "win32") {
     try {
-      // `cmd /c echo %PATH%` resolves the user+system PATH from the registry,
-      // which is what a normal cmd.exe spawn would see.
-      const cmdPath = execSync("cmd /c echo %PATH%", {
-        encoding: "utf8",
-      }).trim();
-      if (cmdPath && cmdPath !== "%PATH%") {
-        basePath = cmdPath;
+      // `cmd /c echo %PATH%` only echoes back this already-running process's
+      // inherited env — it does NOT pick up PATH changes made after JoyCreate
+      // started (e.g. `nvm use <version>`), because a child process inherits
+      // its parent's env block rather than re-reading the registry. Read the
+      // Machine+User PATH straight from the registry instead, so switching
+      // Node versions via nvm takes effect without restarting the app.
+      const regPath = execSync(
+        "powershell -NoProfile -NonInteractive -Command " +
+          '"[System.Environment]::GetEnvironmentVariable(\'Path\',\'Machine\') + \';\' + [System.Environment]::GetEnvironmentVariable(\'Path\',\'User\')"',
+        { encoding: "utf8" },
+      ).trim();
+      if (regPath) {
+        basePath = regPath;
       }
     } catch {
       // ignore — fall back to whatever process.env.PATH has

@@ -94,6 +94,7 @@ const validInvokeChannels = [
   "data-layer:set-config",
   "chat-plan:get",
   "chat-plan:upsert",
+  "chat:plan-respond",
   "chat-plan:update-phase",
   "chat-plan:reset",
   "chat-plan:start-next",

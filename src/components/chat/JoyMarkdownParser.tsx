@@ -35,6 +35,7 @@ import { JoyDatabaseSchema } from "./JoyDatabaseSchema";
 import { JoyDocument } from "./JoyDocument";
 import { JoyWebScraper } from "./JoyWebScraper";
 import { JoyPackageDataset } from "./JoyPackageDataset";
+import { JoyPlanProposal } from "./JoyPlanProposal";
 import { mapActionToButton } from "./ChatInput";
 import { SuggestedAction } from "@/lib/schemas";
 import { FixAllErrorsButton } from "./FixAllErrorsButton";
@@ -70,6 +71,7 @@ const CUSTOM_TAG_NAMES = [
   "joy-database-schema",
   "joy-web-scraper",
   "joy-package-dataset",
+  "joy-plan-proposal",
 ];
 
 interface JoyMarkdownParserProps {
@@ -621,6 +623,11 @@ function renderCustomTag(
         <JoyProblemSummary summary={attributes.summary}>
           {content}
         </JoyProblemSummary>
+      );
+
+    case "joy-plan-proposal":
+      return (
+        <JoyPlanProposal title={attributes.title}>{content}</JoyPlanProposal>
       );
 
     case "joy-chat-summary":

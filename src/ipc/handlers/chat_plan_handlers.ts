@@ -13,8 +13,14 @@
 
 import log from "electron-log";
 import { db } from "../../db";
-import { chats, chatPlans } from "../../db/schema";
-import { eq } from "drizzle-orm";
+import { chats, chatPlans, messages } from "../../db/schema";
+import { desc, eq } from "drizzle-orm";
+import {
+  buildPlanRespondPrompt,
+  extractPlanProposal,
+  type PlanAction,
+  type PlanRespondResult,
+} from "@/shared/plan_mode";
 import type {
   ChatPlan,
   ChatPlanPhase,
@@ -329,6 +335,57 @@ export function registerChatPlanHandlers() {
         .update(chats)
         .set({ chatMode: mode })
         .where(eq(chats.id, params.chatId));
+    },
+  );
+
+  /**
+   * A decision on the plan proposed in Plan mode. Returns the follow-up turn
+   * for the renderer to send; approve carries a one-turn "build" override.
+   *
+   * Only the chat's latest message can be decided on: approving a plan that
+   * has since been revised would execute steps the user already replaced.
+   */
+  handle(
+    "chat:plan-respond",
+    async (
+      _event,
+      params: {
+        chatId: number;
+        messageId: number;
+        action: PlanAction;
+        feedback?: string;
+      },
+    ): Promise<PlanRespondResult> => {
+      if (!params?.chatId || !params?.messageId) {
+        throw new Error("chatId and messageId are required");
+      }
+      if (!["approve", "reject", "revise"].includes(params.action)) {
+        throw new Error(`Unknown plan action: ${String(params.action)}`);
+      }
+
+      const [latest] = await db
+        .select({ id: messages.id, role: messages.role, content: messages.content })
+        .from(messages)
+        .where(eq(messages.chatId, params.chatId))
+        .orderBy(desc(messages.id))
+        .limit(1);
+
+      if (!latest || latest.id !== params.messageId || latest.role !== "assistant") {
+        throw new Error(
+          "That plan is no longer the latest message in this chat. Only the current plan can be approved, revised or rejected.",
+        );
+      }
+
+      const proposal = extractPlanProposal(latest.content);
+      if (!proposal) {
+        throw new Error("The latest message does not contain a complete plan.");
+      }
+
+      return buildPlanRespondPrompt({
+        action: params.action,
+        planTitle: proposal.title,
+        feedback: params.feedback,
+      });
     },
   );
 }

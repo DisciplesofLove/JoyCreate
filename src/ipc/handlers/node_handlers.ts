@@ -15,9 +15,16 @@ const logger = log.scope("node_handlers");
 function enrichPath(): void {
   if (platform() === "win32") {
     try {
-      const cmdPath = execSync("cmd /c echo %PATH%", { encoding: "utf8" }).trim();
-      if (cmdPath && cmdPath !== "%PATH%") {
-        process.env.PATH = cmdPath;
+      // Read PATH straight from the registry (Machine+User) instead of
+      // `cmd /c echo %PATH%`, which only echoes this process's own inherited
+      // env and misses PATH changes made after the app started (e.g. `nvm use`).
+      const regPath = execSync(
+        "powershell -NoProfile -NonInteractive -Command " +
+          '"[System.Environment]::GetEnvironmentVariable(\'Path\',\'Machine\') + \';\' + [System.Environment]::GetEnvironmentVariable(\'Path\',\'User\')"',
+        { encoding: "utf8" },
+      ).trim();
+      if (regPath) {
+        process.env.PATH = regPath;
       }
     } catch { /* ignore */ }
     const { homedir } = require("os") as typeof import("os");
@@ -30,16 +37,12 @@ function enrichPath(): void {
       join(homedir(), "AppData", "Local", "Programs", "nodejs"),
       join(homedir(), "scoop", "apps", "nodejs", "current"),
       join(homedir(), "scoop", "shims"),
-      join(homedir(), "AppData", "Local", "nvm"),
     ];
-    try {
-      const nvmDir = process.env.NVM_HOME || join(homedir(), "AppData", "Local", "nvm");
-      if (existsSync(nvmDir)) {
-        // add active nvm version dir
-        const dirs = require("fs").readdirSync(nvmDir).filter((d: string) => d.startsWith("v"));
-        for (const d of dirs) candidates.push(join(nvmDir, d));
-      }
-    } catch { /* ignore */ }
+    // Note: deliberately not scanning nvm's per-version install dirs here —
+    // adding every installed version to PATH (in filesystem/alphabetical
+    // order) can shadow the actually-active version with an older one. The
+    // nvm-managed symlink dir (already on PATH via the registry read above)
+    // is the source of truth for which version is active.
     const settings = readSettings();
     const extras: string[] = [];
     if (settings?.customNodePath) extras.push(settings.customNodePath);

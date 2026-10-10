@@ -6,6 +6,8 @@
 import { useState, useMemo, useCallback, useEffect, useRef, type DragEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { IpcClient } from "@/ipc/ipc_client";
+import { agentBuilderClient } from "@/ipc/agent_builder_client";
+import type { Agent } from "@/types/agent_builder";
 import { OpenClawClient as openclawClient } from "@/ipc/openclaw_client";
 import type { IpldReceiptRecord } from "@/types/ipld_receipt";
 import { Button } from "@/components/ui/button";
@@ -84,6 +86,7 @@ import {
   ChevronsLeftRight,
   Square,
   OctagonAlert,
+  Wrench,
 } from "lucide-react";
 
 import { NlpAiStudioPanel } from "@/components/openclaw/NlpAiStudioPanel";
@@ -201,6 +204,130 @@ const PRIORITY_BORDER: Record<string, string> = {
 
 const WIP_LIMIT = 8;
 
+/** Sentinel for "no agent" in the agent picker (Select can't hold ""). */
+const NO_AGENT = "__none__";
+
+/**
+ * Agents from the Agent Builder (SQLite `agents` table). Kanban stores the
+ * id as text, so lookups are keyed by `String(agent.id)`.
+ */
+function useKanbanAgents() {
+  const { data } = useQuery({
+    queryKey: ["kanban-agents"],
+    queryFn: () => agentBuilderClient.listAgents(),
+    staleTime: 30_000,
+  });
+  return useMemo(() => {
+    const agents: Agent[] = (data ?? []).filter((a) => a.status !== "archived");
+    const byId = new Map<string, Agent>(agents.map((a) => [String(a.id), a]));
+    return { agents, byId };
+  }, [data]);
+}
+
+function AgentSelect({
+  value,
+  onChange,
+  agents,
+  className,
+}: {
+  value: string | null | undefined;
+  onChange: (agentId: string | null) => void;
+  agents: Agent[];
+  className?: string;
+}) {
+  const known = !value || agents.some((a) => String(a.id) === value);
+  return (
+    <Select
+      value={value || NO_AGENT}
+      onValueChange={(v) => onChange(v === NO_AGENT ? null : v)}
+    >
+      <SelectTrigger className={className}>
+        <SelectValue placeholder="No agent (plain inference)" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={NO_AGENT}>No agent (plain inference)</SelectItem>
+        {agents.map((a) => (
+          <SelectItem key={a.id} value={String(a.id)}>
+            {a.name}
+            {a.modelId ? ` · ${a.modelId}` : ""}
+          </SelectItem>
+        ))}
+        {!known && value && (
+          <SelectItem value={value}>Agent {value} (not in Agent Builder)</SelectItem>
+        )}
+      </SelectContent>
+    </Select>
+  );
+}
+
+interface ToolTraceEntry {
+  step: number;
+  toolName: string;
+  source: "mcp" | "openclaw";
+  status: "ok" | "error" | "aborted";
+  argsPreview: string;
+  outputPreview?: string;
+  error?: string;
+  durationMs: number;
+}
+
+function ToolTracePanel({ trace }: { trace: ToolTraceEntry[] }) {
+  const [expanded, setExpanded] = useState<number | null>(null);
+  if (trace.length === 0) return null;
+  return (
+    <div className="space-y-1 max-h-[240px] overflow-y-auto">
+      {trace.map((t, i) => (
+        <div
+          key={`${t.toolName}-${i}`}
+          className="rounded border border-border/60 bg-muted/30 text-[11px]"
+        >
+          <button
+            type="button"
+            className="w-full flex items-center gap-2 px-2 py-1 text-left"
+            onClick={() => setExpanded(expanded === i ? null : i)}
+          >
+            <span className="text-muted-foreground/60 w-8">#{t.step || i + 1}</span>
+            <Badge variant="outline" className="text-[9px] px-1 py-0">
+              {t.source}
+            </Badge>
+            <span className="font-mono truncate flex-1">{t.toolName}</span>
+            <span
+              className={
+                t.status === "ok"
+                  ? "text-green-400"
+                  : t.status === "aborted"
+                    ? "text-amber-400"
+                    : "text-red-400"
+              }
+            >
+              {t.status}
+            </span>
+            <span className="text-muted-foreground/50">{formatDuration(t.durationMs)}</span>
+          </button>
+          {expanded === i && (
+            <div className="px-2 pb-2 space-y-1 font-mono text-[10px] break-all whitespace-pre-wrap">
+              <div>
+                <span className="text-muted-foreground/60">args: </span>
+                {t.argsPreview}
+              </div>
+              {t.error ? (
+                <div className="text-red-400">error: {t.error}</div>
+              ) : (
+                t.outputPreview && (
+                  <div>
+                    <span className="text-muted-foreground/60">output: </span>
+                    {t.outputPreview}
+                  </div>
+                )
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Task Card ──────────────────────────────────────────────────────────────
 
 function TaskCard({
@@ -218,6 +345,11 @@ function TaskCard({
 }) {
   const [showActions, setShowActions] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const { byId: agentsById } = useKanbanAgents();
+  const agent = task.agentId ? agentsById.get(String(task.agentId)) : undefined;
+  const toolCalls = Array.isArray(task.resultJson?.toolTrace)
+    ? task.resultJson.toolTrace.length
+    : 0;
 
   const currentColIdx = COLUMNS.findIndex((c) => c.id === task.status);
   const canMoveRight =
@@ -369,6 +501,27 @@ function TaskCard({
           >
             <Trash2 className="w-3 h-3 text-red-400" />
           </button>
+        </div>
+      )}
+
+      {/* Assigned agent + tool usage */}
+      {(task.agentId || toolCalls > 0) && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] ml-5">
+          {task.agentId && (
+            <span
+              className="flex items-center gap-1 px-1.5 py-0 rounded-full bg-violet-500/10 text-violet-300 border border-violet-500/20 truncate max-w-[140px]"
+              title={agent ? `Agent: ${agent.name}` : `Agent ${task.agentId}`}
+            >
+              <Sparkles className="w-2.5 h-2.5 flex-shrink-0" />
+              {agent?.name ?? `agent #${task.agentId}`}
+            </span>
+          )}
+          {toolCalls > 0 && (
+            <span className="flex items-center gap-0.5 text-muted-foreground/70" title="Tool calls">
+              <Wrench className="w-2.5 h-2.5" />
+              {toolCalls}
+            </span>
+          )}
         </div>
       )}
 
@@ -574,8 +727,11 @@ function CreateTaskDialog({
   const [assignee, setAssignee] = useState("openclaw");
   const [labelsText, setLabelsText] = useState("");
   const [selectedModel, setSelectedModel] = useState("auto");
+  const [agentId, setAgentId] = useState<string | null>(null);
 
   const { models } = useAvailableModels({ taskType: taskType !== "custom" ? taskType : undefined });
+  const { agents, byId: agentsById } = useKanbanAgents();
+  const selectedAgent = agentId ? agentsById.get(agentId) : undefined;
 
   const handleSubmit = () => {
     if (!title.trim()) {
@@ -596,6 +752,7 @@ function CreateTaskDialog({
       assignee: assignee || "openclaw",
       labels: labels.length > 0 ? labels : undefined,
       model: selectedModel !== "auto" ? selectedModel : undefined,
+      agentId: agentId ?? undefined,
     });
 
     // Reset
@@ -607,6 +764,7 @@ function CreateTaskDialog({
     setAssignee("openclaw");
     setLabelsText("");
     setSelectedModel("auto");
+    setAgentId(null);
     onOpenChange(false);
   };
 
@@ -706,13 +864,26 @@ function CreateTaskDialog({
             </div>
           </div>
           <div>
+            <Label>Agent</Label>
+            <AgentSelect value={agentId} onChange={setAgentId} agents={agents} />
+            <p className="text-[11px] text-muted-foreground/70 mt-1">
+              {selectedAgent
+                ? `Runs as "${selectedAgent.name}" with its prompt, model and tools (MCP + safe OpenClaw actions). Destructive actions are never run unattended.`
+                : "Without an agent the task is a single model call (agent_task type still gets tools)."}
+            </p>
+          </div>
+          <div>
             <Label>Model</Label>
             <Select value={selectedModel} onValueChange={setSelectedModel}>
               <SelectTrigger>
                 <SelectValue placeholder="Auto (MAB selects best)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto">Auto (MAB selects best)</SelectItem>
+                <SelectItem value="auto">
+                  {selectedAgent?.modelId
+                    ? `Agent default (${selectedAgent.modelId})`
+                    : "Auto (MAB selects best)"}
+                </SelectItem>
                 {models.map((m: any) => (
                   <SelectItem key={m.name} value={m.name}>
                     {m.name}{m.source === "peer" ? " (peer)" : m.source === "registry" ? " (registry)" : ""}
@@ -759,8 +930,16 @@ function TaskDetailDialog({
 
   const { rateTask, isRating } = useTaskRating();
   const [userRating, setUserRating] = useState<number | null>(null);
+  const { agents, byId: agentsById } = useKanbanAgents();
 
   if (!task) return null;
+
+  const result = (task.resultJson ?? null) as Record<string, any> | null;
+  const toolTrace: ToolTraceEntry[] = Array.isArray(result?.toolTrace) ? result.toolTrace : [];
+  const agentRun = (result?.agentRun ?? null) as Record<string, any> | null;
+  const resultAgentName: string | undefined = result?.agent?.name;
+  const assignedAgent = task.agentId ? agentsById.get(String(task.agentId)) : undefined;
+  const canReassign = task.status !== "in_progress";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -872,6 +1051,26 @@ function TaskDetailDialog({
               </SelectContent>
             </Select>
           </div>
+          <div className="space-y-1 col-span-2">
+            <span className="text-muted-foreground/70 text-xs flex items-center gap-1">
+              <Sparkles className="w-3 h-3" /> Agent
+              {!canReassign && (
+                <span className="text-muted-foreground/50">(locked while running)</span>
+              )}
+            </span>
+            {canReassign ? (
+              <AgentSelect
+                className="h-8"
+                value={task.agentId ?? null}
+                agents={agents}
+                onChange={(id) => onUpdate({ id: task.id, agentId: id })}
+              />
+            ) : (
+              <div className="text-sm text-foreground/90">
+                {assignedAgent?.name ?? (task.agentId ? `agent #${task.agentId}` : "None")}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Metrics */}
@@ -957,6 +1156,76 @@ function TaskDetailDialog({
           </>
         )}
 
+        {/* Agent run + tool-call trace */}
+        {(agentRun || toolTrace.length > 0) && (
+          <>
+            <Separator />
+            <div>
+              <h4 className="text-xs font-medium text-muted-foreground/80 mb-2 flex items-center gap-1">
+                <Wrench className="w-3 h-3" /> Agent run
+                {resultAgentName && (
+                  <span className="text-muted-foreground/60">· {resultAgentName}</span>
+                )}
+              </h4>
+              {agentRun && (
+                <div className="flex flex-wrap gap-1.5 mb-2 text-[10px]">
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                    {agentRun.mode === "agentic" ? "tool loop" : "no tools"}
+                  </Badge>
+                  {typeof agentRun.steps === "number" && (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                      {agentRun.steps} step{agentRun.steps === 1 ? "" : "s"}
+                    </Badge>
+                  )}
+                  {typeof agentRun.toolsExposed === "number" && (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                      {agentRun.toolsExposed} tools ({agentRun.mcpTools ?? 0} MCP)
+                    </Badge>
+                  )}
+                  {Array.isArray(agentRun.blockedActions) && agentRun.blockedActions.length > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] px-1.5 py-0 text-amber-400 border-amber-500/30"
+                      title={agentRun.blockedActions.join(", ")}
+                    >
+                      <Shield className="w-2.5 h-2.5 mr-0.5" />
+                      {agentRun.blockedActions.length} destructive blocked
+                    </Badge>
+                  )}
+                  {(agentRun.toolsDisabledReason || agentRun.toolsSkippedReason) && (
+                    <span
+                      className="text-amber-400"
+                      title={agentRun.toolsDisabledReason ?? agentRun.toolsSkippedReason}
+                    >
+                      tools unavailable for this model/route
+                    </span>
+                  )}
+                </div>
+              )}
+              {toolTrace.length > 0 ? (
+                <ToolTracePanel trace={toolTrace} />
+              ) : (
+                <p className="text-[11px] text-muted-foreground/60">No tool calls.</p>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Result */}
+        {typeof result?.content === "string" && result.content.trim() && (
+          <>
+            <Separator />
+            <div>
+              <h4 className="text-xs font-medium text-muted-foreground/80 mb-2 flex items-center gap-1">
+                <FileText className="w-3 h-3" /> Result
+              </h4>
+              <div className="text-xs whitespace-pre-wrap max-h-[220px] overflow-y-auto rounded border border-border/60 bg-muted/20 p-2">
+                {result.content}
+              </div>
+            </div>
+          </>
+        )}
+
         {/* Error */}
         {task.errorMessage && (
           <>
@@ -984,7 +1253,14 @@ function TaskDetailDialog({
                   >
                     <span className="text-muted-foreground">{act.actor}</span>
                     <span>{act.action.replace("_", " ")}</span>
-                    {act.fromValue && act.toValue && (
+                    {act.action === "tool_call" ? (
+                      <span className="font-mono truncate" title={act.note ?? undefined}>
+                        {act.toValue}
+                        {act.fromValue && act.fromValue !== "ok" && (
+                          <span className="text-red-400"> ({act.fromValue})</span>
+                        )}
+                      </span>
+                    ) : act.fromValue && act.toValue && (
                       <>
                         <Badge
                           variant="outline"

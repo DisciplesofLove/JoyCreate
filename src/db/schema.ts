@@ -2385,6 +2385,9 @@ export const openclawKanbanActivity = sqliteTable("openclaw_kanban_activity", {
       "created", "status_changed", "priority_changed", "assigned",
       "comment", "started", "completed", "failed", "retried",
       "label_added", "label_removed", "artifact_added",
+      // Agentic kanban runs log one row per tool call. Text enum only — no
+      // CHECK constraint exists on the column, so no migration is needed.
+      "tool_call",
     ],
   }).notNull(),
 

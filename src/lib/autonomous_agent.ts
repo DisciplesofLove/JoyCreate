@@ -20,7 +20,7 @@ import { spawn, ChildProcess, exec } from "node:child_process";
 import { promisify } from "node:util";
 import Database from "better-sqlite3";
 import { getOpenClawSystemIntegration } from "@/lib/openclaw_system_integration";
-import { generateText } from "ai";
+import { generateText, stepCountIs } from "ai";
 import { buildMcpToolSet, planMcpAllowList } from "./mcp_ai_bridge";
 import type { ToolSet } from "ai";
 import { getModelClient } from "@/ipc/utils/get_model_client";
@@ -2573,7 +2573,7 @@ Output as tailwind.config.js:
       maxOutputTokens: 4096,
       temperature: agent.config.temperature || 0.7,
       ...(mcpTools && Object.keys(mcpTools).length > 0
-        ? { tools: mcpTools, maxSteps: 8 }
+        ? { tools: mcpTools, stopWhen: stepCountIs(8) }
         : {}),
     });
 

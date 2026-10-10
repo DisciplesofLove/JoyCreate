@@ -33,6 +33,19 @@ import {
   type ModelSelection,
 } from "@/lib/openclaw_registry_bridge";
 import { captureTrainingPair } from "@/lib/data_flywheel";
+import {
+  DEFAULT_KANBAN_SYSTEM_PROMPT,
+  assembleKanbanToolSet,
+  buildAgenticSystemPrompt,
+  loadKanbanAgentConfig,
+  preview,
+  resolveKanbanLanguageModel,
+  runKanbanAgentLoop,
+  shouldRunAgentic,
+  type KanbanAgentConfig,
+  type KanbanToolTraceEntry,
+  type ResolvedKanbanModel,
+} from "@/lib/kanban_agent_runtime";
 import { exec } from "child_process";
 import { promisify } from "util";
 
@@ -54,6 +67,8 @@ const taskControllers = new Map<string, AbortController>();
 
 const POLL_INTERVAL_MS = 5_000;
 const INFERENCE_TIMEOUT_MS = 120_000;
+/** Whole-loop ceiling for agentic (tool-using) runs. */
+const AGENT_LOOP_TIMEOUT_MS = 10 * 60_000;
 
 interface ExecutorStatus {
   running: boolean;
@@ -114,6 +129,9 @@ async function executeTask(task: any): Promise<void> {
   stats.totalExecuted++;
 
   const startTime = Date.now();
+  // Tool-call trace for agentic runs; kept outside the try so a failed or
+  // hard-stopped run still records what it did before it stopped.
+  const toolTrace: KanbanToolTraceEntry[] = [];
 
   // Mirror the run into `os_activities`, the cross-subsystem record. The kanban
   // row stays authoritative for kanban; this is what the shell, the tray count
@@ -139,19 +157,36 @@ async function executeTask(task: any): Promise<void> {
 
     logger.info(`Executing task: ${task.title} (${taskId})`);
 
+    // ── Step 0: Resolve the assigned agent (SQLite agents table first) ──
+    let agentConfig: KanbanAgentConfig | null = null;
+    if (task.agentId) {
+      agentConfig = await loadKanbanAgentConfig(task.agentId);
+      if (agentConfig) {
+        logger.info(
+          `Task ${taskId} assigned to agent "${agentConfig.name}" (${agentConfig.source}:${agentConfig.agentId})`,
+        );
+      } else {
+        logger.warn(`Task ${taskId}: agent ${task.agentId} not found — running without agent config`);
+        await logActivity(db, taskId, "comment", "task_executor", undefined, `agent_not_found:${task.agentId}`);
+      }
+    }
+    const agentic = shouldRunAgentic(task, agentConfig);
+
     // ── Step 1: Select model via registry bridge ──
     const prompt = buildPromptFromTask(task);
     const complexity = estimateTaskComplexity(task);
+    // An explicit task model wins; otherwise the agent's configured model.
+    const preferredModel = task.model || agentConfig?.modelId || null;
     let selection: ModelSelection;
     try {
       selection = await selectModelForTask(
         task.taskType || "general",
         complexity,
-        task.model || null,
+        preferredModel,
       );
     } catch {
       selection = {
-        model: task.model || "llama3.2:3b",
+        model: preferredModel || "llama3.2:3b",
         provider: "ollama",
         registryId: null,
         peerId: null,
@@ -160,18 +195,50 @@ async function executeTask(task: any): Promise<void> {
         contentHash: null,
       };
     }
-    const model = selection.model;
+    let model = selection.model;
 
     logger.info(
       `Model selected for ${taskId}: ${model} (${selection.selectionMethod}, ${selection.provider})`,
     );
 
-    // ── Step 2: Run inference (local, peer, or cloud) ──
+    // ── Step 2: Run inference (peer, agentic tool loop, cloud, or local) ──
+    const systemPrompt = agentConfig?.systemPrompt || DEFAULT_KANBAN_SYSTEM_PROMPT;
     let inferenceResult: InferenceResult;
+    let providerLabel: string;
+    let localProcessed: boolean;
+    let agentRun: Record<string, unknown> | null = null;
+
     if (selection.provider === "peer" && selection.peerId) {
-      inferenceResult = await runPeerInference(prompt, model, selection.peerId, task.agentId, controller.signal);
+      // The P2P protocol is a single completion — no tool calls cross it.
+      inferenceResult = await runPeerInference(prompt, model, selection.peerId, systemPrompt, controller.signal);
+      providerLabel = "peer";
+      localProcessed = true;
+      if (agentic) {
+        agentRun = { mode: "plain", toolsSkippedReason: "peer inference does not support tool calls" };
+      }
     } else {
-      inferenceResult = await runOllamaInference(prompt, model, task.agentId, controller.signal);
+      const resolved = await resolveModelForTask(model, selection.provider);
+      providerLabel = resolved.providerLabel;
+      localProcessed = resolved.local;
+      model = resolved.model.name;
+
+      if (agentic) {
+        const run = await runAgenticInference({
+          db,
+          taskId,
+          prompt,
+          resolved,
+          agentConfig,
+          signal: controller.signal,
+          toolTrace,
+        });
+        inferenceResult = run.inference;
+        agentRun = run.meta;
+      } else if (resolved.providerLabel !== "ollama") {
+        inferenceResult = await runSdkInference(prompt, resolved, systemPrompt, agentConfig, controller.signal);
+      } else {
+        inferenceResult = await runOllamaInference(prompt, model, systemPrompt, controller.signal, agentConfig);
+      }
     }
     const durationMs = Date.now() - startTime;
 
@@ -252,6 +319,12 @@ async function executeTask(task: any): Promise<void> {
       ...(selection.peerId ? { executorPeerId: selection.peerId } : {}),
       ...(receiptCid ? { receiptCid } : {}),
       ...(celestiaHeight ? { celestiaHeight, celestiaHash } : {}),
+      provider: providerLabel,
+      ...(agentConfig
+        ? { agent: { id: agentConfig.agentId, name: agentConfig.name, source: agentConfig.source } }
+        : {}),
+      ...(agentRun ? { agentRun } : {}),
+      ...(agentic ? { toolTrace } : {}),
     };
 
     await db
@@ -260,12 +333,13 @@ async function executeTask(task: any): Promise<void> {
         status: "completed",
         tokensUsed: inferenceResult.totalTokens,
         durationMs,
-        localProcessed: selection.provider !== "cloud",
+        localProcessed,
         resultJson,
         completedAt,
         updatedAt: completedAt,
-        provider: selection.provider === "peer" ? "peer" : selection.provider === "cloud" ? "anthropic" : "ollama",
+        provider: providerLabel,
         model,
+        ...(typeof agentRun?.steps === "number" ? { iterationsRun: agentRun.steps } : {}),
       })
       .where(eq(openclawKanbanTasks.id, taskId));
 
@@ -372,6 +446,10 @@ async function executeTask(task: any): Promise<void> {
           durationMs,
           completedAt: new Date(),
           updatedAt: new Date(),
+          // Keep the partial tool trace so the user can see what ran.
+          ...(toolTrace.length > 0
+            ? { resultJson: { toolTrace, partial: true, error: errorMessage } }
+            : {}),
         })
         .where(eq(openclawKanbanTasks.id, taskId));
 
@@ -438,42 +516,33 @@ function buildPromptFromTask(task: any): string {
 async function runOllamaInference(
   prompt: string,
   model: string,
-  agentId?: string | null,
+  systemPrompt: string = DEFAULT_KANBAN_SYSTEM_PROMPT,
   abortSignal?: AbortSignal,
+  agentConfig?: KanbanAgentConfig | null,
 ): Promise<InferenceResult> {
   const baseUrl = getOllamaApiUrl();
-
-  // Build system prompt
-  let systemPrompt =
-    "You are an AI agent executing tasks autonomously. Complete the task accurately and concisely. Provide clear, actionable output.";
-
-  // Load agent system prompt if available
-  if (agentId) {
-    try {
-      const { app } = await import("electron");
-      const path = await import("node:path");
-      const fs = await import("node:fs/promises");
-      const agentsDir = path.join(app.getPath("userData"), "agents");
-      const raw = await fs.readFile(
-        path.join(agentsDir, `${agentId}.json`),
-        "utf-8",
-      );
-      const agent = JSON.parse(raw);
-      if (agent.systemPrompt) systemPrompt = agent.systemPrompt;
-    } catch {
-      // Agent file not found, use default prompt
-    }
-  }
 
   const messages = [
     { role: "system", content: systemPrompt },
     { role: "user", content: prompt },
   ];
 
+  // Honour the agent's sampling settings when one is assigned.
+  const options: Record<string, number> = {};
+  if (agentConfig?.temperature !== null && agentConfig?.temperature !== undefined) {
+    options.temperature = agentConfig.temperature;
+  }
+  if (agentConfig?.maxTokens) options.num_predict = agentConfig.maxTokens;
+
   const res = await fetch(`${baseUrl}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, stream: false }),
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: false,
+      ...(Object.keys(options).length > 0 ? { options } : {}),
+    }),
     signal: abortSignal
       ? AbortSignal.any([abortSignal, AbortSignal.timeout(INFERENCE_TIMEOUT_MS)])
       : AbortSignal.timeout(INFERENCE_TIMEOUT_MS),
@@ -500,13 +569,162 @@ async function runOllamaInference(
 }
 
 /**
+ * Map the registry's routing decision onto a concrete provider/model the
+ * app's model client can serve (see {@link resolveKanbanLanguageModel}).
+ */
+async function resolveModelForTask(
+  modelName: string,
+  selectionProvider: ModelSelection["provider"],
+): Promise<ResolvedKanbanModel> {
+  const { MODEL_OPTIONS } = await import("@/ipc/shared/language_model_constants");
+  let selectedModel: { provider: string; name: string } | null = null;
+  try {
+    const { readSettings } = await import("@/main/settings");
+    selectedModel = readSettings().selectedModel ?? null;
+  } catch {
+    // settings unavailable — resolution falls back to "auto"
+  }
+  return resolveKanbanLanguageModel(modelName, selectionProvider, MODEL_OPTIONS, selectedModel);
+}
+
+async function getSdkModel(resolved: ResolvedKanbanModel) {
+  const { getModelClient } = await import("@/ipc/utils/get_model_client");
+  const { readSettings } = await import("@/main/settings");
+  const { modelClient } = await getModelClient(resolved.model, readSettings());
+  return modelClient.model;
+}
+
+/**
+ * Single completion through the app's provider stack (cloud models). Before
+ * this, a "cloud" selection was still sent to Ollama and only *labelled*
+ * "anthropic".
+ */
+async function runSdkInference(
+  prompt: string,
+  resolved: ResolvedKanbanModel,
+  systemPrompt: string,
+  agentConfig: KanbanAgentConfig | null,
+  abortSignal: AbortSignal,
+): Promise<InferenceResult> {
+  const run = await runKanbanAgentLoop({
+    model: await getSdkModel(resolved),
+    system: systemPrompt,
+    prompt,
+    tools: {},
+    maxSteps: 1,
+    signal: abortSignal,
+    temperature: agentConfig?.temperature,
+    maxOutputTokens: agentConfig?.maxTokens,
+    timeoutMs: INFERENCE_TIMEOUT_MS,
+  });
+  return { content: run.content, ...run.usage };
+}
+
+/**
+ * Agentic path: the assigned agent's prompt + model, with MCP tools and
+ * non-destructive OpenClaw actions, in a bounded tool loop. Every tool call
+ * is appended to {@link toolTrace} and to the task's activity log as it
+ * happens; the task's AbortController stops the loop mid-step.
+ */
+async function runAgenticInference(args: {
+  db: ReturnType<typeof getDb>;
+  taskId: string;
+  prompt: string;
+  resolved: ResolvedKanbanModel;
+  agentConfig: KanbanAgentConfig | null;
+  signal: AbortSignal;
+  toolTrace: KanbanToolTraceEntry[];
+}): Promise<{ inference: InferenceResult; meta: Record<string, unknown> }> {
+  const { db, taskId, prompt, resolved, agentConfig, signal, toolTrace } = args;
+  const actor = agentConfig ? `agent:${agentConfig.name}` : "task_executor";
+  let currentStep = 1;
+
+  const toolSet = await assembleKanbanToolSet(agentConfig, {
+    signal,
+    trace: toolTrace,
+    currentStep: () => currentStep,
+    onToolCall: async (entry) => {
+      try {
+        await logActivity(
+          db,
+          taskId,
+          "tool_call",
+          actor,
+          entry.status,
+          entry.toolName,
+          preview(
+            {
+              source: entry.source,
+              step: entry.step,
+              args: entry.argsPreview,
+              ...(entry.error ? { error: entry.error } : { output: entry.outputPreview }),
+              durationMs: entry.durationMs,
+            },
+            1000,
+          ),
+        );
+      } catch (err) {
+        logger.warn(`Failed to log tool call for ${taskId}:`, err);
+      }
+    },
+  });
+
+  const toolNames = Object.keys(toolSet.tools);
+  logger.info(
+    `Agentic run for ${taskId}: ${toolSet.mcpToolNames.length} MCP + ${toolSet.actionToolNames.length} OpenClaw tools (${toolSet.blockedActions.length} actions blocked)`,
+  );
+
+  const run = await runKanbanAgentLoop({
+    model: await getSdkModel(resolved),
+    system: buildAgenticSystemPrompt(agentConfig?.systemPrompt ?? null, toolNames),
+    prompt,
+    tools: toolSet.tools,
+    maxSteps: agentConfig?.kanban.maxSteps ?? 8,
+    signal,
+    temperature: agentConfig?.temperature,
+    maxOutputTokens: agentConfig?.maxTokens,
+    timeoutMs: AGENT_LOOP_TIMEOUT_MS,
+    onStepFinish: async (step) => {
+      currentStep = step + 1;
+      try {
+        await db
+          .update(openclawKanbanTasks)
+          .set({ iterationsRun: step, updatedAt: new Date() })
+          .where(eq(openclawKanbanTasks.id, taskId));
+      } catch {
+        // progress only
+      }
+    },
+  });
+
+  if (run.toolsDisabledReason) {
+    await logActivity(db, taskId, "comment", "task_executor", undefined, "tools_unsupported_by_model");
+  }
+
+  return {
+    inference: { content: run.content, ...run.usage },
+    meta: {
+      mode: run.toolsDisabledReason ? "plain" : "agentic",
+      steps: run.steps,
+      finishReason: run.finishReason,
+      toolsExposed: toolNames.length,
+      mcpTools: toolSet.mcpToolNames.length,
+      openclawTools: toolSet.actionToolNames.length,
+      blockedActions: toolSet.blockedActions.map((b) => b.actionId),
+      ...(toolSet.mcpError ? { mcpError: toolSet.mcpError } : {}),
+      ...(run.toolsDisabledReason ? { toolsDisabledReason: run.toolsDisabledReason } : {}),
+    },
+  };
+}
+
+/**
  * Run inference on a remote peer via the P2P inference protocol.
  */
 async function runPeerInference(
   prompt: string,
   model: string,
   peerId: string,
-  agentId?: string | null,
+  systemPrompt: string = DEFAULT_KANBAN_SYSTEM_PROMPT,
   abortSignal?: AbortSignal,
 ): Promise<InferenceResult> {
   // Honor caller's abort up-front (peer protocol may not accept signals)
@@ -518,7 +736,7 @@ async function runPeerInference(
     const result = await requestPeerInference(peerId, {
       model,
       prompt,
-      systemPrompt: "You are an AI agent executing tasks autonomously. Complete the task accurately and concisely.",
+      systemPrompt,
     });
     if (abortSignal?.aborted) {
       throw new DOMException("Aborted", "AbortError");
@@ -534,7 +752,7 @@ async function runPeerInference(
     if (abortSignal?.aborted) throw err;
     logger.warn(`Peer inference failed for ${peerId}, falling back to local:`, err);
     // Automatic fallback to local Ollama
-    return runOllamaInference(prompt, model, agentId, abortSignal);
+    return runOllamaInference(prompt, model, systemPrompt, abortSignal);
   }
 }
 
@@ -577,7 +795,8 @@ type ActivityAction =
   | "retried"
   | "label_added"
   | "label_removed"
-  | "artifact_added";
+  | "artifact_added"
+  | "tool_call";
 
 async function logActivity(
   db: ReturnType<typeof getDb>,
@@ -586,6 +805,7 @@ async function logActivity(
   actor: string,
   fromValue?: string,
   toValue?: string,
+  note?: string,
 ): Promise<void> {
   const { v4: uuidv4 } = await import("uuid");
   await db.insert(openclawKanbanActivity).values({
@@ -595,7 +815,7 @@ async function logActivity(
     actor,
     fromValue: fromValue ?? null,
     toValue: toValue ?? null,
-    note: null,
+    note: note ?? null,
     createdAt: new Date(),
   });
 }

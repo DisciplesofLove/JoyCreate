@@ -68,7 +68,8 @@ export interface UpdateKanbanTaskParams {
   priority?: KanbanPriority;
   provider?: string;
   model?: string;
-  agentId?: string;
+  /** `null` unassigns the agent. */
+  agentId?: string | null;
   workflowId?: string;
   labels?: string[];
   assignee?: string;
@@ -101,6 +102,15 @@ export interface KanbanFilterParams {
 }
 
 // ─── Registration ───────────────────────────────────────────────────────────
+
+/**
+ * Fields that hand a task (back) to the kanban task executor, which polls for
+ * `status = in_progress AND startedAt IS NULL`. Clearing the previous run's
+ * timestamps/error also makes "drag a failed card back to In Progress" a retry.
+ */
+function queueForExecutor(): Record<string, null> {
+  return { startedAt: null, completedAt: null, errorMessage: null };
+}
 
 export function registerOpenClawKanbanHandlers(): void {
   // =========================================================================
@@ -263,8 +273,11 @@ export function registerOpenClawKanbanHandlers(): void {
       if (params.status !== undefined && params.status !== existing.status) {
         updates.status = params.status;
 
-        if (params.status === "in_progress" && !existing.startedAt) {
-          updates.startedAt = now;
+        if (params.status === "in_progress") {
+          // "In Progress" is the executor's queue: it picks up rows with
+          // startedAt IS NULL and stamps startedAt itself. Setting it here
+          // meant a card moved into the column was never executed.
+          Object.assign(updates, queueForExecutor());
         }
         if (params.status === "completed" || params.status === "failed" || params.status === "cancelled") {
           updates.completedAt = now;
@@ -280,6 +293,18 @@ export function registerOpenClawKanbanHandlers(): void {
           action: "status_changed",
           fromValue: existing.status,
           toValue: params.status,
+          actor: "user",
+          createdAt: now,
+        });
+      }
+
+      if (params.agentId !== undefined && (params.agentId ?? null) !== (existing.agentId ?? null)) {
+        await db.insert(openclawKanbanActivity).values({
+          id: uuidv4(),
+          taskId: params.id,
+          action: "assigned",
+          fromValue: existing.agentId ? `agent:${existing.agentId}` : null,
+          toValue: params.agentId ? `agent:${params.agentId}` : null,
           actor: "user",
           createdAt: now,
         });
@@ -358,8 +383,9 @@ export function registerOpenClawKanbanHandlers(): void {
         updatedAt: now,
       };
 
-      if (params.status === "in_progress" && !existing.startedAt) {
-        updates.startedAt = now;
+      if (params.status === "in_progress" && existing.status !== "in_progress") {
+        // Queue for (re-)execution — see queueForExecutor().
+        Object.assign(updates, queueForExecutor());
       }
       if (
         (params.status === "completed" || params.status === "failed" || params.status === "cancelled") &&
